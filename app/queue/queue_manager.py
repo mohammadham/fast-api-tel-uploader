@@ -9,6 +9,7 @@ isolates the backend (TGManager) and the job retries with exponential backoff.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import heapq
 import json
 import logging
@@ -17,6 +18,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+import redis.asyncio as redis
 
 from ..core.config import get_settings
 from ..core.db import Database
@@ -52,6 +54,7 @@ class QueueManager:
         self.db = db
         self.manager = manager
         self.bot_service = bot_service
+        self.settings = get_settings()
         self.jobs = JobRepo(db)
         self.files = FileRepo(db)
         self._heap: List[Tuple[int, int, str]] = []
@@ -60,6 +63,26 @@ class QueueManager:
         self._paused_kinds: set[str] = set()
         self._workers: List[asyncio.Task] = []
         self._stopped = False
+        self._redis: Optional[redis.Redis] = None
+        self._redis_enabled = self.settings.redis_enabled and self.settings.redis_url
+        # Redis connection is initialized lazily on first use to avoid blocking startup
+        self._redis_ping_done = False
+
+    async def _ensure_redis(self) -> None:
+        """Initialize Redis connection if not yet done."""
+        if self._redis_ping_done or not self._redis_enabled:
+            return
+        try:
+            if self._redis is None:
+                self._redis = redis.from_url(self.settings.redis_url, decode_responses=True)
+            await self._redis.ping()
+            self._redis_ping_done = True
+            log.info("Redis queue backend enabled at %s", self.settings.redis_url)
+        except Exception as e:
+            log.warning("Redis unavailable (%s), falling back to SQLite only", e)
+            self._redis = None
+            self._redis_enabled = False
+            self._redis_ping_done = True
 
     # ── lifecycle ──────────────────────────────────────────────
     async def start(self) -> None:
@@ -85,6 +108,32 @@ class QueueManager:
         self._workers.clear()
 
     async def _recover(self) -> None:
+        # Recover from Redis if enabled, otherwise SQLite
+        if self._redis_enabled:
+            try:
+                job_ids = await self._redis.smembers("queue:ids")
+                for job_id in job_ids:
+                    data = await self._redis.hgetall(f"queue:job:{job_id}")
+                    if not data:
+                        continue
+                    status = data.get("status", "pending")
+                    self._rows[job_id] = {
+                        "id": data.get("id", job_id),
+                        "kind": data.get("kind"),
+                        "priority": int(data.get("priority", 0)),
+                        "seq": int(data.get("seq", 0)),
+                        "correlation_id": data.get("correlation_id", ""),
+                        "status": status,
+                        "payload": data.get("payload", "{}"),
+                        "attempts": int(data.get("attempts", 0)),
+                        "max_retries": int(data.get("max_retries", 5)),
+                    }
+                    heapq.heappush(self._heap, (-self._rows[job_id]["priority"], self._rows[job_id]["seq"], job_id))
+                log.info("queue recovered %s pending jobs from Redis", len(job_ids))
+            except Exception as e:
+                log.warning("Redis recovery failed, falling back to SQLite: %s", e)
+
+        # Always also recover from SQLite as primary source
         rows = await self.db.fetch_all(
             "SELECT * FROM jobs WHERE status IN ('pending','retry','running','lease') ORDER BY priority DESC, seq"
         )
@@ -94,7 +143,7 @@ class QueueManager:
             heapq.heappush(self._heap, (-int(row["priority"]), int(row["seq"]), row["id"]))
             if status != row["status"]:
                 await self.jobs.update_fields(row["id"], status=status, lease_owner="")
-        log.info("queue recovered %s pending jobs", len(rows))
+        log.info("queue recovered %s pending jobs (SQLite primary)", len(rows))
 
     # ── enqueue / control ──────────────────────────────────────
     async def enqueue(self, kind: str, payload: Dict[str, Any], priority: int, max_retries: Optional[int] = None) -> str:
@@ -107,7 +156,7 @@ class QueueManager:
             seq=seq,
             correlation_id=corr,
             payload=payload,
-            max_retries=max_retries if max_retries is not None else get_settings().job_max_retries,
+            max_retries=max_retries if max_retries is not None else self.settings.job_max_retries,
             created_at=now(),
         )
         await self.jobs.insert(job)
@@ -119,6 +168,20 @@ class QueueManager:
         heapq.heappush(self._heap, (-priority, seq, job.id))
         self._wake.set()
         metrics.inc(f"queue.enqueued.{kind}")
+        # Also store in Redis for scaling if enabled (lazy init)
+        if self._redis_enabled:
+            try:
+                await self._ensure_redis()
+                key = f"queue:job:{job.id}"
+                await self._redis.hset_mapping(key, mapping={
+                    "id": job.id, "kind": kind, "priority": priority, "seq": seq,
+                    "correlation_id": corr, "status": "pending",
+                    "payload": json.dumps(payload), "attempts": 0,
+                    "max_retries": job.max_retries,
+                })
+                await self._redis.sadd("queue:ids", job.id)
+            except Exception as e:
+                log.debug("Redis enqueue write failed, using SQLite only: %s", e)
         slog_q.info(
             "job enqueued",
             kind=kind,

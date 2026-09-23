@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     # ── upload session ──
     upload_session_ttl_minutes: int = 60
 
+    # ── redis / queue scaling ──
+    redis_url: str = ""  # e.g. redis://localhost:6379/0 (empty → SQLite only)
+    redis_enabled: bool = False
+
     @property
     def blocked_ext_set(self) -> set[str]:
         return {e.strip().lower() for e in self.blocked_extensions.split(",") if e.strip()}

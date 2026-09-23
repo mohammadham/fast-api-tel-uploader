@@ -189,6 +189,7 @@
         </div>
         <p v-if="uploadProgress" class="muted">
           {{ uploadProgress }} — {{ uploadPct }}%
+          <span v-if="uploadSpeed > 0" class="muted" style="margin-left:12px">~{{ uploadSpeed }} MB/s</span>
           <span class="progress-track" role="progressbar" :aria-valuenow="uploadPct" aria-valuemin="0" aria-valuemax="100">
             <span class="progress-fill" :style="{ width: uploadPct + '%' }"></span>
           </span>

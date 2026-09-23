@@ -27,6 +27,7 @@ real upgrade path is an unofficial MTProto client, not more regex.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import AsyncIterator, Optional
 
@@ -137,8 +138,35 @@ class EitaaBackend(BackendClient):
         valid Telegram session.
         """
         # --- Step 1: Web scrape (works for public channels) ---
-        if not chat or chat.startswith("@"):
-            raise TransferError("eitaa download needs a public channel id (no @)")
+        if not chat:
+            raise TransferError("eitaa download needs a channel id")
+
+        is_private = chat.startswith("@")
+        channel = chat.lstrip("@")
+        last_exc: Optional[Exception] = None
+        html = ""
+
+        for path in (f"/s/{channel}/{message_id}?embed=1&mode=eme", f"/{channel}/{message_id}"):
+            try:
+                resp = await self._http.get(f"{_EITAA_WEB}{path}", follow_redirects=True)
+                resp.raise_for_status()
+                html = resp.text
+                if extract_file_url(html):
+                    break
+            except Exception as exc:
+                last_exc = exc
+
+
+        file_url = extract_file_url(html)
+        if not file_url:
+            # --- Step 2: MTProto fallback for private channels ---
+            if not is_private:
+                # Not a private channel and web scrape failed → unrecoverable
+                if last_exc:
+                    raise TransferError(f"eitaa page fetch failed: {last_exc}") from last_exc
+                raise TransferError(
+                    "eitaa file link not found on page (private chat, plain document, or markup change)"
+                )
 
         channel = chat.lstrip("@")
         last_exc: Optional[Exception] = None

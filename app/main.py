@@ -14,19 +14,19 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 
-from .api import accounts, admin, auth, bots, eitaa, files, keys, queue as queue_api
-from .api.deps import get_current_admin as _admin_dep
-from .core.config import get_settings
-from .core.db import Database
-from .core.models import UserRepo
-from .core.obs import current_ids, monotonic_ms, new_request_id, request_id as rid_var, correlation_id as corr_var, setup_logging, slog
-from .core.rate_limit import limiter
-from .core.security import create_token, decode_token, hash_password
-from .core.state import state
-from .queue.queue_manager import QueueManager
-from .services.janitor import Janitor
-from .tg.bot_service import BotService
-from .tg.manager import TGManager
+from app.api import accounts, admin, auth, bots, eitaa, files, keys, queue as queue_api
+from app.api.deps import get_current_admin as _admin_dep
+from app.core.config import get_settings
+from app.core.db import Database
+from app.core.models import UserRepo
+from app.core.obs import current_ids, monotonic_ms, new_request_id, request_id as rid_var, correlation_id as corr_var, setup_logging, slog
+from app.core.rate_limit import limiter
+from app.core.security import create_token, decode_token, hash_password
+from app.core.state import state
+from app.queue.queue_manager import QueueManager
+from app.services.janitor import Janitor
+from app.tg.bot_service import BotService
+from app.tg.manager import TGManager
 
 log = logging.getLogger("tgdrive.main")
 
@@ -103,7 +103,7 @@ async def _audit_http_exc(request: StarletteRequest, exc: HTTPException):
         and request.method == "POST"
     ):
         try:
-            from .core.state import state
+            from app.core.state import state
 
             if state.db is not None:
                 await state.db.audit(

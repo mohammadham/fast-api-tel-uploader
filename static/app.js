@@ -41,6 +41,9 @@ const app = createApp({
     const overview = ref(null);
     const uploadBusy = ref(false);
     const uploadProgress = ref("");
+    const uploadPct = ref(0); // 0-100, real XHR progress
+    const uploadSpeed = ref(0); // MB/s
+    const uploadTimeStart = ref(0); // timestamp
     const nowSec = Math.floor(Date.now() / 1000);
 
     /* ---------- dialogs ---------- */
@@ -233,21 +236,42 @@ const app = createApp({
     /* ---------- files ---------- */
     const uploadPct = ref(0); // 0-100, real XHR progress
     let cancelXHR = null;
-    function uploadXHR(file) {
-      return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", "/api/v1/files/upload");
-        xhr.setRequestHeader("Authorization", "Bearer " + token.value);
-        xhr.upload.onprogress = (e) => { if (e.lengthComputable) uploadPct.value = Math.round((e.loaded / e.total) * 100); };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
-          else { let msg = "آپلود ناموفق"; try { msg = JSON.parse(xhr.responseText).detail || msg; } catch (e) {} reject(new Error(msg)); }
-        };
-        xhr.onerror = () => reject(new Error("خطای شبکه"));
-        xhr.send(fd(file));
-        cancelXHR = xhr; // store reference for cancellation
+    async function startResumableUpload(file) {
+      // Create upload session
+      const r = await fetch("/api/v1/files/upload/session", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token.value, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: file.name, size: file.size, mime: file.type || "application/octet-stream" })
       });
-      function fd(f) { const x = new FormData(); x.append("file", f); return x; }
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail || "session create failed"); }
+      const { session_id, chunk_size, offset } = await r.json();
+      let completed = false;
+      let currentOffset = offset;
+
+      // Upload chunks
+      while (!completed) {
+        const chunk = file.slice(currentOffset, Math.min(currentOffset + chunk_size, file.size));
+        const r = await fetch("/api/v1/files/upload/session/" + session_id, {
+          method: "PATCH",
+          headers: { "Authorization": "Bearer " + token.value, "X-Offset": currentOffset },
+          body: chunk
+        });
+        if (!r.ok) {
+          const d = await r.json(); throw new Error(d.detail || "chunk upload failed");
+        }
+        const result = await r.json();
+        currentOffset = result.offset;
+        completed = result.completed;
+      }
+
+      // Get final file info
+      const infoR = await fetch("/api/v1/files", {
+        method: "GET",
+        headers: { "Authorization": "Bearer " + token.value }
+      });
+      if (!infoR.ok) throw new Error("Could not get file list");
+      const files = await infoR.json();
+      return files.items[files.items.length - 1];
     }
     function cancelCurrentUpload() {
       if (cancelXHR && cancelXHR.readyState < 4) {
@@ -258,8 +282,9 @@ const app = createApp({
     async function upload(ev) {
       const f = ev.target.files[0]; if (!f) return;
       uploadBusy.value = true; uploadPct.value = 0; uploadProgress.value = f.name + " (" + fmtBytes(f.size) + ")";
+      uploadTimeStart.value = Math.floor(Date.now() / 1000);
       try {
-        const d = await uploadXHR(f);
+        const d = await startResumableUpload(f);
         showToast("صف شد: " + d.file_id);
         uploadProgress.value = "";
         cancelXHR = null; // reset after success
