@@ -1,0 +1,11 @@
+{
+  "name": "telegramdrive-e2e",
+  "private": true,
+  "description": "Playwright smoke tests for TelegramDrive panel (login -> upload). Backend is the Python FastAPI app; run via npm run test:e2e.",
+  "scripts": {
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.0"
+  }
+}

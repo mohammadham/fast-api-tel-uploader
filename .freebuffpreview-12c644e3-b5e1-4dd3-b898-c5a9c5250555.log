@@ -1,0 +1,238 @@
+INFO:     Started server process [15652]
+INFO:     Waiting for application startup.
+{"ts": 1790079702.923, "level": "INFO", "logger": "tgdrive.queue", "msg": "queue recovered 0 pending jobs"}
+{"ts": 1790079702.924, "level": "INFO", "logger": "tgdrive.queue", "msg": "queue started with 6 workers"}
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+{"ts": 1790079707.439, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_16544a8782ad3033", "correlation_id": "req_16544a8782ad3033", "method": "GET", "path": "/", "status": 200, "duration_ms": 80.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58576 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790079713.945, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_1cc2afa78c14b811", "correlation_id": "req_1cc2afa78c14b811", "method": "GET", "path": "/nonexistent", "status": 404, "duration_ms": 25.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58579 - "GET /nonexistent HTTP/1.1" 404 Not Found
+{"ts": 1790079723.659, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_fae16a4c61cf5867", "correlation_id": "req_fae16a4c61cf5867", "method": "GET", "path": "/api/v1/files", "status": 401, "duration_ms": 0.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:60344 - "GET /api/v1/files HTTP/1.1" 401 Unauthorized
+{"ts": 1790079729.536, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_eecc9b6eb3fe7999", "correlation_id": "req_eecc9b6eb3fe7999", "method": "POST", "path": "/api/v1/auth/login", "status": 401, "duration_ms": 213.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:60347 - "POST /api/v1/auth/login HTTP/1.1" 401 Unauthorized
+{"ts": 1790079734.834, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_b0931f9b6716efb1", "correlation_id": "req_b0931f9b6716efb1", "method": "GET", "path": "/qr-demo/qr", "status": 200, "duration_ms": 79.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:59239 - "GET /qr-demo/qr HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59242 - "GET /static/style.css HTTP/1.1" 200 OK
+{"ts": 1790081449.806, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_0612b841640f7b6c", "correlation_id": "req_0612b841640f7b6c", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:60187 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790081476.767, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_6a2996976164d69f", "correlation_id": "req_6a2996976164d69f", "method": "GET", "path": "/api/v1/admin/healthz", "status": 200, "duration_ms": 13.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52315 - "GET /api/v1/admin/healthz HTTP/1.1" 200 OK
+{"ts": 1790081495.312, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_c73adf3c9d77b5b1", "correlation_id": "req_c73adf3c9d77b5b1", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52329 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790081495.486, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_86ca80c1271f925c", "correlation_id": "req_86ca80c1271f925c", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52331 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52331 - "GET /static/style.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:52332 - "GET /static/app.js HTTP/1.1" 200 OK
+{"ts": 1790081495.635, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_a6ae72e449ccf190", "correlation_id": "req_a6ae72e449ccf190", "method": "GET", "path": "/api/v1/admin/overview", "status": 401, "duration_ms": 24.3, "ip": "127.0.0.1"}
+{"ts": 1790081495.635, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_9af1cce599b8b817", "correlation_id": "req_9af1cce599b8b817", "method": "GET", "path": "/api/v1/accounts", "status": 401, "duration_ms": 17.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52332 - "GET /api/v1/admin/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:52331 - "GET /api/v1/accounts HTTP/1.1" 401 Unauthorized
+{"ts": 1790081495.656, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_7802ecd2ab06aebf", "correlation_id": "req_7802ecd2ab06aebf", "method": "POST", "path": "/api/v1/auth/refresh", "status": 200, "duration_ms": 7.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52331 - "POST /api/v1/auth/refresh HTTP/1.1" 200 OK
+{"ts": 1790081495.658, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_cdc71ee29a61b6cb", "correlation_id": "req_cdc71ee29a61b6cb", "method": "POST", "path": "/api/v1/auth/refresh", "status": 200, "duration_ms": 7.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52332 - "POST /api/v1/auth/refresh HTTP/1.1" 200 OK
+{"ts": 1790081495.666, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_dc44cf7770428682", "correlation_id": "req_dc44cf7770428682", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 2.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52331 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790081495.674, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_0d7e46f465aa16cd", "correlation_id": "req_0d7e46f465aa16cd", "method": "GET", "path": "/api/v1/admin/overview", "status": 200, "duration_ms": 13.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52332 - "GET /api/v1/admin/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52336 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+{"ts": 1790081495.779, "level": "ERROR", "logger": "asyncio", "msg": "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)\nhandle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>", "exc": "Traceback (most recent call last):\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\events.py\", line 88, in _run\n    self._context.run(self._callback, *self._args)\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\proactor_events.py\", line 165, in _call_connection_lost\n    self._sock.shutdown(socket.SHUT_RDWR)\nConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host"}
+{"ts": 1790081506.263, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_657f7145b5752934", "correlation_id": "req_657f7145b5752934", "method": "GET", "path": "/api/v1/admin/healthz", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52343 - "GET /api/v1/admin/healthz HTTP/1.1" 200 OK
+{"ts": 1790081513.5, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_0a01857fd12d86b6", "correlation_id": "req_0a01857fd12d86b6", "method": "GET", "path": "/nonexistent", "status": 404, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52347 - "GET /nonexistent HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:54015 - "GET /d/eitaa-preview/dl HTTP/1.1" 200 OK
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "D:\Program Files\XAMPP\htdocs\tbot\fast api tel uploader\.venv\Lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 422, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Program Files\XAMPP\htdocs\tbot\fast api tel uploader\.venv\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 63, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Program Files\XAMPP\htdocs\tbot\fast api tel uploader\.venv\Lib\site-packages\fastapi\applications.py", line 1163, in __call__
+    await super().__call__(scope, receive, send)
+  File "D:\Program Files\XAMPP\htdocs\tbot\fast api tel uploader\.venv\Lib\site-packages\starlette\applications.py", line 96, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "D:\Program Files\XAMPP\htdocs\tbot\fast api tel uploader\.venv\Lib\site-packages\starlette\middleware\errors.py", line 186, in __call__
+    raise exc
+  File "D:\Program Files\XAMPP\htdocs\tbot\fast api tel uploader\.venv\Lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "D:\Program Files\XAMPP\htdocs\tbot\fast api tel uploader\.venv\Lib\site-packages\starlette\middleware\cors.py", line 88, in __call__
+    await self.app(scope, receive, send)
+  File "D:\Program Files\XAMPP\htdocs\tbot\fast api tel uploader\.venv\Lib\site-packages\starlette\middleware\base.py", line 194, in __call__
+    await response(scope, wrapped_receive, send)
+  File "D:\Program Files\XAMPP\htdocs\tbot\fast api tel uploader\.venv\Lib\site-packages\starlette\middleware\base.py", line 241, in __call__
+    await send({"type": "http.response.body", "body": b"", "more_body": False})
+  File "D:\Program Files\XAMPP\htdocs\tbot\fast api tel uploader\.venv\Lib\site-packages\starlette\middleware\errors.py", line 161, in _send
+    await send(message)
+  File "D:\Program Files\XAMPP\htdocs\tbot\fast api tel uploader\.venv\Lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 556, in send
+    raise RuntimeError("Response content shorter than Content-Length")
+RuntimeError: Response content shorter than Content-Length
+{"ts": 1790081819.912, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_69c48c463948cf15", "correlation_id": "req_69c48c463948cf15", "method": "GET", "path": "/api/v1/admin/healthz", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54021 - "GET /api/v1/admin/healthz HTTP/1.1" 200 OK
+{"ts": 1790081825.66, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_c96823831e4a71f5", "correlation_id": "req_c96823831e4a71f5", "method": "POST", "path": "/api/v1/auth/login", "status": 401, "duration_ms": 235.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:60657 - "POST /api/v1/auth/login HTTP/1.1" 401 Unauthorized
+{"ts": 1790082589.685, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_4ca6c1bb15a49b4c", "correlation_id": "req_4ca6c1bb15a49b4c", "method": "GET", "path": "/api/v1/accounts", "status": 401, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53947 - "GET /api/v1/accounts HTTP/1.1" 401 Unauthorized
+{"ts": 1790082589.691, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_67cda8f403d6ec67", "correlation_id": "req_67cda8f403d6ec67", "method": "POST", "path": "/api/v1/auth/refresh", "status": 200, "duration_ms": 2.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53947 - "POST /api/v1/auth/refresh HTTP/1.1" 200 OK
+{"ts": 1790082589.696, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_eebd0c7708ee9a91", "correlation_id": "req_eebd0c7708ee9a91", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53947 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790082599.735, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_3c10b580b581d94b", "correlation_id": "req_3c10b580b581d94b", "method": "POST", "path": "/api/v1/accounts/1/test", "status": 200, "duration_ms": 2.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53951 - "POST /api/v1/accounts/1/test HTTP/1.1" 200 OK
+{"ts": 1790082601.717, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_a044b582901c6ef3", "correlation_id": "req_a044b582901c6ef3", "method": "POST", "path": "/api/v1/accounts/1/reset", "status": 200, "duration_ms": 2.8, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53955 - "POST /api/v1/accounts/1/reset HTTP/1.1" 200 OK
+{"ts": 1790082601.721, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_64c1bcca39d84578", "correlation_id": "req_64c1bcca39d84578", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53955 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790082606.088, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_36f8cc90ecc43f25", "correlation_id": "req_36f8cc90ecc43f25", "method": "GET", "path": "/api/v1/bots", "status": 200, "duration_ms": 21.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53955 - "GET /api/v1/bots HTTP/1.1" 200 OK
+{"ts": 1790082607.296, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_fe26043767323651", "correlation_id": "req_fe26043767323651", "method": "GET", "path": "/api/v1/eitaa", "status": 200, "duration_ms": 13.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53955 - "GET /api/v1/eitaa HTTP/1.1" 200 OK
+{"ts": 1790082609.597, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e97cfd3257f945fa", "correlation_id": "req_e97cfd3257f945fa", "method": "POST", "path": "/api/v1/eitaa/1/test", "status": 200, "duration_ms": 10.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53955 - "POST /api/v1/eitaa/1/test HTTP/1.1" 200 OK
+{"ts": 1790082612.017, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_96808932ef22d6a7", "correlation_id": "req_96808932ef22d6a7", "method": "GET", "path": "/api/v1/keys", "status": 200, "duration_ms": 12.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:50236 - "GET /api/v1/keys HTTP/1.1" 200 OK
+{"ts": 1790082623.037, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_16956b1af1ddb770", "correlation_id": "req_16956b1af1ddb770", "method": "GET", "path": "/api/v1/files", "status": 200, "duration_ms": 1.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:50242 - "GET /api/v1/files HTTP/1.1" 200 OK
+{"ts": 1790082634.056, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_086fbcc505b0ed7d", "correlation_id": "req_086fbcc505b0ed7d", "method": "GET", "path": "/api/v1/queue/jobs", "status": 200, "duration_ms": 19.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:50246 - "GET /api/v1/queue/jobs HTTP/1.1" 200 OK
+{"ts": 1790082634.062, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_88ede73692858348", "correlation_id": "req_88ede73692858348", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 25.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:50245 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790082646.029, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_7c1b9ed41f11b03b", "correlation_id": "req_7c1b9ed41f11b03b", "method": "GET", "path": "/api/v1/admin/audit", "status": 200, "duration_ms": 2.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:50248 - "GET /api/v1/admin/audit HTTP/1.1" 200 OK
+{"ts": 1790082899.373, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_7a5c408eb38d86c7", "correlation_id": "req_7a5c408eb38d86c7", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53679 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790082906.607, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_88e4c84d6248cdf8", "correlation_id": "req_88e4c84d6248cdf8", "method": "GET", "path": "/qr-demo/qr", "status": 200, "duration_ms": 8.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58447 - "GET /qr-demo/qr HTTP/1.1" 200 OK
+{"ts": 1790082923.405, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_d734542addf868fe", "correlation_id": "req_d734542addf868fe", "method": "POST", "path": "/api/v1/auth/logout", "status": 200, "duration_ms": 2.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58456 - "POST /api/v1/auth/logout HTTP/1.1" 200 OK
+{"ts": 1790082923.413, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_d7b32cc49f0f6168", "correlation_id": "req_d7b32cc49f0f6168", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58456 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790083974.696, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_35c146973c0e0510", "correlation_id": "req_35c146973c0e0510", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58173 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790083978.835, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_c0c7682bbbd7e0b3", "correlation_id": "req_c0c7682bbbd7e0b3", "method": "GET", "path": "/login", "status": 404, "duration_ms": 0.8, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58176 - "GET /login HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:54202 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+{"ts": 1790084777.84, "level": "ERROR", "logger": "asyncio", "msg": "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)\nhandle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>", "exc": "Traceback (most recent call last):\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\events.py\", line 88, in _run\n    self._context.run(self._callback, *self._args)\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\proactor_events.py\", line 165, in _call_connection_lost\n    self._sock.shutdown(socket.SHUT_RDWR)\nConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host"}
+{"ts": 1790084780.346, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_8d0daa5166a535cc", "correlation_id": "req_8d0daa5166a535cc", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54205 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49221 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+{"ts": 1790084868.993, "level": "ERROR", "logger": "asyncio", "msg": "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)\nhandle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>", "exc": "Traceback (most recent call last):\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\events.py\", line 88, in _run\n    self._context.run(self._callback, *self._args)\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\proactor_events.py\", line 165, in _call_connection_lost\n    self._sock.shutdown(socket.SHUT_RDWR)\nConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host"}
+INFO:     127.0.0.1:55868 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+{"ts": 1790084991.881, "level": "ERROR", "logger": "asyncio", "msg": "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)\nhandle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>", "exc": "Traceback (most recent call last):\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\events.py\", line 88, in _run\n    self._context.run(self._callback, *self._args)\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\proactor_events.py\", line 165, in _call_connection_lost\n    self._sock.shutdown(socket.SHUT_RDWR)\nConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host"}
+{"ts": 1790084993.679, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_77e34238cd8039d6", "correlation_id": "req_77e34238cd8039d6", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:55870 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54404 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+{"ts": 1790085152.164, "level": "ERROR", "logger": "asyncio", "msg": "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)\nhandle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>", "exc": "Traceback (most recent call last):\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\events.py\", line 88, in _run\n    self._context.run(self._callback, *self._args)\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\proactor_events.py\", line 165, in _call_connection_lost\n    self._sock.shutdown(socket.SHUT_RDWR)\nConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host"}
+{"ts": 1790085170.958, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_bcf4286d10a7c1e9", "correlation_id": "req_bcf4286d10a7c1e9", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54410 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54415 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+{"ts": 1790085177.758, "level": "ERROR", "logger": "asyncio", "msg": "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)\nhandle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>", "exc": "Traceback (most recent call last):\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\events.py\", line 88, in _run\n    self._context.run(self._callback, *self._args)\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\proactor_events.py\", line 165, in _call_connection_lost\n    self._sock.shutdown(socket.SHUT_RDWR)\nConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host"}
+{"ts": 1790085190.429, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_7f1f6d51717c9ef9", "correlation_id": "req_7f1f6d51717c9ef9", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54434 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085195.301, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_55b7db854c91bc91", "correlation_id": "req_55b7db854c91bc91", "method": "GET", "path": "/login", "status": 404, "duration_ms": 1.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54437 - "GET /login HTTP/1.1" 404 Not Found
+{"ts": 1790085201.61, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_20fa2356b73fe4be", "correlation_id": "req_20fa2356b73fe4be", "method": "POST", "path": "/api/v1/auth/login", "status": 401, "duration_ms": 245.8, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54441 - "POST /api/v1/auth/login HTTP/1.1" 401 Unauthorized
+{"ts": 1790085207.321, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_0a716003f6bb2e3f", "correlation_id": "req_0a716003f6bb2e3f", "method": "GET", "path": "/api/v1/accounts", "status": 401, "duration_ms": 0.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54443 - "GET /api/v1/accounts HTTP/1.1" 401 Unauthorized
+{"ts": 1790085213.527, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_d9190f6ddbf7ec9a", "correlation_id": "req_d9190f6ddbf7ec9a", "method": "GET", "path": "/api/v1/admin/overview", "status": 401, "duration_ms": 0.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54447 - "GET /api/v1/admin/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:54452 - "GET /static/style.css HTTP/1.1" 200 OK
+{"ts": 1790085224.429, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_89ded4197f64bf55", "correlation_id": "req_89ded4197f64bf55", "method": "GET", "path": "/qr-demo/qr", "status": 200, "duration_ms": 8.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54455 - "GET /qr-demo/qr HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54459 - "GET /d/eitaa-preview-test/dl HTTP/1.1" 404 Not Found
+{"ts": 1790085235.595, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_5c65b8aa3262e113", "correlation_id": "req_5c65b8aa3262e113", "method": "GET", "path": "/qr-demo", "status": 200, "duration_ms": 1.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54461 - "GET /qr-demo HTTP/1.1" 200 OK
+{"ts": 1790085240.582, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_bfc30e04a48de1ab", "correlation_id": "req_bfc30e04a48de1ab", "method": "GET", "path": "/api/v1/files", "status": 401, "duration_ms": 0.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54464 - "GET /api/v1/files HTTP/1.1" 401 Unauthorized
+{"ts": 1790085245.909, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_ceb298420cb63bb7", "correlation_id": "req_ceb298420cb63bb7", "method": "GET", "path": "/nonexistent", "status": 404, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:61217 - "GET /nonexistent HTTP/1.1" 404 Not Found
+{"ts": 1790085275.503, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_6dacc5f0650f5067", "correlation_id": "req_6dacc5f0650f5067", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:61230 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085278.397, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_2e70e4b5d3392ce1", "correlation_id": "req_2e70e4b5d3392ce1", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:61230 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085279.317, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_69b25c416d91f4d8", "correlation_id": "req_69b25c416d91f4d8", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:61230 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085279.525, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e664eaae47a26519", "correlation_id": "req_e664eaae47a26519", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:61230 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085279.667, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_143af5125d4bd8d6", "correlation_id": "req_143af5125d4bd8d6", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:61230 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085297.398, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_9831b5fa23d1c2bf", "correlation_id": "req_9831b5fa23d1c2bf", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:61240 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085312.43, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_d3d5d8748e70c5b2", "correlation_id": "req_d3d5d8748e70c5b2", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:62276 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62276 - "GET /static/style.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62276 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+{"ts": 1790085424.065, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_545fd08ff11b8b0b", "correlation_id": "req_545fd08ff11b8b0b", "method": "POST", "path": "/api/v1/auth/login", "status": 401, "duration_ms": 246.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51105 - "POST /api/v1/auth/login HTTP/1.1" 401 Unauthorized
+{"ts": 1790085470.264, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_35d6f3d54b02a259", "correlation_id": "req_35d6f3d54b02a259", "method": "POST", "path": "/api/v1/auth/login", "status": 200, "duration_ms": 254.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51137 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+{"ts": 1790085476.492, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_bcbede71d749d461", "correlation_id": "req_bcbede71d749d461", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51140 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790085482.923, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_d0ef045f0972364e", "correlation_id": "req_d0ef045f0972364e", "method": "POST", "path": "/api/v1/auth/login", "status": 401, "duration_ms": 242.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64531 - "POST /api/v1/auth/login HTTP/1.1" 401 Unauthorized
+{"ts": 1790085489.19, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_f990f266381948f9", "correlation_id": "req_f990f266381948f9", "method": "POST", "path": "/api/v1/auth/login", "status": 200, "duration_ms": 243.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64533 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+{"ts": 1790085489.457, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_461deee822187048", "correlation_id": "req_461deee822187048", "method": "GET", "path": "/api/v1/accounts", "status": 401, "duration_ms": 0.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64535 - "GET /api/v1/accounts HTTP/1.1" 401 Unauthorized
+{"ts": 1790085495.314, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_6dac8550715ea2e9", "correlation_id": "req_6dac8550715ea2e9", "method": "POST", "path": "/api/v1/auth/login", "status": 200, "duration_ms": 240.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64539 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+{"ts": 1790085508.323, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_04e3c44626f5b5c6", "correlation_id": "req_04e3c44626f5b5c6", "method": "POST", "path": "/api/v1/auth/login", "status": 422, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64546 - "POST /api/v1/auth/login HTTP/1.1" 422 Unprocessable Entity
+{"ts": 1790085514.947, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_884a4887da88dd8c", "correlation_id": "req_884a4887da88dd8c", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64549 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085520.536, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_40d6584e06136414", "correlation_id": "req_40d6584e06136414", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64552 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085525.878, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_7e6c7d6c0c15c28a", "correlation_id": "req_7e6c7d6c0c15c28a", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64556 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085528.212, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_c14e620b8017df37", "correlation_id": "req_c14e620b8017df37", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64556 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085550.82, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_915ce4705e5276f6", "correlation_id": "req_915ce4705e5276f6", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:62226 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085677.664, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_928eeab80d43c16c", "correlation_id": "req_928eeab80d43c16c", "method": "POST", "path": "/api/v1/auth/login", "status": 200, "duration_ms": 239.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54431 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+{"ts": 1790085684.108, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_f742b37b5ae83657", "correlation_id": "req_f742b37b5ae83657", "method": "POST", "path": "/api/v1/auth/login", "status": 200, "duration_ms": 245.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54434 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+{"ts": 1790085691.01, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e0e729d0d8c48144", "correlation_id": "req_e0e729d0d8c48144", "method": "POST", "path": "/api/v1/auth/login", "status": 200, "duration_ms": 241.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54439 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+{"ts": 1790085698.107, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_d0651ab6be25a041", "correlation_id": "req_d0651ab6be25a041", "method": "POST", "path": "/api/v1/auth/login", "status": 200, "duration_ms": 239.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54441 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+{"ts": 1790085698.235, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_6ca723cc3eadb9e6", "correlation_id": "req_6ca723cc3eadb9e6", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54442 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790085706.142, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_6580b9058dc60ae3", "correlation_id": "req_6580b9058dc60ae3", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54445 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085706.202, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_33b1b9d937af0730", "correlation_id": "req_33b1b9d937af0730", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54446 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085706.261, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_7207ed32c24145f0", "correlation_id": "req_7207ed32c24145f0", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54447 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085716.274, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_6160647fd7e6f2d9", "correlation_id": "req_6160647fd7e6f2d9", "method": "POST", "path": "/api/v1/auth/login", "status": 200, "duration_ms": 244.8, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54450 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+{"ts": 1790085724.045, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_04b002af49e51265", "correlation_id": "req_04b002af49e51265", "method": "POST", "path": "/api/v1/auth/login", "status": 401, "duration_ms": 230.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54106 - "POST /api/v1/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:54109 - "GET /static/app.js HTTP/1.1" 200 OK
+{"ts": 1790085731.007, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e62ea8e83beb26ca", "correlation_id": "req_e62ea8e83beb26ca", "method": "GET", "path": "/static/index.html", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54110 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54111 - "GET /static/style.css HTTP/1.1" 200 OK
+{"ts": 1790085740.671, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_23454f908c02b19e", "correlation_id": "req_23454f908c02b19e", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.8, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:60387 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085812.777, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_a43e5610ff02fb40", "correlation_id": "req_a43e5610ff02fb40", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54232 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085819.75, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_67938086808d6609", "correlation_id": "req_67938086808d6609", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.8, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54237 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085826.825, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_c66306218c337139", "correlation_id": "req_c66306218c337139", "method": "POST", "path": "/api/v1/auth/login", "status": 200, "duration_ms": 222.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54241 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+{"ts": 1790085833.944, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_8d68f6832103ee33", "correlation_id": "req_8d68f6832103ee33", "method": "POST", "path": "/api/v1/auth/login", "status": 200, "duration_ms": 236.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54246 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+{"ts": 1790085834.082, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_ae3f70515f28350f", "correlation_id": "req_ae3f70515f28350f", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 2.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54247 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790085850.16, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_7340b65e2aa140c8", "correlation_id": "req_7340b65e2aa140c8", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:55765 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790085911.841, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_b9b515ff06798c2d", "correlation_id": "req_b9b515ff06798c2d", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51896 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51896 - "GET /static/style.css HTTP/1.1" 200 OK
+{"ts": 1790086073.404, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_116561409a1be92b", "correlation_id": "req_116561409a1be92b", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:55116 - "GET / HTTP/1.1" 200 OK

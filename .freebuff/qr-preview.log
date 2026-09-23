@@ -1,0 +1,55 @@
+{"ts": 1790033319.716, "level": "INFO", "logger": "tgdrive.queue", "msg": "queue recovered 0 pending jobs"}
+{"ts": 1790033319.717, "level": "INFO", "logger": "tgdrive.queue", "msg": "queue started with 6 workers"}
+{"ts": 1790033322.866, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_91590d9f26e499db", "correlation_id": "req_91590d9f26e499db", "method": "GET", "path": "/api/v1/admin/healthz", "status": 200, "duration_ms": 34.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:57883 - "GET /api/v1/admin/healthz HTTP/1.1" 200 OK
+{"ts": 1790033396.921, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_1e4abf39b83081a6", "correlation_id": "req_1e4abf39b83081a6", "method": "GET", "path": "/api/v1/admin/healthz", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58583 - "GET /api/v1/admin/healthz HTTP/1.1" 200 OK
+{"ts": 1790033432.95, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e3885371e7d67b57", "correlation_id": "req_e3885371e7d67b57", "method": "GET", "path": "/", "status": 200, "duration_ms": 42.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64467 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790033432.96, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e5e0cd01b9752d2d", "correlation_id": "req_e5e0cd01b9752d2d", "method": "GET", "path": "/", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64468 - "GET / HTTP/1.1" 200 OK
+{"ts": 1790033433.119, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_614518318e7000a0", "correlation_id": "req_614518318e7000a0", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64470 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64470 - "GET /static/style.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:64471 - "GET /static/app.js HTTP/1.1" 304 Not Modified
+{"ts": 1790033433.267, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_d8c4722e938ef23c", "correlation_id": "req_d8c4722e938ef23c", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 2.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64470 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790033433.277, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_c09557b73e5069ee", "correlation_id": "req_c09557b73e5069ee", "method": "GET", "path": "/api/v1/admin/overview", "status": 200, "duration_ms": 13.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64471 - "GET /api/v1/admin/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64477 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+{"ts": 1790033433.598, "level": "ERROR", "logger": "asyncio", "msg": "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)\nhandle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>", "exc": "Traceback (most recent call last):\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\events.py\", line 88, in _run\n    self._context.run(self._callback, *self._args)\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\proactor_events.py\", line 165, in _call_connection_lost\n    self._sock.shutdown(socket.SHUT_RDWR)\nConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host"}
+{"ts": 1790033472.627, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_fb0c9ea6215c58b2", "correlation_id": "req_fb0c9ea6215c58b2", "method": "POST", "path": "/api/v1/auth/login", "status": 200, "duration_ms": 196.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53827 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+{"ts": 1790033472.638, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_8d71c0b9bf5c9ee0", "correlation_id": "req_8d71c0b9bf5c9ee0", "method": "POST", "path": "/api/v1/keys", "status": 200, "duration_ms": 2.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53827 - "POST /api/v1/keys HTTP/1.1" 200 OK
+{"ts": 1790033472.646, "level": "INFO", "logger": "tgdrive.queue", "msg": "job enqueued", "request_id": "req_703a1b1f821e267c", "correlation_id": "req_703a1b1f821e267c", "kind": "upload", "priority": 40, "file_id": "f_1188ef0175a8c2f90821209a"}
+INFO:     127.0.0.1:53827 - "POST /api/v1/files/upload HTTP/1.1" 200 OK
+{"ts": 1790033472.649, "level": "INFO", "logger": "tgdrive.queue", "msg": "upload complete", "correlation_id": "req_703a1b1f821e267c", "job_id": "j_9e720848625193d266be684c", "file_id": "f_1188ef0175a8c2f90821209a", "size": 2, "parts": 1, "account": "acc:1", "duration_ms": 1.3}
+{"ts": 1790033472.65, "level": "INFO", "logger": "tgdrive.queue", "msg": "job done", "correlation_id": "req_703a1b1f821e267c", "job_id": "j_9e720848625193d266be684c", "kind": "upload", "worker": "dl2", "duration_ms": 2.5}
+INFO:     127.0.0.1:54204 - "GET /api/v1/files/f_1188ef0175a8c2f90821209a HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54075 - "POST /api/v1/files/f_1188ef0175a8c2f90821209a/share HTTP/1.1" 200 OK
+{"ts": 1790033555.691, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_9cd523bcbf8407bb", "correlation_id": "req_9cd523bcbf8407bb", "method": "GET", "path": "/qr-demo/qr", "status": 200, "duration_ms": 29.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54075 - "GET /qr-demo/qr HTTP/1.1" 200 OK
+{"ts": 1790033595.534, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_5c7f7bc1f3903b2f", "correlation_id": "req_5c7f7bc1f3903b2f", "method": "GET", "path": "/qr-demo", "status": 200, "duration_ms": 1.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54460 - "GET /qr-demo HTTP/1.1" 200 OK
+{"ts": 1790033635.884, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_35e8caa8283ae7cb", "correlation_id": "req_35e8caa8283ae7cb", "method": "GET", "path": "/qr-demo", "status": 200, "duration_ms": 1.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54853 - "GET /qr-demo HTTP/1.1" 200 OK
+{"ts": 1790033726.658, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_3a63aa63f6cbce13", "correlation_id": "req_3a63aa63f6cbce13", "method": "GET", "path": "/qr-demo", "status": 200, "duration_ms": 1.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:55703 - "GET /qr-demo HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55704 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+{"ts": 1790033726.741, "level": "ERROR", "logger": "asyncio", "msg": "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)\nhandle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>", "exc": "Traceback (most recent call last):\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\events.py\", line 88, in _run\n    self._context.run(self._callback, *self._args)\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\proactor_events.py\", line 165, in _call_connection_lost\n    self._sock.shutdown(socket.SHUT_RDWR)\nConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host"}
+{"ts": 1790034065.774, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_2e4c4eb615b3c2d6", "correlation_id": "req_2e4c4eb615b3c2d6", "method": "GET", "path": "/qr-demo", "status": 200, "duration_ms": 2.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:50551 - "GET /qr-demo HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50554 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+{"ts": 1790034065.879, "level": "ERROR", "logger": "asyncio", "msg": "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)\nhandle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>", "exc": "Traceback (most recent call last):\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\events.py\", line 88, in _run\n    self._context.run(self._callback, *self._args)\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\proactor_events.py\", line 165, in _call_connection_lost\n    self._sock.shutdown(socket.SHUT_RDWR)\nConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host"}
+{"ts": 1790034344.266, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e9cddcb146a5ecbf", "correlation_id": "req_e9cddcb146a5ecbf", "method": "GET", "path": "/qr-demo", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53274 - "GET /qr-demo HTTP/1.1" 200 OK
+{"ts": 1790034575.972, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_81513b8dba9ca7dc", "correlation_id": "req_81513b8dba9ca7dc", "method": "GET", "path": "/qr-demo", "status": 200, "duration_ms": 1.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:50302 - "GET /qr-demo HTTP/1.1" 200 OK
+{"ts": 1790034763.354, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_6d4e29b697536575", "correlation_id": "req_6d4e29b697536575", "method": "GET", "path": "/qr-demo/qr", "status": 200, "duration_ms": 6.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58505 - "GET /qr-demo/qr HTTP/1.1" 200 OK
+{"ts": 1790034763.42, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e66e52745c9e78cd", "correlation_id": "req_e66e52745c9e78cd", "method": "GET", "path": "/qr-demo", "status": 200, "duration_ms": 1.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58506 - "GET /qr-demo HTTP/1.1" 200 OK
+{"ts": 1790035719.774, "level": "INFO", "logger": "tgdrive.janitor", "msg": "janitor: 1 tmp, 0 sessions, 0 jobs, 0 trash-purged"}
+{"ts": 1790036319.766, "level": "INFO", "logger": "tgdrive.janitor", "msg": "janitor: 1 tmp, 0 sessions, 0 jobs, 0 trash-purged"}
+{"ts": 1790036919.801, "level": "INFO", "logger": "tgdrive.janitor", "msg": "janitor: 1 tmp, 0 sessions, 0 jobs, 0 trash-purged"}

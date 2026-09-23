@@ -1,0 +1,31 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - TGDRIVE_DATA_DIR=/srv/data
+    volumes:
+      - ./data:/srv/data
+    restart: unless-stopped
+    # NOTE: single worker — the priority queue is in-process (SQLite-backed).
+
+  # Optional: local Bot API server lifts bot limits to 2GB uploads/downloads.
+  # Enable with: docker compose --profile localbot up -d
+  botapi:
+    image: aiogram/telegram-bot-api:latest
+    profiles: ["localbot"]
+    environment:
+      TELEGRAM_API_ID: ${TGDRIVE_TG_API_ID}
+      TELEGRAM_API_HASH: ${TGDRIVE_TG_API_HASH}
+      TELEGRAM_LOCAL: 1
+    volumes:
+      - botapi-data:/var/lib/telegram-bot-api
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
+
+volumes:
+  botapi-data:

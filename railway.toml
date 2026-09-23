@@ -1,0 +1,17 @@
+[express]
+  port = 8000
+
+[build]
+  dockerfile = Dockerfile.railway
+
+[deploy]
+  strategy = "continuous"
+
+[env]
+  # Railway will inject these automatically, but we set defaults:
+  TGDRIVE_FAKE_TG = "1"
+  TGDRIVE_DATA_DIR = "/app/data"
+  TGDRIVE_SECRET = "dev-secret-change-me-please-32-chars!"
+
+[[plugins]]
+  # Optional: add any Railway plugins here

@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TelegramDrive - آپلود و مدیریت فایل با تلگرام</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="/static/vendor/vue.global.prod.js"></script>
+</head>
+<body>
+<div id="app" v-cloak>
+
+  <!-- Landing / Login -->
+  <div v-if="!token" class="center">
+    <div class="card login-card">
+      <div style="text-align:center">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:44px;height:44px;color:var(--accent)">
+          <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/>
+          <path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>
+        </svg>
+        <h1 style="font-size:22px;margin:12px 0 4px">TelegramDrive</h1>
+        <p class="muted" style="font-size:14px;margin:0">پنل مدیریت فایل با تلگرام و ایتا</p>
+      </div>
+
+      <form @submit.prevent="doLogin">
+        <div class="field">
+          <label for="lg-user">نام کاربری</label>
+          <input id="lg-user" v-model="login.user" type="text" autocomplete="username" required>
+        </div>
+        <div class="field" style="margin-top:10px">
+          <label for="lg-pass">رمز عبور</label>
+          <input id="lg-pass" v-model="login.pass" type="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="primary" style="width:100%;margin-top:16px" :disabled="login.busy">
+          {{ login.busy ? "در حال ورود..." : "ورود به پنل" }}
+        </button>
+      </form>
+      <div class="err" style="text-align:center" role="alert">{{ login.err }}</div>
+      <p class="muted" style="font-size:12px;text-align:center;margin:0">TelegramDrive • نسخه ۲.۰ (Vue)</p>
+    </div>
+  </div>
+
+  <!-- App (authenticated) -->
+  <template v-else>
+    <header>
+      <div class="brand">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/>
+          <path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>
+        </svg>
+        <span>TelegramDrive</span>
+      </div>
+      <nav id="tabs">
+        <button v-for="t in tabList" :key="t.id" :class="{active: tab === t.id}" @click="switchTab(t.id)">{{ t.label }}</button>
+      </nav>
+      <button class="ghost" @click="logout">خروج</button>
+    </header>
+
+    <main>
+      <!-- Dashboard -->
+      <section v-show="tab === 'dash'">
+        <div class="cards">
+          <div class="stat" v-for="c in dashCards" :key="c[0]"><div class="lbl">{{ c[0] }}</div><div class="num">{{ c[1] }}</div></div>
+        </div>
+        <h3 style="font-size:16px">وضعیت اکانت‌ها</h3>
+        <div class="health-grid">
+          <div v-for="a in health" :key="a.id" class="health-item" :class="{bad: a.status !== 'ready'}">
+            <b>{{ a.label || a.id }}</b> <span class="badge" :class="a.status">{{ a.status }}</span>
+            <div class="muted" style="font-size:12px">آپلود {{ a.uploads_done }} • دانلود {{ a.downloads_done }}</div>
+            <div v-if="a.flood_until > nowSec" class="warn" style="font-size:12px">flood تا {{ fmtTime(a.flood_until) }}</div>
+            <div v-if="a.last_error" class="err" style="font-size:12px">{{ a.last_error }}</div>
+          </div>
+          <p v-if="!health.length" class="muted">اکانتی ثبت نشده</p>
+        </div>
+      </section>
+
+      <!-- Accounts -->
+      <section v-show="tab === 'accounts'">
+        <div class="toolbar">
+          <h3 style="margin:0;flex:1;font-size:16px">اکانت‌های تلگرام</h3>
+          <button class="primary" @click="accOpen">اکانت جدید</button>
+        </div>
+        <div class="card wide">
+          <table>
+            <thead><tr><th>شناسه</th><th>برچسب</th><th>تلفن</th><th>وضعیت</th><th>آپلودها</th><th>دانلودها</th><th>حجم آپلود</th><th>عملیات</th></tr></thead>
+            <tbody>
+              <tr v-for="a in accounts" :key="a.id">
+                <td>{{ a.id }}</td><td>{{ a.label }}</td><td dir="ltr">{{ a.phone }}</td>
+                <td><span class="badge" :class="a.status">{{ a.status }}</span></td>
+                <td>{{ a.uploads_done }}</td><td>{{ a.downloads_done }}</td><td>{{ fmtBytes(a.bytes_up) }}</td>
+                <td>
+                  <button @click="accToggle(a)">{{ a.enabled ? "غیرفعال" : "فعال" }}</button>
+                  <button @click="accTest(a)">تست</button>
+                  <button @click="accReset(a)">ریست</button>
+                  <button class="danger" @click="accDelete(a)">حذف</button>
+                </td>
+              </tr>
+              <tr v-if="!accounts.length"><td colspan="8" class="muted">اکانتی نیست</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Bots -->
+      <section v-show="tab === 'bots'">
+        <div class="toolbar">
+          <h3 style="margin:0;flex:1;font-size:16px">ربات‌های تلگرام</h3>
+          <button class="primary" @click="botDlg.open = true">بات جدید</button>
+        </div>
+        <div class="card wide">
+          <table>
+            <thead><tr><th>شناسه</th><th>برچسب</th><th>وضعیت</th><th>خطا</th><th>عملیات</th></tr></thead>
+            <tbody>
+              <tr v-for="b in bots" :key="b.id">
+                <td>{{ b.id }}</td><td>{{ b.label }}</td>
+                <td><span class="badge" :class="b.status">{{ b.status }}</span></td>
+                <td class="muted">{{ b.last_error }}</td>
+                <td>
+                  <button @click="botToggle(b)">{{ b.enabled ? "غیرفعال" : "فعال" }}</button>
+                  <button class="danger" @click="botDelete(b)">حذف</button>
+                </td>
+              </tr>
+              <tr v-if="!bots.length"><td colspan="5" class="muted">باتی نیست</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Eitaa -->
+      <section v-show="tab === 'eitaa'">
+        <div class="toolbar">
+          <h3 style="margin:0;flex:1;font-size:16px">ایتایار</h3>
+          <button class="primary" @click="eitDlg.open = true">اکانت جدید</button>
+        </div>
+        <div class="card wide">
+          <table>
+            <thead><tr><th>شناسه</th><th>برچسب</th><th>کانال مقصد</th><th>وضعیت</th><th>عملیات</th></tr></thead>
+            <tbody>
+              <tr v-for="e in eitaas" :key="e.id">
+                <td>{{ e.id }}</td><td>{{ e.label }}</td><td dir="ltr">{{ e.chat_id || "-" }}</td>
+                <td><span class="badge" :class="e.status">{{ e.status }}</span></td>
+                <td>
+                  <button @click="eitToggle(e)">{{ e.enabled ? "غیرفعال" : "فعال" }}</button>
+                  <button @click="eitTest(e)">تست</button>
+                  <button class="danger" @click="eitDelete(e)">حذف</button>
+                </td>
+              </tr>
+              <tr v-if="!eitaas.length"><td colspan="5" class="muted">توکنی ثبت نشده</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Keys -->
+      <section v-show="tab === 'keys'">
+        <div class="toolbar">
+          <h3 style="margin:0;flex:1;font-size:16px">کلیدهای API</h3>
+          <button class="primary" @click="keyOpen">کلید جدید</button>
+        </div>
+        <div class="card wide">
+          <table>
+            <thead><tr><th>شناسه</th><th>نام</th><th>پیشوند</th><th>سکوپ‌ها</th><th>ذخیره‌سازی</th><th>RPM</th><th>مصرف امروز</th><th>وضعیت</th><th>عملیات</th></tr></thead>
+            <tbody>
+              <tr v-for="k in keys" :key="k.id">
+                <td>{{ k.id }}</td><td>{{ k.name }}</td>
+                <td dir="ltr"><code>{{ k.key_prefix }}...</code></td>
+                <td>{{ k.scopes }}</td><td>{{ k.backend || "پیش‌فرض" }}</td>
+                <td>{{ k.rpm }}</td><td>{{ fmtBytes(k.used_bytes_today) }}</td>
+                <td><span class="badge" :class="k.revoked ? 'revoked' : 'ready'">{{ k.revoked ? "revoked" : "active" }}</span></td>
+                <td><button v-if="!k.revoked" class="danger" @click="keyRevoke(k)">Revoke</button></td>
+              </tr>
+              <tr v-if="!keys.length"><td colspan="9" class="muted">کلیدی نیست</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Files -->
+      <section v-show="tab === 'files'">
+        <div class="toolbar">
+          <h3 style="margin:0;flex:1;font-size:16px">فایل‌ها</h3>
+          <button class="primary" :disabled="uploadBusy" @click="$refs.fileInput.click()">
+            {{ uploadBusy ? "در حال آپلود..." : "آپلود جدید" }}
+          </button>
+          <input ref="fileInput" type="file" style="display:none" @change="upload">
+        </div>
+        <p v-if="uploadProgress" class="muted">
+          {{ uploadProgress }} — {{ uploadPct }}%
+          <span class="progress-track" role="progressbar" :aria-valuenow="uploadPct" aria-valuemin="0" aria-valuemax="100">
+            <span class="progress-fill" :style="{ width: uploadPct + '%' }"></span>
+          </span>
+          <button class="ghost" size="sm" @click="cancelUpload" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);padding:4px 8px;font-size:12px" :disabled="uploadPct === 0">Cancel</button>
+        </p>
+        <button class="ghost" @click="readLastFile" style="margin-left:8px">خوانش آخرین فایل</button>
+        <div class="card wide">
+          <table>
+            <thead><tr><th>شناسه</th><th>نام</th><th>حجم</th><th>وضعیت</th><th>ذخیره</th><th>دانلود</th><th>تاریخ</th><th>عملیات</th></tr></thead>
+            <tbody>
+              <tr v-for="f in files" :key="f.id">
+                <td dir="ltr"><code>{{ f.id }}</code></td>
+                <td>{{ f.name }}</td><td>{{ fmtBytes(f.size) }}</td>
+                <td><span class="badge" :class="f.status">{{ f.status }}</span></td>
+                <td>{{ f.backend || "tg" }}</td><td>{{ f.downloads }}</td>
+                <td class="muted">{{ fmtTime(f.created_at) }}</td>
+                <td>
+                  <button @click="fileLink(f)">لینک</button>
+                  <button v-if="f.deleted_at" @click="fileRestore(f)">بازیابی</button>
+                  <button class="danger" @click="fileDelete(f)">حذف</button>
+                </td>
+              </tr>
+              <tr v-if="!files.length"><td colspan="8" class="muted">فایلی نیست</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Queue -->
+      <section v-show="tab === 'queue'">
+        <div class="toolbar">
+          <h3 style="margin:0;flex:1;font-size:16px">صف انتظار</h3>
+          <button @click="qPause">توقف آپلود</button>
+          <button @click="qResume">ادامه آپلود</button>
+          <button class="danger" @click="qPurge">پاک کردن صف</button>
+          <button class="ghost" style="margin-left:8px" @click="backupDB">بکاپ</button>
+          <input type="file" style="display:none" id="restoreInput" @change="restoreDB"/><button class="ghost" style="margin-left:8px" @click="document.getElementById('restoreInput').click()">بازگردانی</button>
+        </div>
+        <div class="cards">
+          <div class="stat" v-for="(v, k) in queueStats" :key="k"><div class="lbl">{{ k }}</div><div class="num">{{ v }}</div></div>
+        </div>
+        <div class="card wide">
+          <table>
+            <thead><tr><th>شناسه</th><th>نوع</th><th>اولویت</th><th>وضعیت</th><th>تلاش</th><th>خطا</th></tr></thead>
+            <tbody>
+              <tr v-for="j in jobs" :key="j.id">
+                <td dir="ltr"><code>{{ j.id }}</code></td><td>{{ j.kind }}</td><td>{{ j.priority }}</td>
+                <td><span class="badge" :class="j.status">{{ j.status }}</span></td>
+                <td>{{ j.attempts }}</td><td class="muted">{{ j.error }}</td>
+              </tr>
+              <tr v-if="!jobs.length"><td colspan="6" class="muted">جابی نیست</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Audit -->
+      <section v-show="tab === 'audit'">
+        <h3 style="font-size:16px;margin-top:0">لاگ‌های سیستم</h3>
+        <div class="card wide">
+          <table>
+            <thead><tr><th>زمان</th><th>کاربر</th><th>اکشن</th><th>هدف</th><th>IP</th></tr></thead>
+            <tbody>
+              <tr v-for="(a, i) in audit" :key="i">
+                <td class="muted">{{ fmtTime(a.ts) }}</td><td>{{ a.actor }}</td>
+                <td>{{ a.action }}</td><td dir="ltr">{{ a.target }}</td><td dir="ltr">{{ a.ip }}</td>
+              </tr>
+              <tr v-if="!audit.length"><td colspan="5" class="muted">لاگی نیست</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- Dialogs -->
+    <dialog :open="accDlg.open" @close="accDlg.open = false">
+      <h3>افزودن اکانت تلگرام</h3>
+      <template v-if="accDlg.step === 1">
+        <div class="field"><label>تلفن</label><input v-model="accDlg.phone" type="text" placeholder="+98912..."></div>
+        <div class="field"><label>برچسب (اختیاری)</label><input v-model="accDlg.label" type="text"></div>
+        <button class="primary" style="width:100%" @click="accSend">ارسال کد تایید</button>
+      </template>
+      <template v-else>
+        <div class="field"><label>کد تایید</label><input v-model="accDlg.code" type="text" placeholder="12345"></div>
+        <div class="field"><label>رمز 2FA (اختیاری)</label><input v-model="accDlg.pass" type="password"></div>
+        <button class="primary" style="width:100%" @click="accDone">اتمام</button>
+      </template>
+      <p class="err">{{ accDlg.msg }}</p>
+      <button class="ghost" style="width:100%" @click="accDlg.open = false">انصراف</button>
+    </dialog>
+
+    <dialog :open="botDlg.open" @close="botDlg.open = false">
+      <h3>افزودن ربات</h3>
+      <div class="field"><label>توکن ربات</label><input v-model="botDlg.token" type="password" placeholder="123456:ABC-DEF..."></div>
+      <div class="field"><label>برچسب (اختیاری)</label><input v-model="botDlg.label" type="text"></div>
+      <button class="primary" style="width:100%" @click="botSave">ذخیره</button>
+      <p class="err">{{ botDlg.msg }}</p>
+      <button class="ghost" style="width:100%" @click="botDlg.open = false">انصراف</button>
+    </dialog>
+
+    <dialog :open="eitDlg.open" @close="eitDlg.open = false">
+      <h3>افزودن ایتایار</h3>
+      <div class="field"><label>توکن ایتا</label><input v-model="eitDlg.token" type="password"></div>
+      <div class="field"><label>کانال مقصد</label><input v-model="eitDlg.chat" type="text" dir="ltr" placeholder="123456789"></div>
+      <div class="field"><label>برچسب (اختیاری)</label><input v-model="eitDlg.label" type="text"></div>
+      <button class="primary" style="width:100%" @click="eitSave">ذخیره</button>
+      <p class="err">{{ eitDlg.msg }}</p>
+      <button class="ghost" style="width:100%" @click="eitDlg.open = false">انصراف</button>
+    </dialog>
+
+    <dialog :open="keyDlg.open" @close="keyDlg.open = false">
+      <h3>ایجاد کلید API</h3>
+      <div class="field"><label>نام</label><input v-model="keyDlg.name" type="text"></div>
+      <div class="field"><label>سکوپ‌ها (با ویرگول)</label><input v-model="keyDlg.scopes" type="text" dir="ltr" placeholder="upload,download"></div>
+      <div style="display:flex;gap:10px">
+        <div class="field" style="flex:1"><label>RPM</label><input v-model.number="keyDlg.rpm" type="number"></div>
+        <div class="field" style="flex:1"><label>سهمیه روزانه (GB)</label><input v-model.number="keyDlg.quota" type="number"></div>
+      </div>
+      <div class="field">
+        <label>بک‌اند</label>
+        <select v-model="keyDlg.backend">
+          <option value="">پیش‌فرض (تلگرام)</option>
+          <option value="eitaa">ایتا</option>
+        </select>
+      </div>
+      <button class="primary" style="width:100%" @click="keySave">ایجاد</button>
+      <div v-if="keyDlg.result" style="background:var(--panel2);padding:12px;border-radius:8px">
+        <p class="muted" style="font-size:12px;margin:0 0 6px">کلید (فقط همین یک بار نمایش داده می‌شود):</p>
+        <code style="word-break:break-all">{{ keyDlg.result }}</code>
+        <button style="margin-top:8px;width:100%" @click="copyKey">کپی</button>
+      </div>
+      <button class="ghost" style="width:100%" @click="keyDlg.open = false">انصراف</button>
+    </dialog>
+
+    <dialog :open="qrDlg.open" @close="qrDlg.open = false">
+      <h3>QR لینک عمومی</h3>
+      <div style="background:#fff;padding:12px;border-radius:8px;display:flex;justify-content:center">
+        <img v-if="qrDlg.slug" :src="'/' + qrDlg.slug + '/qr'" alt="QR" width="220" height="220">
+      </div>
+      <p dir="ltr" style="word-break:break-all;font-size:13px">{{ qrDlg.url }}</p>
+      <button class="ghost" style="width:100%" @click="qrDlg.open = false">بستن</button>
+    </dialog>
+
+    <!-- Toast -->
+    <div class="toast" :class="{error: toast.err}" v-show="toast.msg" role="status" aria-live="polite">{{ toast.msg }}</div>
+  </template>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+data/
+*.sqlite3
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+
+node_modules/
+data-e2e/
+test-results/
+playwright-report/
