@@ -1,8 +1,0 @@
-{"ts": 1790188480.102, "level": "INFO", "logger": "tgdrive.queue", "msg": "queue recovered 0 pending jobs (SQLite primary)"}
-{"ts": 1790188480.103, "level": "INFO", "logger": "tgdrive.queue", "msg": "queue started with 6 workers"}
-{"ts": 1790191482.216, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_cee1ace9424e7d19", "correlation_id": "req_cee1ace9424e7d19", "method": "GET", "path": "/api/v1/admin/healthz", "status": 200, "duration_ms": 59.9, "ip": "127.0.0.1"}
-INFO:     127.0.0.1:59193 - "GET /api/v1/admin/healthz HTTP/1.1" 200 OK
-{"ts": 1790192590.341, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_3751e4132be05e7b", "correlation_id": "req_3751e4132be05e7b", "method": "GET", "path": "/api/v1/admin/healthz", "status": 200, "duration_ms": 1.2, "ip": "127.0.0.1"}
-INFO:     127.0.0.1:56689 - "GET /api/v1/admin/healthz HTTP/1.1" 200 OK
-{"ts": 1790192600.746, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_fa720b8db1b8a3d7", "correlation_id": "req_fa720b8db1b8a3d7", "method": "GET", "path": "/nonexistent", "status": 404, "duration_ms": 1.5, "ip": "127.0.0.1"}
-INFO:     127.0.0.1:56697 - "GET /nonexistent HTTP/1.1" 404 Not Found
