@@ -223,3 +223,119 @@ async def nodes(_: str = Depends(get_current_admin), db=Depends(get_db)):
         "items": await db.fetch_all("SELECT * FROM nodes ORDER BY last_heartbeat DESC"),
         "node_id": state.node_id,
     }
+
+
+# ── telegram proxy pool ──────────────────────────────────────────
+@router.get("/proxies")
+async def proxies_list(_: str = Depends(get_current_admin), db=Depends(get_db)):
+    from ..core.models import ProxyRepo
+
+    return {"items": await ProxyRepo(db).list()}
+
+
+class ProxyIn(BaseModel):
+    link: str = ""  # tg://proxy / t.me/proxy / socks5://user:pass@host:port / host:port[:user:pass]
+    host: str = ""
+    port: int = 0
+    kind: str = "socks5"  # mtproto | socks5 | http
+    label: str = ""
+    username: str = ""
+    password: str = ""
+    secret_hex: str = ""
+
+
+@router.post("/proxies")
+async def proxies_add(body: ProxyIn, admin: str = Depends(get_current_admin), db=Depends(get_db)):
+    from ..core.models import ProxyRepo
+    from ..services.proxy_service import parse_share_link
+
+    try:
+        if body.link:
+            parsed = parse_share_link(body.link)
+        else:
+            if not body.host or not (0 < int(body.port) < 65536):
+                raise ValueError("host/port نامعتبر است")
+            parsed = {
+                "kind": body.kind, "host": body.host, "port": int(body.port),
+                "secret_hex": body.secret_hex, "username": body.username, "password": body.password,
+            }
+        proxy_id = await ProxyRepo(db).create(
+            host=parsed["host"], port=parsed["port"], kind=parsed.get("kind", "socks5"),
+            label=body.label or parsed.get("host", ""),
+            username=parsed.get("username", ""),
+            password=parsed.get("password", ""),
+            secret_hex=parsed.get("secret_hex", ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    from ..services import proxy_service
+
+    proxy_service.selector.invalidate()
+    await db.audit(admin, "proxy.add", target=str(proxy_id), details=f"{parsed.get('kind')}://{parsed['host']}:{parsed['port']}")
+    return {"ok": True, "id": proxy_id}
+
+
+@router.delete("/proxies/{proxy_id}")
+async def proxies_delete(proxy_id: int, admin: str = Depends(get_current_admin), db=Depends(get_db)):
+    from ..core.models import ProxyRepo
+
+    n = await ProxyRepo(db).delete(proxy_id)
+    if not n:
+        raise HTTPException(status_code=404, detail="proxy not found")
+    from ..services import proxy_service
+
+    proxy_service.selector.invalidate()
+    await db.audit(admin, "proxy.delete", target=str(proxy_id))
+    return {"ok": True}
+
+
+class ProxyPatch(BaseModel):
+    enabled: bool
+
+
+@router.patch("/proxies/{proxy_id}")
+async def proxies_patch(proxy_id: int, body: ProxyPatch, admin: str = Depends(get_current_admin), db=Depends(get_db)):
+    from ..core.models import ProxyRepo
+    from ..services import proxy_service
+
+    n = await ProxyRepo(db).set_enabled(proxy_id, body.enabled)
+    if not n:
+        raise HTTPException(status_code=404, detail="proxy not found")
+    proxy_service.selector.invalidate()
+    await db.audit(admin, "proxy.toggle", target=str(proxy_id), details=str(body.enabled))
+    return {"ok": True}
+
+
+@router.post("/proxies/test")
+async def proxies_test_all(admin: str = Depends(get_current_admin), db=Depends(get_db)):
+    """Speed-test all proxies concurrently; returns rows sorted by latency."""
+    from ..core.models import ProxyRepo
+    from ..services import proxy_service
+
+    items = await proxy_service.speed_test_all(ProxyRepo(db))
+    await db.audit(admin, "proxy.test_all", details=f"{len(items)} proxies")
+    return {"items": items}
+
+
+@router.post("/proxies/{proxy_id}/test")
+async def proxies_test_one(proxy_id: int, admin: str = Depends(get_current_admin), db=Depends(get_db)):
+    from ..core.models import ProxyRepo
+    from ..services import proxy_service
+
+    rows = await proxy_service.speed_test_all(ProxyRepo(db), proxy_id=proxy_id)
+    if not rows:
+        raise HTTPException(status_code=404, detail="proxy not found")
+    await db.audit(admin, "proxy.test", target=str(proxy_id))
+    return {"item": rows[0]}
+
+
+@router.post("/proxies/apply")
+async def proxies_apply(admin: str = Depends(get_current_admin), db=Depends(get_db)):
+    """Reconnect telegram backends with the current proxy decision."""
+    from ..services import proxy_service
+
+    proxy_service.selector.invalidate()
+    if state.manager is not None and hasattr(state.manager, "reload_all"):
+        await state.manager.reload_all()
+    await db.audit(admin, "proxy.apply")
+    return {"ok": True}

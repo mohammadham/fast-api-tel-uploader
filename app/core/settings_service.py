@@ -31,6 +31,14 @@ def _backend_ok(v: str) -> str:
     return "" if v in ("telegram", "eitaa") else "must be 'telegram' or 'eitaa'"
 
 
+def _proxy_strategy_ok(v: str) -> str:
+    return "" if v in ("speed", "rr") else "must be 'speed' or 'rr'"
+
+
+def _int_flag(v: int) -> str:
+    return "" if v in (0, 1) else "must be 0 or 1"
+
+
 EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     # limits
     "max_upload_size": (int, _positive_int, "max upload size (bytes)"),
@@ -49,6 +57,9 @@ EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     "max_concurrent_uploads": (int, _gt_one_int, "max concurrent uploads"),
     # backend
     "default_backend": (str, _backend_ok, "default storage backend"),
+    # proxy
+    "proxy_enabled": (int, _int_flag, "use telegram proxy pool (0/1)"),
+    "proxy_strategy": (str, _proxy_strategy_ok, "proxy selection: speed | rr"),
 }
 
 _SETTING_GROUPS: dict[str, list[str]] = {
@@ -67,6 +78,7 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "max_concurrent_uploads",
     ],
     "backend": ["default_backend"],
+    "proxy": ["proxy_enabled", "proxy_strategy"],
 }
 
 CACHE_TTL = 10.0  # seconds; cheap staleness window for multi-node convergence
@@ -121,7 +133,7 @@ async def get_runtime(db, key: str) -> Any:
     return vals.get(key)
 
 
-async def apply_runtime(db) -> None:
+async def apply_runtime(db, changed: Optional[list] = None) -> None:
     """Push live side effects when settings change (worker resize)."""
     from .state import state
 
@@ -132,6 +144,14 @@ async def apply_runtime(db) -> None:
                 int(vals.get("download_workers") or 4),
                 int(vals.get("upload_workers") or 2),
             )
+        except Exception:
+            pass
+    # proxy config changed → reconnect live telegram backends so new
+    # connections pick up the new proxy decision
+    if changed and ("proxy_enabled" in changed or "proxy_strategy" in changed):
+        try:
+            if state.manager is not None and hasattr(state.manager, "reload_all"):
+                await state.manager.reload_all()
         except Exception:
             pass
 
@@ -165,7 +185,7 @@ async def save_runtime_settings(db, updates: dict, actor: str = "") -> list:
     if applied:
         await db.audit(actor, "settings.update", details=json.dumps(updates)[:300])
         runtime_settings().invalidate()
-        await apply_runtime(db)
+        await apply_runtime(db, changed=applied)
     return applied
 
 

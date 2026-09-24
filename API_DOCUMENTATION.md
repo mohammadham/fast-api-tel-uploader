@@ -848,3 +848,38 @@ Restore body: `{"data": "<same base64 payload>"}`; rows are inserted idempotentl
   disk). If a node dies mid-upload the job fails after retries — re-upload required.
 - Runtime settings are shared via the `settings` table (≤10s convergence) and worker
   resize applies on every node.
+
+## Admin: Telegram Proxy Pool (v2.2)
+
+All endpoints require admin JWT. Global on/off + strategy live in runtime
+settings: `proxy_enabled` (0/1) and `proxy_strategy` (`speed`|`rr`) under the
+"proxy" group of GET/PUT /api/v1/admin/settings.
+
+### GET /api/v1/admin/proxies
+List proxies sorted for selection: tested-by-latency ascending first, then
+untested. Row: `{id,label,kind,host,port,username,secret_hex,enabled,status,
+latency_ms,last_checked_at,last_error,created_at}`. `status`: ok|degraded|down|unknown.
+Passwords are never returned (encrypted at rest).
+
+### POST /api/v1/admin/proxies
+Body option A: `{"link": "tg://proxy?server=..&port=..&secret=.."}` (also accepts
+`t.me/proxy` links, `socks5://user:pass@host:port`, bare `host:port[:user:pass]`).
+Option B (manual): `{"host","port","kind":"mtproto|socks5|http","username","password","secret_hex","label"}`.
+Returns `{ok:true,id}`. Invalid link/format → 400.
+
+### PATCH /api/v1/admin/proxies/{id}  Body: {"enabled": bool}
+### DELETE /api/v1/admin/proxies/{id}
+
+### POST /api/v1/admin/proxies/test
+Concurrent TCP-connect speed test of all proxies; results persisted and rows
+returned re-sorted by latency. Per-proxy: POST /api/v1/admin/proxies/{id}/test.
+
+### POST /api/v1/admin/proxies/apply
+Drop live telegram connections and reconnect with the current proxy decision
+(also happens automatically when proxy settings change or proxies are mutated).
+
+### Selection semantics
+When `proxy_enabled=0` (default) all connections are direct. When enabled, new
+account connections use the best proxy: fastest tested (speed strategy) or
+round-robin across tested proxies (rr). Untested proxies are used only if no
+tested one is healthy.

@@ -31,7 +31,7 @@ def _map_error(exc: Exception) -> Exception:
 class TelethonBackend(BackendClient):
     kind = "telethon"
 
-    def __init__(self, cid: str, session_string: str, *, api_id: int, api_hash: str, storage_chat: str = "me") -> None:
+    def __init__(self, cid: str, session_string: str, *, api_id: int, api_hash: str, storage_chat: str = "me", proxy: Optional[tuple] = None) -> None:
         from telethon import TelegramClient
         from telethon.sessions import StringSession
 
@@ -39,7 +39,8 @@ class TelethonBackend(BackendClient):
         self._api_id = api_id
         self._api_hash = api_hash
         self.storage_chat = storage_chat
-        self._client = TelegramClient(StringSession(session_string), api_id, api_hash)
+        self._proxy = proxy
+        self._client = TelegramClient(StringSession(session_string), api_id, api_hash, proxy=proxy)
         self._started = False
 
     async def start(self) -> None:

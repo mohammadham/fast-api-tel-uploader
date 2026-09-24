@@ -73,6 +73,19 @@ class TGManager:
                 pass
         self._backends.clear()
 
+    async def reload_all(self) -> None:
+        """Drop every live backend so the next acquire() reconnects with the
+        current proxy decision (called when proxy settings/pool change)."""
+        for b in list(self._backends.values()):
+            try:
+                await b.close()
+            except Exception:
+                pass
+        self._backends.clear()
+        self._sems.clear()
+        await self._spawn_all()
+        log.info("telegram backends reloaded (%s live)", len(self._backends))
+
     async def _spawn_all(self) -> None:
         s = self._settings()
         accounts = AccountRepo(self.db)
@@ -160,12 +173,26 @@ class TGManager:
             backend = FakeBackend(cid=key)
         else:
             session = decrypt_str(row["session_enc"])
+            proxy = None
+            try:
+                from ..services.proxy_service import get_active_proxy, build_telethon_proxy
+
+                prow = await get_active_proxy(self.db)
+                if prow:
+                    prow["_password_plain"] = decrypt_str(prow["password_enc"]) if prow.get("password_enc") else ""
+                    proxy = build_telethon_proxy(prow)
+                    if proxy:
+                        log.info("account %s via proxy %s:%s (%s)", account_id, prow["host"], prow["port"], prow.get("kind"))
+            except Exception as exc:
+                log.warning("proxy selection failed, connecting direct: %s", exc)
+                proxy = None
             backend = TelethonBackend(
                 key,
                 session,
                 api_id=s.tg_api_id,
                 api_hash=s.tg_api_hash,
                 storage_chat=row["storage_chat_id"] or "me",
+                proxy=proxy,
             )
             await backend.start()
         self._backends[key] = backend

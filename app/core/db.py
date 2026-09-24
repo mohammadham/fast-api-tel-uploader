@@ -173,6 +173,22 @@ CREATE TABLE IF NOT EXISTS nodes (
   workers_dl INTEGER NOT NULL DEFAULT 0,
   workers_ul INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS proxies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  label TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'socks5',
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  username TEXT NOT NULL DEFAULT '',
+  password_enc TEXT NOT NULL DEFAULT '',
+  secret_hex TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'unknown',
+  latency_ms REAL NOT NULL DEFAULT -1,
+  last_checked_at REAL NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL DEFAULT 0
+);
 CREATE INDEX IF NOT EXISTS idx_file_parts_file ON file_parts(file_id, idx);
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
 """
@@ -338,6 +354,22 @@ CREATE TABLE IF NOT EXISTS nodes (
   last_heartbeat DOUBLE PRECISION NOT NULL DEFAULT 0,
   workers_dl INTEGER NOT NULL DEFAULT 0,
   workers_ul INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS proxies (
+  id SERIAL PRIMARY KEY,
+  label TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'socks5',
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  username TEXT NOT NULL DEFAULT '',
+  password_enc TEXT NOT NULL DEFAULT '',
+  secret_hex TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'unknown',
+  latency_ms DOUBLE PRECISION NOT NULL DEFAULT -1,
+  last_checked_at DOUBLE PRECISION NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT '',
+  created_at DOUBLE PRECISION NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_file_parts_file ON file_parts(file_id, idx);
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);

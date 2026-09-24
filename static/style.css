@@ -115,6 +115,12 @@ td code, .mono { font-family: var(--font-mono); font-size: 12.5px; }
 .err { color: var(--err); font-size: 13px; min-height: 18px; }
 input.invalid { border-color: var(--err) !important; }
 input.invalid:focus { box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.25); }
+
+/* proxy status badges */
+.badge.ok { background: rgba(34, 197, 94, 0.15); color: var(--accent); }
+.badge.down { background: rgba(239, 68, 68, 0.15); color: var(--err); }
+.badge.degraded { background: rgba(245, 158, 11, 0.15); color: var(--warn); }
+.badge.unknown { background: rgba(148, 163, 184, 0.15); color: var(--muted); }
 .warn { color: var(--warn); }
 .ok { color: var(--accent); }
 .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 12px; border: 1px solid var(--border); line-height: 1.4; }

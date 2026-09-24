@@ -515,6 +515,79 @@ class AuditRepo:
         return await self.db.fetch_all("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,))
 
 
+class ProxyRepo:
+    """Telegram proxy pool (MTProto / SOCKS5 / HTTP) with speed-test state."""
+
+    VALID_KINDS = ("mtproto", "socks5", "http")
+
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    async def create(
+        self,
+        host: str,
+        port: int,
+        kind: str = "socks5",
+        label: str = "",
+        username: str = "",
+        password: str = "",
+        secret_hex: str = "",
+    ) -> int:
+        from .security import encrypt_str
+
+        kind = kind.strip().lower()
+        if kind not in self.VALID_KINDS:
+            raise ValueError(f"unsupported proxy kind: {kind}")
+        await self.db.execute(
+            "INSERT INTO proxies(label, kind, host, port, username, password_enc, secret_hex, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (label[:100], kind, host.strip(), int(port), username, encrypt_str(password) if password else "", secret_hex.strip().lower(), now()),
+        )
+        if self.db.is_sqlite:
+            return await self.db.last_insert_rowid()
+        row = await self.db.fetch_one(
+            "SELECT id FROM proxies WHERE host=? AND port=? AND kind=? ORDER BY id DESC LIMIT 1",
+            (host.strip(), int(port), kind),
+        )
+        return int(row["id"]) if row else 0
+
+    async def list(self, only_enabled: bool = False) -> List[Dict[str, Any]]:
+        sql = (
+            "SELECT id, label, kind, host, port, username, secret_hex, enabled, status, latency_ms,"
+            " last_checked_at, last_error, created_at FROM proxies"
+        )
+        if only_enabled:
+            sql += " WHERE enabled=1"
+        sql += " ORDER BY CASE WHEN latency_ms < 0 THEN 1 ELSE 0 END, latency_ms ASC, id ASC"
+        return await self.db.fetch_all(sql)
+
+    async def list_enabled_sorted(self) -> List[Dict[str, Any]]:
+        return await self.list(only_enabled=True)
+
+    async def get(self, proxy_id: int) -> Optional[Dict[str, Any]]:
+        return await self.db.fetch_one("SELECT * FROM proxies WHERE id=?", (proxy_id,))
+
+    async def set_enabled(self, proxy_id: int, enabled: bool) -> int:
+        return await self.db.execute("UPDATE proxies SET enabled=? WHERE id=?", (int(enabled), proxy_id))
+
+    async def delete(self, proxy_id: int) -> int:
+        return await self.db.execute("DELETE FROM proxies WHERE id=?", (proxy_id,))
+
+    async def set_check_result(self, proxy_id: int, status: str, latency_ms: float, error: str = "") -> None:
+        await self.db.execute(
+            "UPDATE proxies SET status=?, latency_ms=?, last_checked_at=?, last_error=? WHERE id=?",
+            (status, float(latency_ms), now(), error[:300], proxy_id),
+        )
+
+    async def clear_all_results(self) -> int:
+        return await self.db.execute(
+            "UPDATE proxies SET status='unknown', latency_ms=-1, last_checked_at=0, last_error='' WHERE 1=1", ()
+        )
+
+    async def count(self) -> int:
+        return int(await self.db.scalar("SELECT COUNT(*) FROM proxies") or 0)
+
+
 class LinkRepo:
     """Public share links: short slug, optional password, optional download cap."""
 

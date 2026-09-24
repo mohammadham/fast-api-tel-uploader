@@ -331,9 +331,75 @@
       </div>
       <p dir="ltr" style="word-break:break-all;font-size:13px">{{ qrDlg.url }}</p>
       <button class="ghost" style="width:100%" @click="qrDlg.open = false">بستن</button>
-    </dialog>
+    </dialog>      <!-- Proxies tab -->
+      <section v-show="tab === 'proxies'">
+        <div class="toolbar">
+          <h3 style="margin:0;flex:1;font-size:16px">پراکسی‌های تلگرام</h3>
+          <button class="ghost" :disabled="proxiesTesting" @click="proxyTestAll">{{ proxiesTesting ? "در حال تست…" : "تست سرعت همه" }}</button>
+          <button class="ghost" @click="proxyApply">اعمال اتصال مجدد</button>
+          <button class="primary" @click="proxyOpen">پراکسی جدید</button>
+        </div>
+        <p class="muted" style="font-size:12px;margin:0 0 10px">
+          فعال/غیرفعال کردن استفاده از پراکسی از تب <b>تنظیمات</b> → گروه «پراکسی» انجام می‌شود.
+          لیست بر اساس سرعت (کم‌ترین تاخیر) مرتب است و انتخاب پراکسی برای اتصال‌های جدید به همین ترتیب انجام می‌شود.
+        </p>
+        <div class="card wide">
+          <table>
+            <thead><tr><th>#</th><th>برچسب</th><th>نوع</th><th>آدرس</th><th>وضعیت</th><th>تاخیر</th><th>آخرین تست</th><th>عملیات</th></tr></thead>
+            <tbody>
+              <tr v-for="p in proxiesList" :key="p.id" :style="p.enabled ? '' : 'opacity:.5'">
+                <td>{{ p.id }}</td>
+                <td>{{ p.label || '—' }}</td>
+                <td><span class="badge">{{ p.kind }}</span></td>
+                <td dir="ltr">{{ p.host }}:{{ p.port }}</td>
+                <td><span class="badge" :class="p.status">{{ proxyStatusLabels[p.status] || p.status }}</span></td>
+                <td :style="p.latency_ms >= 0 ? 'color:var(--accent);font-weight:600' : ''">{{ fmtLatency(p.latency_ms) }}</td>
+                <td class="muted" style="font-size:12px">{{ p.last_checked_at ? fmtTime(p.last_checked_at) : '—' }}</td>
+                <td>
+                  <button :disabled="p._testing" @click="proxyTestOne(p)">{{ p._testing ? "…" : "تست" }}</button>
+                  <button @click="proxyToggle(p)">{{ p.enabled ? "غیرفعال" : "فعال" }}</button>
+                  <button class="danger" @click="proxyDelete(p)">حذف</button>
+                </td>
+              </tr>
+              <tr v-if="!proxiesList.length"><td colspan="8" class="muted">پراکسی‌ای اضافه نشده — اتصال مستقیم استفاده می‌شود</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
 
-    <!-- Settings tab -->
+      <!-- Add proxy dialog -->
+      <dialog :open="proxyDlg.open" @close="proxyDlg.open = false">
+        <h3>افزودن پراکسی تلگرام</h3>
+        <div class="field">
+          <label>لینک اشتراک‌گذاری (tg://proxy یا t.me/proxy یا socks5://user:pass@host:port)</label>
+          <input v-model="proxyDlg.link" type="text" dir="ltr" placeholder="tg://proxy?server=..&port=..&secret=..">
+        </div>
+        <p class="muted" style="font-size:12px;margin:0 0 8px">— یا ورود دستی:</p>
+        <div style="display:flex;gap:10px">
+          <div class="field" style="flex:1">
+            <label>نوع</label>
+            <select v-model="proxyDlg.kind">
+              <option value="mtproto">MTProto</option>
+              <option value="socks5">SOCKS5</option>
+              <option value="http">HTTP</option>
+            </select>
+          </div>
+          <div class="field" style="flex:2"><label>هاست</label><input v-model="proxyDlg.host" type="text" dir="ltr"></div>
+          <div class="field" style="flex:1"><label>پورت</label><input v-model="proxyDlg.port" type="number" dir="ltr"></div>
+        </div>
+        <template v-if="proxyDlg.kind !== 'mtproto'">
+          <div style="display:flex;gap:10px">
+            <div class="field" style="flex:1"><label>نام کاربری (اختیاری)</label><input v-model="proxyDlg.username" type="text" dir="ltr"></div>
+            <div class="field" style="flex:1"><label>رمز (اختیاری)</label><input v-model="proxyDlg.password" type="password" dir="ltr"></div>
+          </div>
+        </template>
+        <div class="field"><label>برچسب (اختیاری)</label><input v-model="proxyDlg.label" type="text"></div>
+        <p class="err">{{ proxyDlg.msg }}</p>
+        <button class="primary" style="width:100%" @click="proxySave">افزودن</button>
+        <button class="ghost" style="width:100%" @click="proxyDlg.open = false">انصراف</button>
+      </dialog>
+
+      <!-- Settings tab -->
       <section v-show="tab === 'settings'">
         <div class="toolbar">
           <h3 style="margin:0;flex:1;font-size:16px">تنظیمات سیستم (Runtime)</h3>
@@ -354,6 +420,15 @@
                 :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''">
                 <option value="telegram">تلگرام</option>
                 <option value="eitaa">ایتا</option>
+              </select>
+              <select v-else-if="it.key === 'proxy_strategy'" v-model="settingsDraft[it.key]"
+                :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''">
+                <option value="speed">سریع‌ترین (بر اساس تست سرعت)</option>
+                <option value="rr">چرخشی (Round-Robin)</option>
+              </select>
+              <select v-else-if="it.key === 'proxy_enabled'" v-model="settingsDraft[it.key]">
+                <option value="0">غیرفعال — اتصال مستقیم</option>
+                <option value="1">فعال — از پراکسی‌ها استفاده شود</option>
               </select>
               <input v-else v-model="settingsDraft[it.key]" :type="it.type === 'int' ? 'number' : 'text'"
                 :class="{ invalid: settingsErrors[it.key] }"

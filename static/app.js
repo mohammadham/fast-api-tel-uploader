@@ -19,6 +19,7 @@ const app = createApp({
       { id: "files", label: "فایل‌ها" },
       { id: "queue", label: "صف" },
       { id: "audit", label: "لاگ‌ها" },
+      { id: "proxies", label: "پراکسی‌ها" },
       { id: "settings", label: "تنظیمات" },
     ];
     const toast = reactive({ msg: "", err: false });
@@ -41,6 +42,9 @@ const app = createApp({
     const queueStats = ref({});
     const overview = ref(null);
     const nodesList = ref([]);
+    const proxiesList = ref([]);
+    const proxiesBusy = ref(false);
+    const proxiesTesting = ref(false);
     const uploadBusy = ref(false);
     const uploadProgress = ref("");
     const uploadPct = ref(0); // 0-100, real XHR progress
@@ -49,6 +53,7 @@ const app = createApp({
     const nowSec = Math.floor(Date.now() / 1000);
 
     /* ---------- dialogs ---------- */
+    const proxyDlg = reactive({ open: false, link: "", host: "", port: "", kind: "socks5", label: "", username: "", password: "", msg: "" });
     const accDlg = reactive({ open: false, step: 1, phone: "", label: "", code: "", pass: "", msg: "", loginId: "" });
     const botDlg = reactive({ open: false, token: "", label: "", msg: "" });
     const eitDlg = reactive({ open: false, token: "", chat: "", label: "", msg: "" });
@@ -176,6 +181,50 @@ const app = createApp({
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
 
+    /* ---------- telegram proxy pool ---------- */
+    const proxyStatusLabels = { ok: "سالم", down: "قطع", degraded: "ضعیف", unknown: "آزمایش نشده" };
+    function fmtLatency(ms) {
+      if (ms == null || ms < 0) return "—";
+      return (Number(ms) / 1000).toFixed(2) + " ثانیه";
+    }
+    loaders.proxies = async () => {
+      try { const d = await api("/api/v1/admin/proxies"); proxiesList.value = d.items || []; }
+      catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    };
+    function proxyOpen() { Object.assign(proxyDlg, { open: true, link: "", host: "", port: "", kind: "socks5", label: "", username: "", password: "", msg: "" }); }
+    async function proxySave() {
+      try {
+        const body = proxyDlg.link.trim()
+          ? { link: proxyDlg.link.trim(), label: proxyDlg.label }
+          : { host: proxyDlg.host.trim(), port: Number(proxyDlg.port), kind: proxyDlg.kind, label: proxyDlg.label, username: proxyDlg.username, password: proxyDlg.password };
+        await api("/api/v1/admin/proxies", { method: "POST", json: body });
+        showToast("پراکسی اضافه شد");
+        Object.assign(proxyDlg, { open: false });
+        loaders.proxies();
+      } catch (e) { proxyDlg.msg = e.message; }
+    }
+    async function proxyDelete(p) { if (confirm("این پراکسی حذف شود؟")) { await api(`/api/v1/admin/proxies/${p.id}`, { method: "DELETE" }); loaders.proxies(); } }
+    async function proxyToggle(p) { await api(`/api/v1/admin/proxies/${p.id}`, { method: "PATCH", json: { enabled: !p.enabled } }); loaders.proxies(); }
+    async function proxyTestOne(p) {
+      p._testing = true;
+      try { const d = await api(`/api/v1/admin/proxies/${p.id}/test`, { method: "POST" }); Object.assign(p, d.item); showToast("تست شد: " + fmtLatency(d.item.latency_ms)); }
+      catch (e) { showToast("خطا: " + e.message, 4000, true); }
+      p._testing = false;
+    }
+    async function proxyTestAll() {
+      proxiesTesting.value = true;
+      try {
+        const d = await api("/api/v1/admin/proxies/test", { method: "POST", timeout: 60000 });
+        proxiesList.value = d.items || [];
+        showToast("تست همه پراکسی‌ها انجام شد");
+      } catch (e) { showToast("خطا: " + e.message, 4000, true); }
+      proxiesTesting.value = false;
+    }
+    async function proxyApply() {
+      try { await api("/api/v1/admin/proxies/apply", { method: "POST" }); showToast("اتصال‌های تلگرام با پراکسی جدید برقرار شد"); }
+      catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    }
+
     /* ---------- runtime settings (admin) ---------- */
     const settingsItems = ref([]);
     const settingsDraft = reactive({});
@@ -192,6 +241,10 @@ const app = createApp({
         if (mustBePositive.includes(it.key) && Number(value) < 1) return "باید ≥ 1 باشد";
       } else if (it.key === "default_backend") {
         if (!["telegram", "eitaa"].includes(value)) return "تلگرام یا ایتا";
+      } else if (it.key === "proxy_strategy") {
+        if (!["speed", "rr"].includes(value)) return "speed یا rr";
+      } else if (it.key === "proxy_enabled") {
+        if (![0, 1, "0", "1"].includes(value)) return "فقط ۰ یا ۱";
       }
       return "";
     }
@@ -218,9 +271,11 @@ const app = createApp({
       max_concurrent_downloads: "دانلود همزمان هر اکانت",
       max_concurrent_uploads: "آپلود همزمان",
       default_backend: "بک‌اند پیش‌فرض",
+      proxy_enabled: "استفاده از پراکسی (۰=خیر، ۱=بله)",
+      proxy_strategy: "استراتژی انتخاب پراکسی",
     };
     const settingsGroups = computed(() => {
-      const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", backend: "بک‌اند" };
+      const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", backend: "بک‌اند", proxy: "پراکسی تلگرام" };
       const out = [];
       for (const [gid, title] of Object.entries(g)) {
         out.push({ id: gid, title, items: settingsItems.value.filter((x) => x.group === gid) });
@@ -490,6 +545,8 @@ const app = createApp({
       accDlg, botDlg, eitDlg, keyDlg, qrDlg,
       nodesList, settingsItems, settingsDraft, settingsGroups, settingsBusy,
       settingsErrors, dirtyCount, validateSetting, discardSettings, onSettingInput,
+      proxiesList, proxiesBusy, proxiesTesting, proxyDlg, proxyStatusLabels, fmtLatency,
+      proxyOpen, proxySave, proxyDelete, proxyToggle, proxyTestOne, proxyTestAll, proxyApply,
       saveSettings, resetSettings, fmtSettingHint, settingLabels,
       setupDlg, setupNeeded, setupNext, setupSkip,
       doLogin: submitLogin, logout, switchTab, fmtBytes, fmtTime,
