@@ -49,7 +49,7 @@ _EITAA_WEB = "https://eitaa.com"
 #    document page does NOT leak the avatar URL as a fake payload.
 # ponytail: DOM-ordered regex cascade; if eitaa changes markup, update these --
 # real upgrade path is an unofficial MTProto client, not more regex.
-_DOWNLOAD = r"/download_[0-9a-f]{8,64}?token=[0-9a-f]{16,}"
+_DOWNLOAD = r"/download_[0-9a-f]{8,64}\?token=[0-9a-f]{16,}"
 
 # 3) <img> EXCEPT the avatar/thumb <i> wrappers: between the <i class=...> opener
 #    and the <img> there may be newlines, so the guard scans backwards from <img
