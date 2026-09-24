@@ -2,6 +2,9 @@
 
 ## محیط و ابزارها
 - Windows + Git Bash؛ venv در `.venv/Scripts/python.exe`؛ تست: `timeout 300 .venv/Scripts/python.exe -m pytest -q`
+- **pytest فقط با `.venv/Scripts/python.exe`** — interpreter مستقل uv (`AppData\Roaming\uv\python\...`) telethon/python_socks ندارد؛ `build_telethon_proxy` بدون آن‌ها None برمی‌گرداند. دو تست `test_build_telethon_*` در test_proxies.py `pytest.importorskip` دارند و در interpreter ناقص SKIP می‌شوند (نه fail) — پس skip در این دو تست یعنی venv اشتباه است. با venv درست: همه‌ی ۱۱۰ تست pass بدون skip
+- e2e پنل: `npx playwright test` (براوزرها در LOCALAPPDATA/ms-playwright)؛ config خودش uvicorn fake-TG را روی 8712 بالا می‌آورد — `python -m playwright test` کار نمی‌کند
+- CI: `.github/workflows/playwright.yml` در هر push دو job — pytest با `.venv/bin/python` (بعد از `pip install -r requirements.txt` + preflight import-check) و e2e با build تازه‌ی پنل؛ مسیر webServer در playwright.config.mjs پلتفرم‌محور است (`.venv/bin/uvicorn` در Linux)؛ `python-socks` در requirements.txt و pyproject باید بماند (preflight CI آن را verify می‌کند و دو تست پراکسی importorskip هم به‌عنوان safety-net دارند)
 - `str_replace` و `read_files` گاهی dotfileها (`.env.example`) را «not found» می‌کنند → با python ویرایش کن
 - ripgrep گاهی ENOENT می‌دهد → جایگزین: `grep -n` در shell
 - `run_terminal_command` BACKGROUND پیاده نشده → سرور detached با PowerShell Start-Process (run-doc در `.freebuff/run.md`)

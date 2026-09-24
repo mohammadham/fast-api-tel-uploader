@@ -80,6 +80,38 @@
         </div>
       </section>
 
+      <!-- Operational Status -->
+      <section v-show="tab === 'ops'">
+        <div class="toolbar">
+          <h3 style="margin:0;flex:1;font-size:16px">وضعیت عملیاتی</h3>
+        </div>
+        <div class="card wide" style="margin-bottom:14px">
+          <div class="stat" :class="{warn: proxyErrorCount > 10}" title="تعداد پراکسی‌هایی که وضعیت “قطع” یا “زعیف” دارند"><div class="lbl">تعداد خطاهای پراکسی</div><div class="num" :style="{color: proxyErrorCount > 10 ? 'var(--err)' : 'var(--ok,#22C55E)'}">{{ proxyErrorCount }}</div></div>
+        </div>
+        <div class="card wide">
+          <h4>حالت پراکسی‌ها</h4>
+          <div class="stat" v-for="p in proxiesList" :key="p.id" :style="p.status === 'down' ? 'color:var(--err)' : p.status === 'degraded' ? 'color:var(--warn)' : ''" :title="proxyTooltip(p)"><div class="lbl">{{ p.label || p.host }}:{{ p.port }}</div><div class="num" :style="{color: p.status === 'down' ? 'var(--err)' : p.status === 'degraded' ? 'var(--warn)' : ''}">{{ proxyStatusLabels[p.status] || p.status }}</div></div>
+          <p v-if="!proxiesList.length" class="muted">پراکسی‌ای اضافه نشده</p>
+          <div style="display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:14px;padding-top:10px;border-top:1px dashed var(--border,#475569)">
+            <div v-for="d in proxyStatusLegend" :key="d.status" style="display:flex;align-items:flex-start;gap:7px;max-width:300px;font-size:12px">
+              <span :style="{ width: '10px', height: '10px', borderRadius: '50%', background: d.color, flex: 'none', marginTop: '4px' }" aria-hidden="true"></span>
+              <span><b>{{ proxyStatusLabels[d.status] }}</b> <span class="muted">{{ proxyStatusDetails[d.status] }}</span></span>
+            </div>
+          </div>
+        </div>
+        <div class="card wide">
+          <h4>نودهای متصل</h4>
+          <div class="stat" v-for="n in nodesList" :key="n.node_id"><div class="lbl">{{ n.node_id }}</div><div class="num">{{ n.hostname || '—' }}</div></div>
+          <p v-if="!nodesList.length" class="muted">نودی ثبت نشده (حالت تک‌سرور)</p>
+        </div>
+        <div class="card wide">
+          <h4>صف انتظار</h4>
+          <div class="stat" v-for="(v, k) in queueStats" :key="k"><div class="lbl">{{ k }}</div><div class="num">{{ v }}</div></div>
+        </div>
+      </section>
+
+
+
       <!-- Accounts -->
       <section v-show="tab === 'accounts'">
         <div class="toolbar">
@@ -529,7 +561,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from "vue";
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
 
     /* ---------- auth state ---------- */
     const token = ref(localStorage.getItem("td_token") || "");
@@ -538,6 +570,21 @@ import { ref, reactive, computed, onMounted } from "vue";
 
     /* ---------- ui state ---------- */
     const tab = ref("dash");
+
+    /* ---------- ops tab auto-refresh ---------- */
+    let opsPollInterval = null;
+    onMounted(() => {
+      opsPollInterval = setInterval(() => {
+        if (!token.value) return; // no polling while on the login screen
+        loaders.ops().catch(() => {/* ignore errors during unmount */});
+      }, 30000);
+    });
+    onBeforeUnmount(() => {
+      if (opsPollInterval) {
+        clearInterval(opsPollInterval);
+        opsPollInterval = null;
+      }
+    });
     const tabList = [
       { id: "dash", label: "داشبورد" },
       { id: "accounts", label: "اکانت‌ها" },
@@ -549,6 +596,7 @@ import { ref, reactive, computed, onMounted } from "vue";
       { id: "audit", label: "لاگ‌ها" },
       { id: "proxies", label: "پراکسی‌ها" },
       { id: "settings", label: "تنظیمات" },
+      { id: "ops", label: "عملیات" },
     ];
     const toast = reactive({ msg: "", err: false });
     let toastTimer = null;
@@ -715,9 +763,47 @@ const doLogin = submitLogin;
       try { const d = await api("/api/v1/admin/audit"); audit.value = d.items || []; }
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
+    loaders.ops = async () => {
+      try {
+        const [q, n, p] = await Promise.all([api("/api/v1/queue/stats"), api("/api/v1/admin/nodes"), api("/api/v1/admin/proxies")]);
+        // Queue status
+        queueStats.value = { ...q, paused: (q.paused || []).join(",") || "-" };
+        // Nodes health
+        nodesList.value = n.items || [];
+        // Proxies status
+        proxiesList.value = p.items || [];
+        // Count errors from proxy health
+        let totalErrors = 0;
+        for (const pr of proxiesList.value) {
+          if (pr.status === "down" || pr.status === "degraded") totalErrors++;
+        }
+        // Proxy error count display
+        proxyErrorCount.value = totalErrors;
+      } catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    };
 
     /* ---------- telegram proxy pool ---------- */
     const proxyStatusLabels = { ok: "سالم", down: "قطع", degraded: "ضعیف", unknown: "آزمایش نشده" };
+    const proxyStatusDetails = {
+      ok: "اتصال برقرار است و تاخیر سنجیده شده — در انتخاب پراکسی اولویت دارد.",
+      down: "اتصال برقرار نشد (timeout یا connection refused) — از انتخاب پراکسی خارج شده است.",
+      degraded: "اتصال برقرار است اما کند/ناپایدار — مثل سالم قابل استفاده است ولی بعد از «سالم» انتخاب می‌شود.",
+      unknown: "هنوز تست نشده — تا اولین تست، به‌عنوان آخرین گزینه در دسترس است.",
+    };
+    const proxyStatusLegend = [
+      { status: "ok", color: "var(--ok,#22C55E)" },
+      { status: "degraded", color: "var(--warn,#F59E0B)" },
+      { status: "down", color: "var(--err,#EF4444)" },
+      { status: "unknown", color: "var(--muted,#94A3B8)" },
+    ];
+    function proxyTooltip(p) {
+      const lbl = proxyStatusLabels[p.status] || p.status;
+      let extra = "";
+      if (p.status === "down" && p.last_error) extra = " — خطا: " + p.last_error;
+      else if (p.latency_ms != null && p.latency_ms >= 0) extra = " — تاخیر: " + fmtLatency(p.latency_ms);
+      return lbl + ": " + (proxyStatusDetails[p.status] || "") + extra;
+    }
+    const proxyErrorCount = ref(0);
     function fmtLatency(ms) {
       if (ms == null || ms < 0) return "—";
       return (Number(ms) / 1000).toFixed(2) + " ثانیه";
@@ -1024,7 +1110,8 @@ const doLogin = submitLogin;
       let completed = false;
       let currentOffset = offset;
 
-      // Upload chunks
+      // Upload chunks; the completing chunk response carries the queued file_id
+      let result = null;
       while (!completed) {
         const chunk = file.slice(currentOffset, Math.min(currentOffset + chunk_size, file.size));
         const r = await fetch("/api/v1/files/upload/session/" + session_id, {
@@ -1035,19 +1122,13 @@ const doLogin = submitLogin;
         if (!r.ok) {
           const d = await r.json(); throw new Error(d.detail || "chunk upload failed");
         }
-        const result = await r.json();
+        result = await r.json();
         currentOffset = result.offset;
         completed = result.completed;
       }
 
-      // Get final file info
-      const infoR = await fetch("/api/v1/files", {
-        method: "GET",
-        headers: { "Authorization": "Bearer " + token.value }
-      });
-      if (!infoR.ok) throw new Error("Could not get file list");
-      const files = await infoR.json();
-      return files.items[files.items.length - 1];
+      // the completing chunk response carries the queued file_id
+      return { file_id: result.file_id };
     }
     function cancelCurrentUpload() {
       if (cancelXHR && cancelXHR.readyState < 4) {

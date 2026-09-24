@@ -53,9 +53,11 @@ test.describe.serial("panel smoke", () => {
     await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
 
     const files = page.locator("main section:visible table tbody tr");
+    // the section's own file-table only (a hidden restore input lives in another card)
+    const uploadInput = page.locator("section input[type='file']").first();
     const before = await files.count();
 
-    await page.locator('input[type="file"]').setInputFiles({
+    await uploadInput.setInputFiles({
       name: "e2e-smoke.txt",
       mimeType: "text/plain",
       buffer: Buffer.from("playwright smoke upload " + Date.now()),
@@ -63,8 +65,8 @@ test.describe.serial("panel smoke", () => {
 
     // toast confirms queueing, table gains a row
     await expect(page.locator(".toast")).toContainText("صف شد: f_");
+    await expect(files.first()).toContainText("e2e-smoke.txt"); // fresh list puts the new file first
     await expect(files).toHaveCount(before + 1);
-    await expect(files.last()).toContainText("e2e-smoke.txt");
 
     // real progress bar element exists with aria
     await expect(page.locator(".progress-track")).toHaveCount(0); // hidden after finish

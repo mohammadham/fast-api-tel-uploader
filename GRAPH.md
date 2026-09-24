@@ -88,3 +88,10 @@ upload_sessions ──▶ files (resumable)
 - QueueManager پشت اینترفیس است → در v2 با Redis backend جایگزین می‌شود بدون تغییر APIها
 - Storage نیز اینترفیس دارد → افزودن S3-cache به‌صورت لایه‌ی جلوی Telegram ممکن است
 - BotService مستقل است → چند بات همزمان پشتیبانی می‌شود
+
+## ۶. تب عملیات (ops) در پنل
+- تب جدید «عملیات» در Vue panel (tab id: `ops`)
+- نمایش زنده: تعداد خطاهای پراکسی، حالت هر پراکسی (سالم/ضعیف/قطع/آزمایش‌نشده) با tooltip و راهنمای رنگ (legend)، نودهای متصل، وضعیت صف انتظار
+- داده‌ها از `/api/v1/queue/stats`، `/api/v1/admin/nodes` و `/api/v1/admin/proxies` می‌آیند
+- به‌روزرسانی دوره‌ای هر ۳۰ ثانیه توسط `loaders.ops` (فقط هنگام ورود کاربر؛ در صفحه‌ی لاگین خاموش است)
+- پیاده‌سازی با Vue 3 `<script setup>` (ref + setInterval با تمیزکاری در `onBeforeUnmount`)
