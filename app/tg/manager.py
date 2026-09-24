@@ -56,6 +56,8 @@ class TGManager:
         self._flood_counts: Dict[str, int] = {}
         self._rr: int = 0
         self._stopped = False
+        # backend key -> proxy row id it was built with (fallback tracking)
+        self._proxy_by_backend: Dict[str, Optional[int]] = {}
 
     def _settings(self):
         return get_settings()
@@ -83,6 +85,7 @@ class TGManager:
                 pass
         self._backends.clear()
         self._sems.clear()
+        self._proxy_by_backend.clear()
         await self._spawn_all()
         log.info("telegram backends reloaded (%s live)", len(self._backends))
 
@@ -173,19 +176,7 @@ class TGManager:
             backend = FakeBackend(cid=key)
         else:
             session = decrypt_str(row["session_enc"])
-            proxy = None
-            try:
-                from ..services.proxy_service import get_active_proxy, build_telethon_proxy
-
-                prow = await get_active_proxy(self.db)
-                if prow:
-                    prow["_password_plain"] = decrypt_str(prow["password_enc"]) if prow.get("password_enc") else ""
-                    proxy = build_telethon_proxy(prow)
-                    if proxy:
-                        log.info("account %s via proxy %s:%s (%s)", account_id, prow["host"], prow["port"], prow.get("kind"))
-            except Exception as exc:
-                log.warning("proxy selection failed, connecting direct: %s", exc)
-                proxy = None
+            proxy, prow = await self._pick_proxy(account_id)
             backend = TelethonBackend(
                 key,
                 session,
@@ -195,7 +186,25 @@ class TGManager:
                 proxy=proxy,
             )
             await backend.start()
+            self._proxy_by_backend[key] = prow["id"] if prow else None
         self._backends[key] = backend
+
+    async def _pick_proxy(self, account_id: int):
+        """Resolve (telethon_proxy_arg, proxy_row_or_None) for a new connection."""
+        from ..core.security import decrypt_str
+        from ..services.proxy_service import get_active_proxy, build_telethon_proxy
+
+        try:
+            prow = await get_active_proxy(self.db)
+            if prow:
+                prow["_password_plain"] = decrypt_str(prow["password_enc"]) if prow.get("password_enc") else ""
+                proxy = build_telethon_proxy(prow)
+                if proxy:
+                    log.info("account %s via proxy %s:%s (%s)", account_id, prow["host"], prow["port"], prow.get("kind"))
+                    return proxy, prow
+        except Exception as exc:
+            log.warning("proxy selection failed, connecting direct: %s", exc)
+        return None, None
 
     async def _ensure_bot(self, bot_id: int) -> None:
         repo = BotRepo(self.db)
@@ -318,6 +327,15 @@ class TGManager:
                     await AccountRepo(self.db).mark_success(int(key.split(":")[1]))
                 except Exception:
                     pass
+                # a healthy transfer proves the proxy works again
+                proxy_id = self._proxy_by_backend.get(key)
+                if proxy_id is not None:
+                    try:
+                        from ..services.proxy_service import selector as proxy_selector
+
+                        proxy_selector.report_healthy(proxy_id)
+                    except Exception:
+                        pass
             metrics.inc("backends.success")
         else:
             await self._note_account_failure(key, exc)
@@ -327,6 +345,19 @@ class TGManager:
             else:
                 self._errors[key] = self._errors.get(key, 0) + 1
                 metrics.inc("backends.errors")
+            # transport-level failure while a proxy is attached → report dead;
+            # next connection falls back to the next-best proxy automatically
+            proxy_id = self._proxy_by_backend.get(key)
+            if proxy_id is not None and not isinstance(exc, FloodWait):
+                try:
+                    from ..services.proxy_service import selector as proxy_selector
+
+                    proxy_selector.report_dead(proxy_id)
+                    log.warning("proxy %s reported dead (backend %s) → falling back", proxy_id, key)
+                    metrics.inc("backends.proxy_fallback")
+                    await self._rewire_backend(key)
+                except Exception as proxy_exc:
+                    log.warning("proxy fallback failed for %s: %s", key, proxy_exc)
             if self._errors.get(key, 0) >= CIRCUIT_THRESHOLD:
                 until = time.time() + CIRCUIT_COOLDOWN
                 self._circuit_until[key] = until
@@ -339,6 +370,22 @@ class TGManager:
                 metrics.inc("backends.circuit_open")
         if sem:
             sem.release()
+
+    async def _rewire_backend(self, key: str) -> None:
+        """Drop and rebuild ONE backend with the current (fallback) proxy decision.
+        Called after its proxy was reported dead; next acquire() gets the new one."""
+        b = self._backends.pop(key, None)
+        if b:
+            try:
+                await b.close()
+            except Exception:
+                pass
+        self._sems.pop(key, None)
+        try:
+            if key.startswith("acc:"):
+                await self._ensure_account(int(key.split(":")[1]))
+        except Exception as exc:
+            log.warning("rewire %s failed: %s", key, exc)
 
     async def _note_account_failure(self, key: str, exc: BaseException) -> None:
         """Persist per-account failure details; auto-disable dead sessions."""

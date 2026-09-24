@@ -171,15 +171,37 @@ async def speed_test_all(repo: ProxyRepo, proxy_id: Optional[int] = None, concur
 
 # ── selection for the transfer pool ──────────────────────────────
 class ProxySelector:
-    """Chooses the proxy used for new backend connections (per process)."""
+    """Chooses the proxy used for new backend connections (per process).
+
+    Tracks the currently-active proxy; when callers report it dead
+    (report_dead), the next get_active_proxy skips past it and picks the
+    next-fastest healthy proxy (fallback), until the pool is re-tested
+    (invalidate) or a monitor pass restores trust.
+    """
+
+    DEAD_TTL = 300.0  # seconds a reported-dead proxy stays skipped
 
     def __init__(self) -> None:
         self._rr = 0
         self._cache: List[Dict[str, Any]] = []
         self._cache_at: float = 0.0
+        self._dead: Dict[int, float] = {}  # proxy_id -> reported-dead timestamp
 
     def invalidate(self) -> None:
         self._cache_at = 0.0
+
+    def report_dead(self, proxy_id: int) -> None:
+        """Mark the active proxy dead (connection refused/timeout through it).
+        Next selection falls back to the next-best proxy."""
+        self._dead[proxy_id] = time.time()
+        self._cache_at = 0.0  # force re-selection
+
+    def report_healthy(self, proxy_id: int) -> None:
+        self._dead.pop(proxy_id, None)
+
+    def _dead_now(self) -> set:
+        now_ts = time.time()
+        return {pid for pid, ts in self._dead.items() if now_ts - ts < self.DEAD_TTL}
 
     async def get_active_proxy(self, db, dc_id: int = DEFAULT_DC) -> Optional[Dict[str, Any]]:
         """Return the row to use, honoring runtime settings proxy_enabled/proxy_strategy."""
@@ -193,7 +215,8 @@ class ProxySelector:
         if not enabled:
             return None
 
-        if time.time() - self._cache_at > 30.0:
+        dead = self._dead_now()
+        if time.time() - self._cache_at > 30.0 or (self._cache and self._cache[0]["id"] in dead):
             repo = ProxyRepo(db)
             try:
                 strategy = str(await get_runtime(db, "proxy_strategy") or "speed")
@@ -204,17 +227,22 @@ class ProxySelector:
             if strategy == "rr":
                 if usable:
                     self._rr += 1
-                    usable = [usable[self._rr % len(usable)]]
+                    ordered = usable[self._rr % len(usable):] + usable[: self._rr % len(usable)]
+                    usable = ordered
             elif strategy == "speed":
                 usable = [r for r in usable if r.get("status") in ("ok", "degraded")] or (
                     [r for r in rows if r.get("status") == "unknown"]
                 )
+            # fallback: skip proxies reported dead recently
+            usable = [r for r in usable if r["id"] not in dead]
             # cache only non-empty results: adding the first proxy must take
             # effect immediately (mutations call selector.invalidate() too)
             if usable:
                 self._cache = usable[:1]
                 self._cache_at = time.time()
             else:
+                # everything dead/unavailable → allow direct (None) but keep
+                # dead marks so a later healthy re-test restores them
                 self._cache = []
         return self._cache[0] if self._cache else None
 
@@ -224,3 +252,10 @@ selector = ProxySelector()
 
 async def get_active_proxy(db, dc_id: int = DEFAULT_DC) -> Optional[Dict[str, Any]]:
     return await selector.get_active_proxy(db, dc_id)
+
+
+async def retest_proxy(db, proxy_id: int) -> Optional[Dict[str, Any]]:
+    """Re-probe one proxy (used after a connection through it failed)."""
+    repo = ProxyRepo(db)
+    rows = await speed_test_all(repo, proxy_id=proxy_id)
+    return rows[0] if rows else None
