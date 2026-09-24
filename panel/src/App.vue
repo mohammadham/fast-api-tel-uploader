@@ -297,6 +297,105 @@
           </table>
         </div>
       </section>
+
+      <!-- Proxies tab -->
+      <section v-show="tab === 'proxies'">
+        <div class="toolbar">
+          <h3 style="margin:0;flex:1;font-size:16px">پراکسی‌های تلگرام</h3>
+          <button class="ghost" :disabled="proxiesTesting" @click="proxyTestAll">{{ proxiesTesting ? "در حال تست…" : "تست سرعت همه" }}</button>
+          <button class="ghost" @click="proxyApply">اعمال اتصال مجدد</button>
+          <button class="primary" @click="proxyOpen">پراکسی جدید</button>
+        </div>
+        <p class="muted" style="font-size:12px;margin:0 0 10px">
+          فعال/غیرفعال کردن استفاده از پراکسی از تب <b>تنظیمات</b> → گروه «پراکسی» انجام می‌شود.
+          لیست بر اساس سرعت (کم‌ترین تاخیر) مرتب است و انتخاب پراکسی برای اتصال‌های جدید به همین ترتیب انجام می‌شود.
+        </p>
+        <div class="card wide">
+          <table>
+            <thead><tr><th>#</th><th>برچسب</th><th>نوع</th><th>آدرس</th><th>وضعیت</th><th>تاخیر</th><th>آخرین تست</th><th>عملیات</th></tr></thead>
+            <tbody>
+              <tr v-for="p in proxiesList" :key="p.id" :style="p.enabled ? '' : 'opacity:.5'">
+                <td>{{ p.id }}</td>
+                <td>{{ p.label || '—' }}</td>
+                <td><span class="badge">{{ p.kind }}</span></td>
+                <td dir="ltr">{{ p.host }}:{{ p.port }}</td>
+                <td><span class="badge" :class="p.status">{{ proxyStatusLabels[p.status] || p.status }}</span></td>
+                <td :style="p.latency_ms >= 0 ? 'color:var(--accent);font-weight:600' : ''">{{ fmtLatency(p.latency_ms) }}</td>
+                <td class="muted" style="font-size:12px">{{ p.last_checked_at ? fmtTime(p.last_checked_at) : '—' }}</td>
+                <td>
+                  <button :disabled="p._testing" @click="proxyTestOne(p)">{{ p._testing ? "…" : "تست" }}</button>
+                  <button @click="proxyToggle(p)">{{ p.enabled ? "غیرفعال" : "فعال" }}</button>
+                  <button class="danger" @click="proxyDelete(p)">حذف</button>
+                </td>
+              </tr>
+              <tr v-if="!proxiesList.length"><td colspan="8" class="muted">پراکسی‌ای اضافه نشده — اتصال مستقیم استفاده می‌شود</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Settings tab -->
+      <section v-show="tab === 'settings'">
+        <div class="toolbar">
+          <h3 style="margin:0;flex:1;font-size:16px">تنظیمات سیستم (Runtime)</h3>
+          <button class="ghost" @click="resetSettings">بازگشت به پیش‌فرض</button>
+          <button class="ghost" v-show="dirtyCount" @click="discardSettings">لغو تغییرات</button>
+          <button class="primary" :disabled="settingsBusy" @click="saveSettings">ذخیره و اعمال</button>
+        </div>
+        <div class="card wide" v-show="dirtyCount" style="margin-bottom:14px;border-color:var(--warn);padding:10px 14px;display:flex;align-items:center;gap:10px">
+          <b style="font-size:13px">{{ dirtyCount }} مقدار ویرایش شده اما هنوز ذخیره نشده است.</b>
+          <span class="muted" style="font-size:12px">برای اعمال، «ذخیره و اعمال» را بزنید.</span>
+        </div>
+        <div v-for="g in settingsGroups" :key="g.id" class="card wide" style="margin-bottom:14px">
+          <h3 style="font-size:15px;margin:0 0 10px">{{ g.title }}</h3>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">
+            <div class="field" v-for="it in g.items" :key="it.key">
+              <label>{{ settingLabels[it.key] || it.key }} <span class="muted" style="font-size:11px">{{ fmtSettingHint(it) }} ({{ it.source === 'db' ? 'ذخیره‌شده' : 'پیش‌فرض env' }})</span></label>
+              <select v-if="it.key === 'default_backend'" v-model="settingsDraft[it.key]"
+                :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''">
+                <option value="telegram">تلگرام</option>
+                <option value="eitaa">ایتا</option>
+              </select>
+              <select v-else-if="it.key === 'proxy_strategy'" v-model="settingsDraft[it.key]"
+                :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''">
+                <option value="speed">سریع‌ترین (بر اساس تست سرعت)</option>
+                <option value="rr">چرخشی (Round-Robin)</option>
+              </select>
+              <select v-else-if="it.key === 'proxy_enabled'" v-model="settingsDraft[it.key]">
+                <option value="0">غیرفعال — اتصال مستقیم</option>
+                <option value="1">فعال — از پراکسی‌ها استفاده شود</option>
+              </select>
+              <input v-else v-model="settingsDraft[it.key]" :type="it.type === 'int' ? 'number' : 'text'"
+                :class="{ invalid: settingsErrors[it.key] }"
+                :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''"
+                @input="onSettingInput(it)">
+              <p class="err" v-if="settingsErrors[it.key]" style="margin:4px 0 0;font-size:12px">{{ settingsErrors[it.key] }}</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card wide" style="margin-bottom:14px">
+          <h3 style="font-size:15px;margin:0 0 10px">نودهای متصل (چندسرور)</h3>
+          <table>
+            <thead><tr><th>نود</th><th>هاست</th><th>ورکرها (dl/ul)</th><th>آخرین ضربان</th></tr></thead>
+            <tbody>
+              <tr v-for="n in nodesList" :key="n.node_id">
+                <td dir="ltr">{{ n.node_id }}</td><td dir="ltr">{{ n.hostname }}</td>
+                <td>{{ n.workers_dl }} / {{ n.workers_ul }}</td>
+                <td>{{ fmtTime(n.last_heartbeat) }}</td>
+              </tr>
+              <tr v-if="!nodesList.length"><td colspan="4" class="muted">نودی ثبت نشده (حالت تک‌سرور)</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card wide">
+          <h3 style="font-size:15px;margin:0 0 10px">راه‌اندازی اولیه (استارتر)</h3>
+          <p class="muted" style="font-size:13px;margin:0 0 8px" v-if="setupNeeded">سیستم هنوز تکمیل راه‌اندازی نشده است.</p>
+          <p class="muted" style="font-size:13px;margin:0 0 8px" v-else>راه‌اندازی اولیه انجام شده است. ✅</p>
+          <button class="primary" @click="setupDlg.open = true; setupDlg.step = 1">باز کردن ویزارد</button>
+        </div>
+      </section>
     </main>
 
     <!-- Dialogs -->
@@ -366,41 +465,7 @@
       </div>
       <p dir="ltr" style="word-break:break-all;font-size:13px">{{ qrDlg.url }}</p>
       <button class="ghost" style="width:100%" @click="qrDlg.open = false">بستن</button>
-    </dialog>      <!-- Proxies tab -->
-      <section v-show="tab === 'proxies'">
-        <div class="toolbar">
-          <h3 style="margin:0;flex:1;font-size:16px">پراکسی‌های تلگرام</h3>
-          <button class="ghost" :disabled="proxiesTesting" @click="proxyTestAll">{{ proxiesTesting ? "در حال تست…" : "تست سرعت همه" }}</button>
-          <button class="ghost" @click="proxyApply">اعمال اتصال مجدد</button>
-          <button class="primary" @click="proxyOpen">پراکسی جدید</button>
-        </div>
-        <p class="muted" style="font-size:12px;margin:0 0 10px">
-          فعال/غیرفعال کردن استفاده از پراکسی از تب <b>تنظیمات</b> → گروه «پراکسی» انجام می‌شود.
-          لیست بر اساس سرعت (کم‌ترین تاخیر) مرتب است و انتخاب پراکسی برای اتصال‌های جدید به همین ترتیب انجام می‌شود.
-        </p>
-        <div class="card wide">
-          <table>
-            <thead><tr><th>#</th><th>برچسب</th><th>نوع</th><th>آدرس</th><th>وضعیت</th><th>تاخیر</th><th>آخرین تست</th><th>عملیات</th></tr></thead>
-            <tbody>
-              <tr v-for="p in proxiesList" :key="p.id" :style="p.enabled ? '' : 'opacity:.5'">
-                <td>{{ p.id }}</td>
-                <td>{{ p.label || '—' }}</td>
-                <td><span class="badge">{{ p.kind }}</span></td>
-                <td dir="ltr">{{ p.host }}:{{ p.port }}</td>
-                <td><span class="badge" :class="p.status">{{ proxyStatusLabels[p.status] || p.status }}</span></td>
-                <td :style="p.latency_ms >= 0 ? 'color:var(--accent);font-weight:600' : ''">{{ fmtLatency(p.latency_ms) }}</td>
-                <td class="muted" style="font-size:12px">{{ p.last_checked_at ? fmtTime(p.last_checked_at) : '—' }}</td>
-                <td>
-                  <button :disabled="p._testing" @click="proxyTestOne(p)">{{ p._testing ? "…" : "تست" }}</button>
-                  <button @click="proxyToggle(p)">{{ p.enabled ? "غیرفعال" : "فعال" }}</button>
-                  <button class="danger" @click="proxyDelete(p)">حذف</button>
-                </td>
-              </tr>
-              <tr v-if="!proxiesList.length"><td colspan="8" class="muted">پراکسی‌ای اضافه نشده — اتصال مستقیم استفاده می‌شود</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+    </dialog>
 
       <!-- Add proxy dialog -->
       <dialog :open="proxyDlg.open" @close="proxyDlg.open = false">
@@ -433,69 +498,6 @@
         <button class="primary" style="width:100%" @click="proxySave">افزودن</button>
         <button class="ghost" style="width:100%" @click="proxyDlg.open = false">انصراف</button>
       </dialog>
-
-      <!-- Settings tab -->
-      <section v-show="tab === 'settings'">
-        <div class="toolbar">
-          <h3 style="margin:0;flex:1;font-size:16px">تنظیمات سیستم (Runtime)</h3>
-          <button class="ghost" @click="resetSettings">بازگشت به پیش‌فرض</button>
-          <button class="ghost" v-show="dirtyCount" @click="discardSettings">لغو تغییرات</button>
-          <button class="primary" :disabled="settingsBusy" @click="saveSettings">ذخیره و اعمال</button>
-        </div>
-        <div class="card wide" v-show="dirtyCount" style="margin-bottom:14px;border-color:var(--warn);padding:10px 14px;display:flex;align-items:center;gap:10px">
-          <b style="font-size:13px">{{ dirtyCount }} مقدار ویرایش شده اما هنوز ذخیره نشده است.</b>
-          <span class="muted" style="font-size:12px">برای اعمال، «ذخیره و اعمال» را بزنید.</span>
-        </div>
-        <div v-for="g in settingsGroups" :key="g.id" class="card wide" style="margin-bottom:14px">
-          <h3 style="font-size:15px;margin:0 0 10px">{{ g.title }}</h3>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">
-            <div class="field" v-for="it in g.items" :key="it.key">
-              <label>{{ settingLabels[it.key] || it.key }} <span class="muted" style="font-size:11px">{{ fmtSettingHint(it) }} ({{ it.source === 'db' ? 'ذخیره‌شده' : 'پیش‌فرض env' }})</span></label>
-              <select v-if="it.key === 'default_backend'" v-model="settingsDraft[it.key]"
-                :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''">
-                <option value="telegram">تلگرام</option>
-                <option value="eitaa">ایتا</option>
-              </select>
-              <select v-else-if="it.key === 'proxy_strategy'" v-model="settingsDraft[it.key]"
-                :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''">
-                <option value="speed">سریع‌ترین (بر اساس تست سرعت)</option>
-                <option value="rr">چرخشی (Round-Robin)</option>
-              </select>
-              <select v-else-if="it.key === 'proxy_enabled'" v-model="settingsDraft[it.key]">
-                <option value="0">غیرفعال — اتصال مستقیم</option>
-                <option value="1">فعال — از پراکسی‌ها استفاده شود</option>
-              </select>
-              <input v-else v-model="settingsDraft[it.key]" :type="it.type === 'int' ? 'number' : 'text'"
-                :class="{ invalid: settingsErrors[it.key] }"
-                :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''"
-                @input="onSettingInput(it)">
-              <p class="err" v-if="settingsErrors[it.key]" style="margin:4px 0 0;font-size:12px">{{ settingsErrors[it.key] }}</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="card wide" style="margin-bottom:14px">
-          <h3 style="font-size:15px;margin:0 0 10px">نودهای متصل (چندسرور)</h3>
-          <table>
-            <thead><tr><th>نود</th><th>هاست</th><th>ورکرها (dl/ul)</th><th>آخرین ضربان</th></tr></thead>
-            <tbody>
-              <tr v-for="n in nodesList" :key="n.node_id">
-                <td dir="ltr">{{ n.node_id }}</td><td dir="ltr">{{ n.hostname }}</td>
-                <td>{{ n.workers_dl }} / {{ n.workers_ul }}</td>
-                <td>{{ fmtTime(n.last_heartbeat) }}</td>
-              </tr>
-              <tr v-if="!nodesList.length"><td colspan="4" class="muted">نودی ثبت نشده (حالت تک‌سرور)</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="card wide">
-          <h3 style="font-size:15px;margin:0 0 10px">راه‌اندازی اولیه (استارتر)</h3>
-          <p class="muted" style="font-size:13px;margin:0 0 8px" v-if="setupNeeded">سیستم هنوز تکمیل راه‌اندازی نشده است.</p>
-          <p class="muted" style="font-size:13px;margin:0 0 8px" v-else>راه‌اندازی اولیه انجام شده است. ✅</p>
-          <button class="primary" @click="setupDlg.open = true; setupDlg.step = 1">باز کردن ویزارد</button>
-        </div>
-      </section>
 
       <!-- Setup wizard dialog -->
       <dialog :open="setupDlg.open" @close="setupDlg.open = false">

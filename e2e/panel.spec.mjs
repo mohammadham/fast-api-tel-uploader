@@ -80,8 +80,7 @@ test.describe.serial("panel smoke", () => {
     await cleanupE2eProxies(page); // self-heal leftovers from a crashed run
     try {
       await page.locator("#tabs button", { hasText: "پراکسی‌ها" }).click();
-      // the proxies section renders outside <main> (it lives after the dialogs in App.vue)
-      const section = page.locator("section:visible");
+      const section = page.locator("main section:visible");
       await expect(section.locator("h3")).toContainText("پراکسی‌ها");
 
       // fresh pool: Persian empty state
