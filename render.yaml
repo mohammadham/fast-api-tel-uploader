@@ -1,0 +1,49 @@
+# Render Blueprint — TelegramDrive
+# Deploy: Render Dashboard → New + → Blueprint → select this repo
+# (یا CLI: render blueprint launch)
+services:
+  - type: web
+    name: telegramdrive
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /api/v1/admin/healthz
+    autoDeploy: true
+    envVars:
+      # ── security ──
+      - key: TGDRIVE_SECRET
+        generateValue: true          # secret مشترک JWT/presign/sessions
+      - key: TGDRIVE_FERNET_KEY
+        generateValue: true          # رمزنگاری سشن‌های تلگرام در DB
+      - key: TGDRIVE_ADMIN_USERNAME
+        value: admin
+      # رمز ادمین خالی بماند → در اولین استارت تولید می‌شود (به doc مراجعه کنید)
+      - key: TGDRIVE_ADMIN_PASSWORD
+        sync: false
+
+      # ── database (Internal Database URL خودکار تزریق می‌شود) ──
+      - key: TGDRIVE_DATABASE_URL
+        fromDatabase:
+          name: telegramdrive-db
+          property: connectionString
+
+      # ── app ──
+      - key: TGDRIVE_DEFAULT_BACKEND
+        value: telegram
+      - key: TGDRIVE_LOG_LEVEL
+        value: INFO
+      - key: TGDRIVE_NODE_ID
+        value: render-node-1
+
+      # ── telegram (برای آپلود واقعی لازم است؛ از my.telegram.org) ──
+      - key: TGDRIVE_API_ID
+        sync: false
+      - key: TGDRIVE_API_HASH
+        sync: false
+
+# Postgres مدیریت‌شده Render — دیتابیس مشترک همه نودها
+databases:
+  - name: telegramdrive-db
+    databaseName: telegramdrive
+    user: tgdrive
+    plan: basic-256mb

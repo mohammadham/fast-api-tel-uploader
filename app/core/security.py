@@ -103,9 +103,15 @@ def key_prefix(raw: str) -> str:
 def _fernet() -> Fernet:
     s = get_settings()
     if s.fernet_key:
-        key = s.fernet_key.encode()
-    else:
-        key = hashlib.sha256(s.secret.encode()).digest()
+        raw = s.fernet_key.encode()
+        if len(raw) == 44 and raw.endswith(b"="):
+            try:
+                return Fernet(raw)  # already a valid 32-byte urlsafe-b64 key
+            except Exception:
+                pass
+        # arbitrary passphrase (e.g. platform-generated secret) → derive a valid key
+        return Fernet(base64.urlsafe_b64encode(hashlib.sha256(raw).digest()))
+    key = hashlib.sha256(s.secret.encode()).digest()
     return Fernet(base64.urlsafe_b64encode(key))
 
 

@@ -452,16 +452,40 @@ class PgDatabase:
         self.url = url
         self._engine = None
 
+    @staticmethod
+    def normalize_url(url: str) -> tuple:
+        """Render/Heroku-style postgres URL → asyncpg engine URL + connect args.
+
+        libpq's ``sslmode`` query param is not an asyncpg connect kwarg; it is
+        translated to ``ssl=True`` (require). Internal DB URLs without the
+        param stay untouched.
+        """
+        ssl_required = False
+        if "sslmode=" in url:
+            from urllib.parse import urlparse, parse_qs, urlencode
+
+            parsed = urlparse(url)
+            qs = parse_qs(parsed.query)
+            mode = (qs.pop("sslmode", [""])[0] or "").lower()
+            ssl_required = mode in ("require", "verify-ca", "verify-full", "prefer")
+            rest = urlencode({k: v[0] for k, v in qs.items()})
+            url = parsed._replace(query=rest).geturl()
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        connect_args = {"ssl": True} if ssl_required else {}
+        return url, connect_args
+
     async def connect(self) -> None:
         from sqlalchemy import text
         from sqlalchemy.ext.asyncio import create_async_engine
 
-        url = self.url
-        if url.startswith("postgres://"):
-            url = url.replace("postgres://", "postgresql://", 1)
-        if url.startswith("postgresql://"):
-            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        self._engine = create_async_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=20)
+        engine_url, connect_args = self.normalize_url(self.url)
+        self._engine = create_async_engine(
+            engine_url, pool_pre_ping=True, pool_size=10, max_overflow=20,
+            connect_args=connect_args,
+        )
         async with self._engine.begin() as conn:
             await conn.execute(text(SCHEMA_PG))
 
