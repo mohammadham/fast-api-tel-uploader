@@ -468,6 +468,10 @@ class Database:
             (_now(), actor, action, target, ip, details),
         )
 
+    async def audit_row(self, action: str) -> Optional[dict]:
+        row = await self.fetch_one("SELECT * FROM audit_log WHERE action=? ORDER BY id DESC LIMIT 1", (action,))
+        return dict(row) if row else None
+
 
 class PgDatabase:
     """PostgreSQL backend with the same interface as Database.
@@ -589,6 +593,10 @@ class PgDatabase:
             "INSERT INTO audit_log(ts, actor, action, target, ip, details) VALUES(?,?,?,?,?,?)",
             (_now(), actor, action, target, ip, details),
         )
+
+    async def audit_row(self, action: str) -> Optional[dict]:
+        row = await self.fetch_one("SELECT * FROM audit_log WHERE action=? ORDER BY id DESC LIMIT 1", (action,))
+        return dict(row) if row else None
 
 
 class _PgTxProxy:

@@ -52,6 +52,22 @@
         <div class="cards">
           <div class="stat" v-for="c in dashCards" :key="c[0]"><div class="lbl">{{ c[0] }}</div><div class="num">{{ c[1] }}</div></div>
         </div>
+        <h3 style="font-size:16px">سلامت پراکسی‌های تلگرام</h3>
+        <div class="card wide" v-if="overview && overview.proxies">
+          <div class="cards" style="margin:0">
+            <div class="stat"><div class="lbl">وضعیت استخر</div><div class="num">{{ overview.proxies.enabled ? "فعال" : "خاموش" }}</div></div>
+            <div class="stat"><div class="lbl">زنده (سالم)</div><div class="num" style="color:var(--ok,#22C55E)">{{ overview.proxies.alive }}</div></div>
+            <div class="stat"><div class="lbl">قطع (down)</div><div class="num" style="color:var(--err,#EF4444)">{{ overview.proxies.down }}</div></div>
+            <div class="stat"><div class="lbl">علامت‌خورده (fallback)</div><div class="num" style="color:var(--warn,#F59E0B)">{{ overview.proxies.dead_marked }}</div></div>
+            <div class="stat"><div class="lbl">آزمایش‌نشده</div><div class="num">{{ overview.proxies.unknown }}</div></div>
+            <div class="stat"><div class="lbl">کم‌ترین تاخیر</div><div class="num">{{ overview.proxies.best_latency_ms >= 0 ? overview.proxies.best_latency_ms + " ms" : "—" }}</div></div>
+            <div class="stat"><div class="lbl">fallbackهای این نود</div><div class="num">{{ overview.proxies.fallback_count }}</div></div>
+          </div>
+          <p class="muted" style="font-size:13px;margin:10px 0 0">
+            آخرین fallback: {{ proxyLastFallback }}
+          </p>
+        </div>
+        <p class="muted" v-else style="font-size:13px">هیچ پراکسی‌ای ثبت نشده است.</p>
         <h3 style="font-size:16px">وضعیت اکانت‌ها</h3>
         <div class="health-grid">
           <div v-for="a in health" :key="a.id" class="health-item" :class="{bad: a.status !== 'ready'}">
@@ -663,6 +679,11 @@ const doLogin = submitLogin;
         health.value = accs.items || [];
       } catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
+    const proxyLastFallback = computed(() => {
+      const lf = overview.value?.proxies?.last_fallback;
+      if (!lf) return "رخ نداده";
+      return `${fmtTime(lf.at)} — ${lf.detail || ""}`;
+    });
     loaders.accounts = async () => {
       try { const d = await api("/api/v1/accounts"); accounts.value = d.items || []; }
       catch (e) { showToast("خطا: " + e.message, 4000, true); }

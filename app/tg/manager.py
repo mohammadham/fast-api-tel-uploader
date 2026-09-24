@@ -355,6 +355,14 @@ class TGManager:
                     proxy_selector.report_dead(proxy_id)
                     log.warning("proxy %s reported dead (backend %s) → falling back", proxy_id, key)
                     metrics.inc("backends.proxy_fallback")
+                    try:
+                        await self.db.audit(
+                            "system", "proxy.fallback",
+                            target=f"proxy {proxy_id} dead via {key}",
+                            details="next-best proxy selected",
+                        )
+                    except Exception:
+                        pass
                     await self._rewire_backend(key)
                 except Exception as proxy_exc:
                     log.warning("proxy fallback failed for %s: %s", key, proxy_exc)

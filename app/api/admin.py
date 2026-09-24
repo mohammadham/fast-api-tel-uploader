@@ -44,6 +44,58 @@ async def overview(_: str = Depends(get_current_admin), db=Depends(get_db)):
         "nodes": nodes,
         "queue": qstats,
         "uptime": round(time.time() - metrics._start, 1),
+        "proxies": await _proxy_health(db),
+    }
+
+
+async def _proxy_health(db) -> dict:
+    """Dashboard proxy-health summary: alive/dead counts + last fallback event.
+
+    Counts come from the persisted speed-test state; dead marks from the
+    in-process selector (fallback transport failures); the last fallback event
+    is the newest audit row for a proxy marked dead by TGManager.
+    """
+    from ..services.proxy_service import selector as proxy_selector
+
+    rows = await db.fetch_all(
+        "SELECT id, label, host, port, status, latency_ms, last_checked_at FROM proxies"
+    )
+    total = len(rows)
+    alive = sum(1 for r in rows if r["status"] in ("ok", "degraded"))
+    down = sum(1 for r in rows if r["status"] == "down")
+    unknown = sum(1 for r in rows if r["status"] == "unknown")
+    dead_marks = proxy_selector._dead_now()  # recently reported dead via fallback
+    best = min(
+        (r["latency_ms"] for r in rows if r["status"] == "ok" and r["latency_ms"] >= 0),
+        default=-1,
+    )
+
+    enabled = False
+    try:
+        from ..core.settings_service import get_runtime
+
+        enabled = bool(int(await get_runtime(db, "proxy_enabled") or 0))
+    except Exception:
+        pass
+
+    last_fallback = None
+    try:
+        row = await db.audit_row("proxy.fallback")
+        if row:
+            last_fallback = {"at": float(row["ts"]), "detail": (row["target"] or row["details"] or "").strip()}
+    except Exception:
+        pass
+    fallback_count = int(metrics._counters.get("backends.proxy_fallback", 0))
+    return {
+        "enabled": enabled,
+        "total": total,
+        "alive": alive,
+        "down": down,
+        "unknown": unknown,
+        "dead_marked": len(dead_marks),
+        "best_latency_ms": round(best, 1) if best >= 0 else -1,
+        "fallback_count": fallback_count,
+        "last_fallback": last_fallback,
     }
 
 
