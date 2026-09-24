@@ -1,42 +1,39 @@
-# Frontend Porting Contract — static/index.html → Vue build
+# Frontend Contract — Vite + SFC panel
 
-پنل فعلی **Vue 3 runtime** است (`static/index.html` + `static/app.js` با vendored
-`vue.global.prod.js`). چون `index.html` خودش template کامپایل‌شده Vue است، هر
-چیزی که آنجا اضافه می‌شود **به‌طور خودکار** در خروجی build آینده همان را می‌دهد.
+مهاجرت انجام شد ✅. پنل الان **Vite + Vue 3 SFC** است:
 
-قاعده: **منبع حقیقت = `static/index.html` + `static/app.js`**. هیچ UI ای فقط در
-لایه دیگری اضافه نشود.
+- **منبع حقیقت:** `panel/src/App.vue` (markup + logic)، `panel/src/main.js`،
+  `panel/src/style.css`، `panel/index.html` (entry Vite)
+- **خروجی سرو‌شده:** `static/index.html` + `static/assets/*` (ساخت `npm run build`
+  در `panel/`؛ outDir = `../static` با base `/static/`)
+- **مرجع تاریخی:** `panel/legacy/runtime-app.js` و `panel/legacy/vue.global.prod.js`
+  (نسخه runtime قبلی، برای مقایسه/rollback نگه داشته می‌شود؛ دیگر سرو نمی‌شود)
 
-## قانون طلایی برای تغییرات آینده
+## گردش کار تغییرات UI
 
-هر UI جدید/تغییری مستقیماً در `static/index.html` (markup) و `static/app.js`
-(logic) اعمال می‌شود و چون همان فایل‌ها ورودی build هم هستند، خروجی build با
-نسخه‌ی runtime هیچ تفاوتی نخواهد داشت.
+```bash
+cd panel
+npm run dev        # dev server (پروکسی دستی به بک‌اند لازم نیست؛ API مستقیم صدا زده می‌شود)
+npm run build      # خروجی → ../static (index.html + assets هش‌شده)
+```
 
-## در زمان مهاجرت به build (Vite/Vue-CLI)
+بعد از هر تغییر: `npm run build` بزنید تا `static/` به‌روز شود — FastAPI همان
+`static/index.html` و `static/assets/*` را سرو می‌کند و commit باید شامل
+هم منابع (`panel/`) و هم خروجی (`static/`) باشد.
 
-- `static/index.html` → `src/App.vue` (markup، بدون تغییر منطقی؛ فقط `#app` mount)
-- `static/app.js` → `src/main.js` + composables (`api`, `toast`, loaders)
-- نکته: `app.js` با `Vue.createApp` از global build استفاده می‌کند؛ در build از
-  `import { createApp, ref, reactive, computed } from 'vue'` استفاده می‌شود.
-- **`v-cloak`**: در runtime چشمک اولیه را می‌گیرد؛ در build جایگزین می‌شود با
-  آپشن `compilerOptions.isCustomElement` برای المان‌های غیر Vue (در صورت وجود).
-- توکن‌های CSS (`style.css`) عیناً منتقل می‌شوند (همان design tokens).
+## قواعد
 
-## سازگاری باینری ویژگی‌های فعلی با build
+1. UI فقط از طریق `panel/src/App.vue` تغییر کند؛ هرگز `static/index.html` یا
+   `static/assets/*` را دستی ویرایش نکنید (فایل‌های هش‌دار rebuild می‌شوند).
+2. `${...}` داخل `<template>` ممنوع است (تداخل با delimiterهای Vue — CI گارد دارد).
+3. `style.css` توکن‌های دیزاین (dark #0F172A، accent #22C55E، Vazirmatn) را
+   نگه می‌دارد؛ تغییر تم فقط از این فایل.
+4. `panel/node_modules` کامیت نمی‌شود؛ `package-lock.json` بله.
 
-| ویژگی | وضعیت در build آینده |
-|-------|----------------------|
-| تب‌ها، دیالوگ‌ها، toast | همان markup → کار می‌کند |
-| تنظیمات + اعتبارسنجی live | همان markup → کار می‌کند |
-| ویزارد استارتر | همان markup → کار می‌کند |
-| پراکسی‌ها | همان markup → کار می‌کند |
-| آپلود resumable (XHR/fetch) | همان توابع → کار می‌کند |
-| QR/share | همان markup → کار می‌کند |
+## نکته‌های مهاجرت (برای مرور)
 
-## نگه‌داشتن دو خروجی همگام (اگر هر دو لازم شدند)
-
-1. هیچ UI ای بیرون از `index.html`/`app.js` اضافه نکنید.
-2. در صورت افزودن کامپوننت SFC در آینده، آن را **از روی `index.html`** بنویسید
-   (markup را کپی نکنید — منتقل کنید و `index.html` را مرجع نگه دارید).
-3. قبل از کامیت UI جدید، `node --check static/app.js` + یک smoke مرورگری.
+- اسکریپت `setup()` با `<script setup>` بازنویسی شد: بلاک `return {...}` حذف و
+  importها از `vue` اضافه شد (قبلاً از global `Vue` می‌آمد).
+- نام‌های alias شده در `return` قدیمی: `doLogin: submitLogin` → در SFC
+  `const doLogin = submitLogin;` بعد از تعریف تابع.
+- `v-cloak` در entry HTML حفظ شد (بدون آسیب در build).

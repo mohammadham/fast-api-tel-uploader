@@ -14,3 +14,18 @@ node_modules/
 data-e2e/
 test-results/
 playwright-report/
+
+# runtime artifacts
+server.log
+server.err
+ui.log
+ui.err
+pxb.log
+pxb.err
+smoke.log
+smoke.err
+data-ui/
+data-pxb/
+data-smoke/
+data-selfcheck/
+data-e2e/

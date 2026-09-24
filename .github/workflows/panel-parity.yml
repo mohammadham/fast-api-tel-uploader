@@ -3,28 +3,38 @@ name: Panel Parity Guard
 on:
   push:
     branches: [main, develop, master]
-    paths: ['static/**']
+    paths: ['panel/**', 'static/**']
   pull_request:
-    paths: ['static/**']
+    paths: ['panel/**', 'static/**']
 
 jobs:
   parity:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: app.js syntax check
-        run: node --check static/app.js
-      - name: index.html is Vue-template safe (no raw backticks/template-literals in markup)
+          cache: npm
+          cache-dependency-path: panel/package-lock.json
+      - name: Install panel deps
+        working-directory: panel
+        run: npm ci --no-fund --no-audit
+      - name: Build panel (Vite)
+        working-directory: panel
+        run: npm run build
+      - name: Built index references hashed assets
         run: |
-          ! grep -nE '\$\{' static/index.html || {
-            echo "::error::static/index.html contains \${...} — Vue template delimiters conflict with JS template literals. Move JS into app.js."
+          grep -q 'static/assets/index-' static/index.html
+          grep -q 'id="app"' static/index.html
+      - name: No legacy runtime references left in served files
+        run: |
+          ! grep -rn 'vendor/vue' static/index.html
+          ! grep -rn '/static/app.js' static/index.html
+      - name: No template-literal delimiters in SFC templates
+        run: |
+          ! grep -nE '\$\{' panel/src/App.vue || {
+            echo "::error::panel/src/App.vue contains \${...} — Vue delimiters conflict with JS template literals. Move JS into the script block."
             exit 1
           }
-      - name: panel files referenced consistently
-        run: |
-          grep -q 'src="/static/app.js"' static/index.html
-          grep -q 'id="app"' static/index.html
