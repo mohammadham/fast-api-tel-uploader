@@ -726,6 +726,9 @@ const doLogin = submitLogin;
         if (!["speed", "rr"].includes(value)) return "speed یا rr";
       } else if (it.key === "proxy_enabled") {
         if (![0, 1, "0", "1"].includes(value)) return "فقط ۰ یا ۱";
+      } else if (it.key === "proxy_monitor_interval") {
+        const n = Number(value);
+        if (!(n === 0 || (n >= 2 && n <= 1440))) return "۰=خاموش یا ۲ تا ۱۴۴۰ دقیقه";
       }
       return "";
     }
@@ -754,6 +757,7 @@ const doLogin = submitLogin;
       default_backend: "بک‌اند پیش‌فرض",
       proxy_enabled: "استفاده از پراکسی (۰=خیر، ۱=بله)",
       proxy_strategy: "استراتژی انتخاب پراکسی",
+      proxy_monitor_interval: "بازه تست دوره‌ای پراکسی‌ها (دقیقه؛ ۰=خاموش)",
     };
     const settingsGroups = computed(() => {
       const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", backend: "بک‌اند", proxy: "پراکسی تلگرام" };

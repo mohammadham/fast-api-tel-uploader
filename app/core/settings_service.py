@@ -39,6 +39,10 @@ def _int_flag(v: int) -> str:
     return "" if v in (0, 1) else "must be 0 or 1"
 
 
+def _proxy_monitor_interval(v: int) -> str:
+    return "" if v in (0, *range(2, 24 * 60)) else "0 = off, or 2..1440 minutes"
+
+
 EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     # limits
     "max_upload_size": (int, _positive_int, "max upload size (bytes)"),
@@ -60,6 +64,7 @@ EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     # proxy
     "proxy_enabled": (int, _int_flag, "use telegram proxy pool (0/1)"),
     "proxy_strategy": (str, _proxy_strategy_ok, "proxy selection: speed | rr"),
+    "proxy_monitor_interval": (int, _proxy_monitor_interval, "periodic proxy health-test interval (minutes; 0=off)"),
 }
 
 _SETTING_GROUPS: dict[str, list[str]] = {
@@ -78,7 +83,7 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "max_concurrent_uploads",
     ],
     "backend": ["default_backend"],
-    "proxy": ["proxy_enabled", "proxy_strategy"],
+    "proxy": ["proxy_enabled", "proxy_strategy", "proxy_monitor_interval"],
 }
 
 CACHE_TTL = 10.0  # seconds; cheap staleness window for multi-node convergence

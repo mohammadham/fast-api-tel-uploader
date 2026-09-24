@@ -25,6 +25,7 @@ from app.core.security import create_token, decode_token, hash_password
 from app.core.state import state
 from app.queue.queue_manager import QueueManager
 from app.services.janitor import Janitor
+from app.services.proxy_monitor import ProxyMonitor
 from app.tg.bot_service import BotService
 from app.tg.manager import TGManager
 
@@ -90,8 +91,13 @@ async def lifespan(app: FastAPI):
     janitor.start()
     state.janitor = janitor
 
+    proxy_monitor = ProxyMonitor(db)
+    proxy_monitor.start()
+    state.proxy_monitor = proxy_monitor
+
     yield
 
+    await proxy_monitor.stop()
     await janitor.stop()
     await bots.stop_all()
     await queue.stop()

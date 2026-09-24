@@ -14,6 +14,7 @@ class AppState:
         self.queue = None
         self.bots = None
         self.janitor = None
+        self.proxy_monitor = None
         self.node_id: str = ""
 
     async def db_instance(self) -> Database:
