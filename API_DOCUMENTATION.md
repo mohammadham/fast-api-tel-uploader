@@ -883,3 +883,20 @@ When `proxy_enabled=0` (default) all connections are direct. When enabled, new
 account connections use the best proxy: fastest tested (speed strategy) or
 round-robin across tested proxies (rr). Untested proxies are used only if no
 tested one is healthy.
+
+### Periodic health monitor (v2.3)
+`ProxyMonitor` (always running) re-tests the whole pool every
+`proxy_monitor_interval` minutes — new key in the settings "proxy" group
+(`0` = off, default; `2..1440` otherwise, panel-validated). On each pass it
+persists status/latency, lifts fallback dead-marks for proxies that test
+healthy, and notifies admins via the bot notify path **only when a proxy's
+status flips** (ok→down, down→ok, degraded↔ok) — restarts never trigger an
+alert storm. Alerts read: "🛰 گزارش سلامت پراکسی‌ها" + one line per flip +
+usable-proxy count.
+
+### Fallback (v2.3)
+When a transfer through a proxied backend fails at the transport level
+(FloodWait excluded), TGManager reports that proxy dead; new connections
+automatically use the next-fastest healthy proxy (or direct when none is
+usable). Dead-marks expire after 5 minutes or as soon as a monitor pass /
+successful transfer proves the proxy healthy.

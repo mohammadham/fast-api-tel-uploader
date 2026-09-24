@@ -78,6 +78,12 @@ class ProxyMonitor:
             return
         proxy_service.selector.invalidate()
 
+        # a pass that proves a proxy healthy lifts any fallback dead-mark
+        sel = proxy_service.selector
+        for row in rows:
+            if row["status"] in ("ok", "degraded"):
+                sel.report_healthy(row["id"])
+
         changes = []
         current: Dict[int, str] = {}
         for row in rows:
