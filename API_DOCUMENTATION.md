@@ -853,7 +853,8 @@ Restore body: `{"data": "<same base64 payload>"}`; rows are inserted idempotentl
 
 All endpoints require admin JWT. Global on/off + strategy live in runtime
 settings: `proxy_enabled` (0/1) and `proxy_strategy` (`speed`|`rr`) under the
-"proxy" group of GET/PUT /api/v1/admin/settings.
+"proxy" group of GET/PUT /api/v1/admin/settings (plus `proxy_monitor_interval`
+for the periodic health monitor, below).
 
 ### GET /api/v1/admin/proxies
 List proxies sorted for selection: tested-by-latency ascending first, then
@@ -884,19 +885,47 @@ account connections use the best proxy: fastest tested (speed strategy) or
 round-robin across tested proxies (rr). Untested proxies are used only if no
 tested one is healthy.
 
+Changing `proxy_enabled`/`proxy_strategy` via PUT /api/v1/admin/settings (or
+mutating proxies) drops live telegram connections and reconnects with the new
+decision — no restart needed. POST /api/v1/admin/proxies/apply does the same
+on demand.
+
 ### Periodic health monitor (v2.3)
 `ProxyMonitor` (always running) re-tests the whole pool every
-`proxy_monitor_interval` minutes — new key in the settings "proxy" group
-(`0` = off, default; `2..1440` otherwise, panel-validated). On each pass it
-persists status/latency, lifts fallback dead-marks for proxies that test
-healthy, and notifies admins via the bot notify path **only when a proxy's
-status flips** (ok→down, down→ok, degraded↔ok) — restarts never trigger an
-alert storm. Alerts read: "🛰 گزارش سلامت پراکسی‌ها" + one line per flip +
-usable-proxy count.
+`proxy_monitor_interval` minutes — key in the settings "proxy" group
+(`0` = off, default; `2..1440` otherwise, panel-validated; changes apply live
+on the next loop tick, no restart). On each pass it:
+
+1. Runs the same concurrent speed test as POST /admin/proxies/test and
+   persists status/latency.
+2. Lifts fallback dead-marks for proxies that test healthy (a proxy marked
+   dead by the transport-failure path returns to the pool immediately on the
+   first healthy monitor pass, without waiting for the 5-minute TTL).
+3. Notifies admins via the bot notify path (first ready bot →
+   `TGDRIVE_BOT_ADMIN_IDS`) **only when a proxy's status flips**
+   (ok→down, down→ok, degraded↔ok). The first pass after start only seeds
+   the state — restarts never trigger an alert storm; disabling the monitor
+   clears the state so stale diffs are not broadcast on re-enable.
+
+Alert format: "🛰 گزارش سلامت پراکسی‌ها" + one HTML line per flip
+(`name (host:port): old → new`) + usable-proxy count.
 
 ### Fallback (v2.3)
-When a transfer through a proxied backend fails at the transport level
-(FloodWait excluded), TGManager reports that proxy dead; new connections
-automatically use the next-fastest healthy proxy (or direct when none is
-usable). Dead-marks expire after 5 minutes or as soon as a monitor pass /
-successful transfer proves the proxy healthy.
+Two-layer mechanism:
+
+- **Selector**: `report_dead(proxy_id)` excludes a proxy from selection for
+  5 minutes (`DEAD_TTL`); `get_active_proxy` immediately returns the next
+  fastest healthy proxy in both `speed` and `rr` strategies. When **all**
+  proxies are dead the next connection goes **direct** instead of hanging on
+  the broken path. Expired TTLs re-enter the pool (self-healing);
+  `report_healthy(proxy_id)` restores a proxy early.
+- **TGManager**: each backend remembers which proxy it was built with. On
+  release, a **transport-level** failure (FloodWait excluded — it is a
+  rate-limit, not a connectivity fault) while a proxy is attached reports the
+  proxy dead and rewires **only that one backend** with the new decision;
+  other backends are untouched. A successful transfer reports the proxy
+  healthy.
+
+No admin action or endpoint call is required — fallback is fully automatic.
+Observable effects: subsequent GET /admin/proxies rows reflect the new
+active proxy after the next test, and connection logs show the rewire.
