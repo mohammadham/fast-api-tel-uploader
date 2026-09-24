@@ -96,8 +96,16 @@ class TGManager:
 
     def _sem(self, key: str) -> asyncio.Semaphore:
         s = self._settings()
+        # runtime override wins over env config (best-effort; sync context)
+        try:
+            from ..core.settings_service import runtime_settings
+
+            cache = runtime_settings()._cache
+            cap_dl = int(cache.get("max_concurrent_downloads") or s.max_concurrent_downloads)
+        except Exception:
+            cap_dl = s.max_concurrent_downloads
         if key.startswith("acc:"):
-            cap = max(1, s.max_concurrent_downloads // max(1, len(self._backends) or 1))
+            cap = max(1, cap_dl // max(1, len(self._backends) or 1))
         else:
             cap = 2
         if key not in self._sems:

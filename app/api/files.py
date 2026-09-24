@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from ..core.config import get_settings
 from ..core.models import FileRepo, UploadSessionRepo, new_id, now
 from ..core.rate_limit import quota
+from ..core.settings_service import get_runtime
 from ..core.state import get_db, state
 from ..services.presign import make_link
 from ..services.streaming import file_response
@@ -27,10 +28,12 @@ def _safe_name(name: str) -> str:
     return name[:180] or "file"
 
 
-def _ext_blocked(name: str) -> bool:
-    s = get_settings()
+def _ext_blocked(name: str, blocked: str = "") -> bool:
+    if not blocked:
+        blocked = get_settings().blocked_extensions
+    exts = {e.strip().lower() for e in blocked.split(",") if e.strip()}
     low = name.lower()
-    return any(low.endswith(ext) for ext in s.blocked_ext_set)
+    return any(low.endswith(ext) for ext in exts)
 
 
 @router.post("/upload")
@@ -40,11 +43,13 @@ async def upload(
     db=Depends(get_db),
     key=Depends(get_api_key),
 ):
-    """Direct multipart upload (≤ TGDRIVE_MAX_UPLOAD_SIZE)."""
+    """Direct multipart upload (≤ max_upload_size runtime setting)."""
     require_scope(key, "write")
     s = get_settings()
+    max_size = int(await get_runtime(db, "max_upload_size") or s.max_upload_size)
+    blocked = str(await get_runtime(db, "blocked_extensions") or "")
     name = _safe_name(file.filename or "file")
-    if _ext_blocked(name):
+    if _ext_blocked(name, blocked):
         raise HTTPException(status_code=415, detail="file type not allowed")
     mime = file.content_type or mimetypes.guess_type(name)[0] or "application/octet-stream"
 
@@ -57,7 +62,7 @@ async def upload(
         with open(tmp_path, "wb") as out:
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
-                if size > s.max_upload_size:
+                if size > max_size:
                     raise HTTPException(status_code=413, detail="file too large")
                 out.write(chunk)
     except HTTPException:
@@ -67,7 +72,7 @@ async def upload(
             pass
         raise
 
-    backend = (key.get("backend") or "") or get_settings().default_backend
+    backend = (key.get("backend") or "") or (await get_runtime(db, "default_backend")) or get_settings().default_backend
     await FileRepo(db).create(file_id, name, size, mime, uploader=f"key:{key['id']}", source="api", backend=backend)
     await db.audit(f"key:{key['id']}", "file.upload", target=file_id, details=f"{size}B {name} backend={backend}")
     await state.queue.enqueue(
@@ -90,10 +95,11 @@ async def create_session(body: SessionIn, key=Depends(get_api_key), db=Depends(g
     """Resumable chunked upload session."""
     require_scope(key, "write")
     s = get_settings()
-    if body.size > s.max_upload_size:
+    max_size = int(await get_runtime(db, "max_upload_size") or s.max_upload_size)
+    if body.size > max_size:
         raise HTTPException(status_code=413, detail="file too large")
     name = _safe_name(body.name)
-    if _ext_blocked(name):
+    if _ext_blocked(name, str(await get_runtime(db, "blocked_extensions") or "")):
         raise HTTPException(status_code=415, detail="file type not allowed")
     session_id = new_id("us")
     await UploadSessionRepo(db).create(session_id, name, body.size, body.mime or mimetypes.guess_type(name)[0] or "application/octet-stream")
@@ -136,7 +142,7 @@ async def upload_chunk(
     resp = {"offset": new_off, "completed": done}
     if done:
         file_id = new_id("f")
-        backend = (key.get("backend") or "") or get_settings().default_backend
+        backend = (key.get("backend") or "") or (await get_runtime(db, "default_backend")) or get_settings().default_backend
         await FileRepo(db).create(
             file_id, sess["name"], int(sess["size"]), sess["mime"], uploader=f"key:{key['id']}", source="api", backend=backend
         )
@@ -199,7 +205,8 @@ async def make_presigned(file_id: str, body: LinkIn, request: Request, db=Depend
     if not rec or rec["status"] != "ready":
         raise HTTPException(status_code=404, detail="file not found or not ready")
     base = str(request.base_url).rstrip("/")
-    link = make_link(file_id, base_url=base, ttl=body.ttl or get_settings().presigned_ttl, one_time=body.one_time)
+    default_ttl = int(await get_runtime(db, "presigned_ttl") or get_settings().presigned_ttl)
+    link = make_link(file_id, base_url=base, ttl=body.ttl or default_ttl, one_time=body.one_time)
     await db.audit(f"key:{key['id']}", "link.create", target=file_id, details=f"ttl={body.ttl or 'default'}")
     return link
 

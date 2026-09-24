@@ -59,8 +59,14 @@ class Janitor:
                         removed += 1
                 except OSError:
                     pass
-        # expired upload sessions
-        stale = await UploadSessionRepo(self.db).stale(s.upload_session_ttl_minutes * 60)
+        # expired upload sessions (runtime TTL setting wins over env)
+        try:
+            from ..core.settings_service import get_runtime
+
+            ttl_min = int(await get_runtime(self.db, "upload_session_ttl_minutes") or s.upload_session_ttl_minutes)
+        except Exception:
+            ttl_min = s.upload_session_ttl_minutes
+        stale = await UploadSessionRepo(self.db).stale(ttl_min * 60)
         for sess in stale:
             await UploadSessionRepo(self.db).delete(sess["id"])
             path = os.path.join(tmp_dir, f"{sess['id']}.part")

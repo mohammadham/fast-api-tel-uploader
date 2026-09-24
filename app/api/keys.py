@@ -10,6 +10,7 @@ from ..core.config import get_settings
 from ..core.models import ApiKeyRepo
 from ..core.rate_limit import quota
 from ..core.security import generate_api_key
+from ..core.settings_service import get_runtime
 from ..core.state import get_db
 from .deps import get_current_admin
 
@@ -29,17 +30,20 @@ class KeyIn(BaseModel):
 async def list_keys(_: str = Depends(get_current_admin), db=Depends(get_db)):
     rows = await ApiKeyRepo(db).list()
     s = get_settings()
+    dflt_rpm = int(await get_runtime(db, "default_key_rpm") or s.default_key_rpm)
     for r in rows:
         k = f"key:{r['id']}"
         quota.reset_if_new_day(k)
         r["used_bytes_today"] = quota.used(k)
-        r["rpm"] = r["rpm"] or s.default_key_rpm
+        r["rpm"] = r["rpm"] or dflt_rpm
     return {"items": rows}
 
 
 @router.post("")
 async def create_key(body: KeyIn, admin: str = Depends(get_current_admin), db=Depends(get_db)):
     s = get_settings()
+    dflt_rpm = int(await get_runtime(db, "default_key_rpm") or s.default_key_rpm)
+    dflt_quota = int(await get_runtime(db, "default_key_daily_quota") or s.default_key_daily_quota)
     raw = generate_api_key()
     expires_at = (
         __import__("time").time() + body.expires_in_days * 86400 if body.expires_in_days else None
@@ -51,8 +55,8 @@ async def create_key(body: KeyIn, admin: str = Depends(get_current_admin), db=De
         name=body.name.strip() or "unnamed",
         raw_key=raw,
         scopes=body.scopes,
-        rpm=body.rpm or s.default_key_rpm,
-        daily_quota_bytes=int((body.daily_quota_gb or 0) * (1024**3)) or s.default_key_daily_quota,
+        rpm=body.rpm or dflt_rpm,
+        daily_quota_bytes=int((body.daily_quota_gb or 0) * (1024**3)) or dflt_quota,
         expires_at=expires_at,
         backend=backend,
     )

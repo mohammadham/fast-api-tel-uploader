@@ -14,6 +14,7 @@ import heapq
 import json
 import logging
 import os
+import socket
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,6 +25,7 @@ from ..core.config import get_settings
 from ..core.db import Database
 from ..core.metrics import metrics
 from ..core.obs import correlation_id as corr_var, job_id as job_var, slog
+from ..core.settings_service import get_runtime
 from ..core.models import (
     AccountRepo,
     BotRepo,
@@ -50,11 +52,12 @@ RETRY_MAX_DELAY = 60.0
 
 
 class QueueManager:
-    def __init__(self, db: Database, manager: TGManager, bot_service=None) -> None:
+    def __init__(self, db: Database, manager: TGManager, bot_service=None, node_id: str = "") -> None:
         self.db = db
         self.manager = manager
         self.bot_service = bot_service
         self.settings = get_settings()
+        self.node_id = node_id or os.environ.get("TGDRIVE_NODE_ID") or socket.gethostname()
         self.jobs = JobRepo(db)
         self.files = FileRepo(db)
         self._heap: List[Tuple[int, int, str]] = []
@@ -62,11 +65,15 @@ class QueueManager:
         self._wake = asyncio.Event()
         self._paused_kinds: set[str] = set()
         self._workers: List[asyncio.Task] = []
+        self._worker_counts = {"download": 0, "upload": 0}
+        self._worker_seq = {"download": 0, "upload": 0}
         self._stopped = False
         self._redis: Optional[redis.Redis] = None
         self._redis_enabled = self.settings.redis_enabled and self.settings.redis_url
         # Redis connection is initialized lazily on first use to avoid blocking startup
         self._redis_ping_done = False
+        self._lease_task: Optional[asyncio.Task] = None
+        self._hb_task: Optional[asyncio.Task] = None
 
     async def _ensure_redis(self) -> None:
         """Initialize Redis connection if not yet done."""
@@ -88,24 +95,104 @@ class QueueManager:
     async def start(self) -> None:
         self._stopped = False
         await self._recover()
-        s = get_settings()
-        for i in range(max(1, s.download_workers)):
-            self._workers.append(asyncio.create_task(self._worker_loop("download", f"dl{i}")))
-        for i in range(max(1, s.upload_workers)):
-            self._workers.append(asyncio.create_task(self._worker_loop("upload", f"ul{i}")))
-        log.info("queue started with %s workers", len(self._workers))
+        # worker counts: runtime DB settings win over env config
+        dl, ul = self.settings.download_workers, self.settings.upload_workers
+        try:
+            from ..core.settings_service import runtime_settings
+
+            vals = await runtime_settings().get_all(self.db, force=True)
+            dl = int(vals.get("download_workers") or dl)
+            ul = int(vals.get("upload_workers") or ul)
+        except Exception:
+            pass
+        self.set_worker_counts(dl, ul)
+        self._lease_task = asyncio.create_task(self._lease_loop())
+        self._hb_task = asyncio.create_task(self._heartbeat_loop())
+        log.info("queue started (node=%s) with %s workers", self.node_id, len(self._workers))
 
     async def stop(self) -> None:
         self._stopped = True
         self._wake.set()
-        for t in self._workers:
+        for t in self._workers + [t for t in (self._lease_task, self._hb_task) if t]:
             t.cancel()
-        for t in self._workers:
+        for t in self._workers + [t for t in (self._lease_task, self._hb_task) if t]:
             try:
                 await t
             except (asyncio.CancelledError, Exception):
                 pass
         self._workers.clear()
+
+    # ── dynamic worker resizing ───────────────────────────────
+    def set_worker_counts(self, download: int, upload: int) -> None:
+        """Grow/shrink worker pools live (no restart needed)."""
+        download = max(1, int(download))
+        upload = max(1, int(upload))
+        for kind, target in (("download", download), ("upload", upload)):
+            cur = self._worker_counts[kind]
+            prefix = "dl" if kind == "download" else "ul"
+            alive = [t for t in self._workers if not t.done() and t.get_name().startswith(prefix)]
+            if target > len(alive):
+                for _ in range(target - len(alive)):
+                    self._worker_seq[kind] += 1
+                    name = f"{prefix}{self._worker_seq[kind]}"
+                    self._workers.append(asyncio.create_task(self._worker_loop(kind, name), name=name))
+            elif target < len(alive):
+                # mark excess tasks; they exit after their current job finishes
+                to_stop = len(alive) - target
+                for t in alive:
+                    if to_stop <= 0:
+                        break
+                    if not t.get_name().startswith("stop-"):
+                        t.set_name(f"stop-{t.get_name()}")
+                        to_stop -= 1
+            self._worker_counts[kind] = target
+        self._workers = [t for t in self._workers if not t.done()]
+        self._wake.set()
+
+    def worker_counts(self) -> Dict[str, int]:
+        return dict(self._worker_counts)
+
+    # ── lease renewal + node heartbeat (multi-server) ─────────
+    async def _lease_loop(self) -> None:
+        """Renew leases of running jobs so other nodes don't steal them."""
+        while not self._stopped:
+            try:
+                running = [jid for jid, r in self._rows.items() if r.get("status") == "running"]
+                if running:
+                    await self.jobs.renew_leases(running, self.node_id, 1800)
+            except Exception as exc:
+                log.debug("lease renewal failed: %s", exc)
+            await asyncio.sleep(60)
+
+    async def _heartbeat_loop(self) -> None:
+        """Upsert this node into the nodes table (multi-server dashboard)."""
+        version = ""
+        try:
+            from app.main import app as _app
+
+            version = str(getattr(_app, "version", ""))
+        except Exception:
+            pass
+        while not self._stopped:
+            try:
+                await self.db.execute(
+                    "INSERT INTO nodes(node_id, hostname, version, started_at, last_heartbeat, workers_dl, workers_ul)"
+                    " VALUES(?,?,?,?,?,?,?)"
+                    " ON CONFLICT(node_id) DO UPDATE SET hostname=excluded.hostname, version=excluded.version,"
+                    " last_heartbeat=excluded.last_heartbeat, workers_dl=excluded.workers_dl, workers_ul=excluded.workers_ul",
+                    (
+                        self.node_id,
+                        socket.gethostname(),
+                        version,
+                        time.time(),
+                        time.time(),
+                        self._worker_counts["download"],
+                        self._worker_counts["upload"],
+                    ),
+                )
+            except Exception as exc:
+                log.debug("node heartbeat failed: %s", exc)
+            await asyncio.sleep(30)
 
     async def _recover(self) -> None:
         # Recover from Redis if enabled, otherwise SQLite
@@ -159,6 +246,14 @@ class QueueManager:
             max_retries=max_retries if max_retries is not None else self.settings.job_max_retries,
             created_at=now(),
         )
+        # snapshot retry policy + origin node (sticky uploads in multi-server mode)
+        try:
+            runtime_retries = int(await get_runtime(self.db, "job_max_retries"))
+            if runtime_retries and runtime_retries > 0:
+                job.max_retries = runtime_retries
+        except Exception:
+            pass
+        job.origin_node = self.node_id
         await self.jobs.insert(job)
         self._rows[job.id] = {
             "id": job.id, "kind": kind, "priority": priority, "seq": seq, "correlation_id": corr,
@@ -205,10 +300,67 @@ class QueueManager:
     # ── worker loops ───────────────────────────────────────────
     async def _worker_loop(self, worker_kind: str, name: str) -> None:
         while not self._stopped:
-            row = await self._next_job(worker_kind)
+            if name.startswith("stop-"):
+                return  # worker retired by set_worker_counts
+            if not self.db.is_sqlite:
+                row = await self._next_job_pg(worker_kind)
+            else:
+                row = await self._next_job(worker_kind)
             if row is None:
                 return
             await self._process(row, name)
+
+    async def _next_job_pg(self, worker_kind: str) -> Optional[Dict[str, Any]]:
+        """Multi-node claim path: atomic SKIP-LOCKED-style UPDATE ... RETURNING.
+
+        Upload jobs are sticky to their origin node (tmp file lives there);
+        expired leases from dead nodes may be stolen by any node.
+        """
+        from ..core.models import KIND_DOWNLOAD, KIND_UPLOAD, now as _now
+
+        prefix = "dl" if worker_kind == "download" else "ul"
+        while not self._stopped:
+            if prefix == "ul" and KIND_DOWNLOAD in self._paused_kinds:
+                pass
+            conds = [
+                "(status IN ('pending','retry') AND next_run_at <= ?)",
+                "(status IN ('running','lease') AND lease_until < ?)",
+            ]
+            params: List[Any] = [now(), now()]
+            if worker_kind == "upload":
+                conds.append("kind = ?")
+                params.append(KIND_UPLOAD)
+            else:
+                conds.append("kind != ?")
+                params.append("__none__")
+            if self._paused_kinds:
+                ph = ",".join("?" for _ in self._paused_kinds)
+                conds.append(f"kind NOT IN ({ph})")
+                params.extend(sorted(self._paused_kinds))
+            if prefix == "ul":
+                conds.append("(origin_node = ? OR origin_node = '')")
+                params.append(self.node_id)
+            sql = (
+                "UPDATE jobs SET status='running', lease_owner=?, lease_until=?, updated_at=?"
+                " WHERE id = (SELECT id FROM jobs WHERE " + " OR ".join(conds) +
+                " ORDER BY priority DESC, seq LIMIT 1)"
+                " RETURNING *"
+            )
+            full_params = [f"{self.node_id}/{prefix}", now() + 1800, now()] + params
+            try:
+                row = await self.db.fetch_one(sql, full_params)
+            except Exception as exc:
+                log.debug("pg claim failed: %s", exc)
+                row = None
+            if row:
+                self._rows[row["id"]] = dict(row)
+                return dict(row)
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
+            self._wake.clear()
+        return None
 
     async def _next_job(self, worker_kind: str) -> Optional[Dict[str, Any]]:
         """Block until a runnable job for this worker kind is available."""
@@ -374,6 +526,10 @@ class QueueManager:
         size = int(rec["size"])
         t_upload = time.perf_counter()
         s = get_settings()
+        try:
+            split_at = int(await get_runtime(self.db, "split_threshold") or s.split_threshold)
+        except Exception:
+            split_at = s.split_threshold
         backend = payload.get("backend") or rec.get("backend") or "telegram"
 
         message_ids: List[int] = []
@@ -382,9 +538,9 @@ class QueueManager:
         async with borrowed as be:
             account_key = borrowed.key
             storage_chat = rec["storage_chat"] or getattr(be, "storage_chat", "me") or ""
-            if size > s.split_threshold and backend != "eitaa":
+            if size > split_at and backend != "eitaa":
                 # split into parts below the MTProto 2GB cap
-                part_size = s.split_threshold
+                part_size = split_at
                 part_paths = await self._split_file(tmp_path, part_size)
                 try:
                     for idx, ppath in enumerate(part_paths):

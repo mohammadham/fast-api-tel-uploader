@@ -787,3 +787,64 @@ async def create_share(token, file_id, slug="my-file"):
         )
         return resp.json()
 ```
+## Admin: Runtime Settings / Setup / Nodes (v2.1)
+
+All endpoints require admin JWT (panel login).
+
+### GET /api/v1/admin/settings
+List editable runtime settings with effective value + source.
+
+Response: `{"items": [{"key","group","type","description","current","env_value","db_value","source","read_only"}]}`
+
+Groups: `limits`, `links`, `queue`, `backend`.
+Keys: `max_upload_size`, `split_threshold`, `default_key_rpm`, `default_key_daily_quota`,
+`blocked_extensions`, `presigned_ttl`, `upload_session_ttl_minutes`, `job_max_retries`,
+`download_workers`, `upload_workers`, `max_concurrent_downloads`, `max_concurrent_uploads`,
+`default_backend`.
+
+Priority: DB value (saved from panel) > env/config default. Worker-count changes are
+applied live (no restart). Sensitive keys (secret, db_path, redis_url, admin creds)
+remain env-only.
+
+### PUT /api/v1/admin/settings
+Body: `{"<key>": value, ...}` — validates type/range; unknown keys → 400.
+Applies live side effects (worker resize). Audited as `settings.update`.
+
+### POST /api/v1/admin/settings/reset
+Delete all DB overrides → back to env defaults.
+
+### GET /api/v1/admin/setup/status
+`{"initialized": bool, "initialized_at": float}` — starter flag stored in `system_meta`.
+Fresh installs show `initialized: false` until the panel wizard completes.
+Existing installs are auto-marked initialized on startup (env password or existing data).
+
+### POST /api/v1/admin/setup/complete
+Body: `{"new_password": "", "default_backend": "telegram"|"eitaa"}` (both optional).
+Sets the admin password (min 6 chars) and/or default backend, then flips the
+`initialized` flag. Audited as `setup.complete`.
+
+### GET /api/v1/admin/nodes
+Node registry for multi-server mode: `{"items": [{"node_id","hostname","version",
+"started_at","last_heartbeat","workers_dl","workers_ul"}], "node_id": <this node>}`.
+Nodes heartbeat every 30s. In SQLite single-server mode one node (this host) appears.
+
+### GET /api/v1/admin/backup  |  POST /api/v1/admin/restore
+Rewritten v2.1. Backup returns JSON `{ts, tables, data}` where `data` is
+base64(gzip(JSON rows)) for files/file_parts/tg_accounts/bot_tokens/eitaa_accounts/
+api_keys/links — encrypted secrets (sessions/tokens) are excluded.
+Restore body: `{"data": "<same base64 payload>"}`; rows are inserted idempotently
+(INSERT OR IGNORE / ON CONFLICT DO NOTHING).
+
+## Multi-server deployment (v2.1)
+
+- Set the **same `TGDRIVE_SECRET` and `TGDRIVE_FERNET_KEY`** on every node (sessions,
+  JWTs and presigned links are verified independently per node).
+- Point every node at the shared Postgres: `TGDRIVE_DATABASE_URL=postgres://...`
+- Give every node a unique `TGDRIVE_NODE_ID` (default: hostname).
+- Optional shared Redis: `TGDRIVE_REDIS_ENABLED=true` + `TGDRIVE_REDIS_URL`.
+- Job claiming on Postgres is atomic (UPDATE...RETURNING with lease semantics);
+  leases renew every 60s and expired leases from dead nodes are stolen automatically.
+- **Upload jobs are sticky to their origin node** (the tmp file lives on that node's
+  disk). If a node dies mid-upload the job fails after retries — re-upload required.
+- Runtime settings are shared via the `settings` table (≤10s convergence) and worker
+  resize applies on every node.

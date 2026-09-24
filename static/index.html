@@ -333,6 +333,75 @@
       <button class="ghost" style="width:100%" @click="qrDlg.open = false">بستن</button>
     </dialog>
 
+    <!-- Settings tab -->
+      <section v-show="tab === 'settings'">
+        <div class="toolbar">
+          <h3 style="margin:0;flex:1;font-size:16px">تنظیمات سیستم (Runtime)</h3>
+          <button class="ghost" @click="resetSettings">بازگشت به پیش‌فرض</button>
+          <button class="primary" :disabled="settingsBusy" @click="saveSettings">ذخیره و اعمال</button>
+        </div>
+        <div v-for="g in settingsGroups" :key="g.id" class="card wide" style="margin-bottom:14px">
+          <h3 style="font-size:15px;margin:0 0 10px">{{ g.title }}</h3>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">
+            <div class="field" v-for="it in g.items" :key="it.key">
+              <label>{{ settingLabels[it.key] || it.key }} <span class="muted" style="font-size:11px">{{ fmtSettingHint(it) }} ({{ it.source === 'db' ? 'ذخیره‌شده' : 'پیش‌فرض env' }})</span></label>
+              <select v-if="it.key === 'default_backend'" v-model="settingsDraft[it.key]">
+                <option value="telegram">تلگرام</option>
+                <option value="eitaa">ایتا</option>
+              </select>
+              <input v-else v-model="settingsDraft[it.key]" :type="it.type === 'int' ? 'number' : 'text'">
+            </div>
+          </div>
+        </div>
+
+        <div class="card wide" style="margin-bottom:14px">
+          <h3 style="font-size:15px;margin:0 0 10px">نودهای متصل (چندسرور)</h3>
+          <table>
+            <thead><tr><th>نود</th><th>هاست</th><th>ورکرها (dl/ul)</th><th>آخرین ضربان</th></tr></thead>
+            <tbody>
+              <tr v-for="n in nodesList" :key="n.node_id">
+                <td dir="ltr">{{ n.node_id }}</td><td dir="ltr">{{ n.hostname }}</td>
+                <td>{{ n.workers_dl }} / {{ n.workers_ul }}</td>
+                <td>{{ fmtTime(n.last_heartbeat) }}</td>
+              </tr>
+              <tr v-if="!nodesList.length"><td colspan="4" class="muted">نودی ثبت نشده (حالت تک‌سرور)</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card wide">
+          <h3 style="font-size:15px;margin:0 0 10px">راه‌اندازی اولیه (استارتر)</h3>
+          <p class="muted" style="font-size:13px;margin:0 0 8px" v-if="setupNeeded">سیستم هنوز تکمیل راه‌اندازی نشده است.</p>
+          <p class="muted" style="font-size:13px;margin:0 0 8px" v-else>راه‌اندازی اولیه انجام شده است. ✅</p>
+          <button class="primary" @click="setupDlg.open = true; setupDlg.step = 1">باز کردن ویزارد</button>
+        </div>
+      </section>
+
+      <!-- Setup wizard dialog -->
+      <dialog :open="setupDlg.open" @close="setupDlg.open = false">
+        <h3>راه‌اندازی اولیه — مرحله {{ setupDlg.step }} از ۳</h3>
+        <template v-if="setupDlg.step === 1">
+          <p class="muted" style="font-size:13px">رمز ادمین را تغییر دهید (اختیاری — خالی بگذارید تا تغییر نکند).</p>
+          <div class="field"><label>رمز جدید</label><input v-model="setupDlg.pass" type="password" autocomplete="new-password"></div>
+          <div class="field"><label>تکرار رمز</label><input v-model="setupDlg.pass2" type="password" autocomplete="new-password"></div>
+        </template>
+        <template v-else-if="setupDlg.step === 2">
+          <p class="muted" style="font-size:13px">برای افزودن اکانت تلگرام/بات/ایتایار از تب‌های «اکانت‌ها»، «بات‌ها» و «ایتا» استفاده کنید، سپس برگردید و مرحله بعد را بزنید.</p>
+        </template>
+        <template v-else>
+          <div class="field">
+            <label>بک‌اند پیش‌فرض ذخیره‌سازی</label>
+            <select v-model="setupDlg.backend">
+              <option value="telegram">تلگرام</option>
+              <option value="eitaa">ایتا</option>
+            </select>
+          </div>
+        </template>
+        <p class="err">{{ setupDlg.msg }}</p>
+        <button class="primary" style="width:100%" @click="setupNext">{{ setupDlg.step === 3 ? "تکمیل راه‌اندازی" : "مرحله بعد" }}</button>
+        <button class="ghost" style="width:100%" @click="setupSkip">فعلاً نه</button>
+      </dialog>
+
     <!-- Toast -->
     <div class="toast" :class="{error: toast.err}" v-show="toast.msg" role="status" aria-live="polite">{{ toast.msg }}</div>
   </template>

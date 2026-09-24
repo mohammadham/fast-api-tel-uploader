@@ -19,6 +19,7 @@ const app = createApp({
       { id: "files", label: "فایل‌ها" },
       { id: "queue", label: "صف" },
       { id: "audit", label: "لاگ‌ها" },
+      { id: "settings", label: "تنظیمات" },
     ];
     const toast = reactive({ msg: "", err: false });
     let toastTimer = null;
@@ -39,6 +40,7 @@ const app = createApp({
     const audit = ref([]);
     const queueStats = ref({});
     const overview = ref(null);
+    const nodesList = ref([]);
     const uploadBusy = ref(false);
     const uploadProgress = ref("");
     const uploadPct = ref(0); // 0-100, real XHR progress
@@ -100,6 +102,7 @@ const app = createApp({
         localStorage.setItem("td_refresh", refresh.value);
         login.pass = "";
         await switchTab("dash");
+        checkSetup();
         showToast("خوش آمدید");
       } catch (e) { login.err = e.message || "نام کاربری یا رمز اشتباه است"; }
       login.busy = false;
@@ -129,6 +132,7 @@ const app = createApp({
         ["اکانت‌های فعال", `${ov.accounts.ready} / ${ov.accounts.total}`],
         ["بات‌ها", ov.bots],
         ["صف (در انتظار)", ov.queue.pending],
+        ["نودها", ov.nodes != null ? ov.nodes : 1],
         ["آپ‌تایم", Math.round(ov.uptime / 60) + " دقیقه"],
       ];
     });
@@ -171,6 +175,99 @@ const app = createApp({
       try { const d = await api("/api/v1/admin/audit"); audit.value = d.items || []; }
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
+
+    /* ---------- runtime settings (admin) ---------- */
+    const settingsItems = ref([]);
+    const settingsDraft = reactive({});
+    const settingsBusy = ref(false);
+    const settingLabels = {
+      max_upload_size: "حداکثر حجم آپلود (بایت)",
+      split_threshold: "آستانه تقسیم فایل (بایت)",
+      default_key_rpm: "RPM پیش‌فرض کلیدها",
+      default_key_daily_quota: "سهمیه روزانه پیش‌فرض (بایت)",
+      blocked_extensions: "پسوندهای مسدود",
+      presigned_ttl: "TTL لینک امضاشده (ثانیه)",
+      upload_session_ttl_minutes: "TTL سشن آپلود (دقیقه)",
+      job_max_retries: "حداکثر تلاش مجدد جاب",
+      download_workers: "ورکرهای دانلود",
+      upload_workers: "ورکرهای آپلود",
+      max_concurrent_downloads: "دانلود همزمان هر اکانت",
+      max_concurrent_uploads: "آپلود همزمان",
+      default_backend: "بک‌اند پیش‌فرض",
+    };
+    const settingsGroups = computed(() => {
+      const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", backend: "بک‌اند" };
+      const out = [];
+      for (const [gid, title] of Object.entries(g)) {
+        out.push({ id: gid, title, items: settingsItems.value.filter((x) => x.group === gid) });
+      }
+      return out;
+    });
+    loaders.settings = async () => {
+      try {
+        const [s, n] = await Promise.all([api("/api/v1/admin/settings"), api("/api/v1/admin/nodes")]);
+        settingsItems.value = s.items || [];
+        for (const it of settingsItems.value) settingsDraft[it.key] = it.current;
+        nodesList.value = n.items || [];
+      } catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    };
+    async function saveSettings() {
+      settingsBusy.value = true;
+      try {
+        const updates = {};
+        for (const it of settingsItems.value) {
+          const v = settingsDraft[it.key];
+          if (v !== it.current && v !== "" && v != null) updates[it.key] = it.type === "int" ? Number(v) : String(v);
+        }
+        if (!Object.keys(updates).length) { showToast("تغییری برای ذخیره نیست"); return; }
+        await api("/api/v1/admin/settings", { method: "PUT", json: updates });
+        showToast("تنظیمات ذخیره و اعمال شد");
+        await loaders.settings();
+      } catch (e) { showToast("خطا: " + e.message, 4500, true); }
+      settingsBusy.value = false;
+    }
+    async function resetSettings() {
+      if (!confirm("همه تنظیمات به پیش‌فرض env برگردد؟")) return;
+      await api("/api/v1/admin/settings/reset", { method: "POST" });
+      showToast("به پیش‌فرض برگشت");
+      await loaders.settings();
+    }
+    function fmtSettingHint(it) {
+      if (it.key.includes("size") || it.key.includes("quota")) return " (= " + fmtBytes(it.current) + ")";
+      return "";
+    }
+
+    /* ---------- setup wizard (starter) ---------- */
+    const setupDlg = reactive({ open: false, step: 1, pass: "", pass2: "", backend: "telegram", msg: "" });
+    const setupNeeded = ref(false);
+    async function checkSetup() {
+      try {
+        const d = await api("/api/v1/admin/setup/status");
+        setupNeeded.value = !d.initialized;
+        if (!d.initialized) { Object.assign(setupDlg, { open: true, step: 1, pass: "", pass2: "", backend: "telegram", msg: "" }); }
+      } catch (e) { /* non-admin or transient: ignore */ }
+    }
+    async function setupNext() {
+      if (setupDlg.step === 1) {
+        if (setupDlg.pass || setupDlg.pass2) {
+          if (setupDlg.pass.length < 6) { setupDlg.msg = "رمز حداقل ۶ کاراکتر باشد"; return; }
+          if (setupDlg.pass !== setupDlg.pass2) { setupDlg.msg = "تکرار رمز مطابقت ندارد"; return; }
+        }
+        setupDlg.msg = ""; setupDlg.step = 2;
+      } else if (setupDlg.step === 2) {
+        setupDlg.step = 3;
+      } else {
+        try {
+          await api("/api/v1/admin/setup/complete", { method: "POST", json: { new_password: setupDlg.pass || "", default_backend: setupDlg.backend } });
+          setupDlg.open = false; setupNeeded.value = false;
+          showToast("راه‌اندازی اولیه کامل شد");
+        } catch (e) { setupDlg.msg = e.message; }
+      }
+    }
+    function setupSkip() {
+      setupDlg.open = false;
+      showToast("می‌توانید بعداً از تب تنظیمات ادامه دهید");
+    }
 
     /* ---------- accounts ---------- */
     function accOpen() { Object.assign(accDlg, { open: true, step: 1, phone: "", label: "", code: "", pass: "", msg: "", loginId: "" }); }
@@ -234,7 +331,6 @@ const app = createApp({
     async function keyRevoke(k) { if (confirm("این کلید برای همیشه باطل شود؟")) { await api(`/api/v1/keys/${k.id}`, { method: "DELETE" }); loaders.keys(); } }
 
     /* ---------- files ---------- */
-    const uploadPct = ref(0); // 0-100, real XHR progress
     let cancelXHR = null;
     async function startResumableUpload(file) {
       // Create upload session
@@ -342,13 +438,16 @@ const app = createApp({
     async function restoreDB() { const f = document.getElementById('restoreInput').files[0]; if (!f) return; const formData = new FormData(); formData.append('backup', f); await api("/api/v1/admin/restore", { method: "POST", body: formData, json: false }); }
 
     /* ---------- boot ---------- */
-    onMounted(() => { if (token.value) switchTab("dash"); });
+    onMounted(() => { if (token.value) { switchTab("dash"); checkSetup(); } });
 
     return {
       token, login, tab, tabList, toast,
       health, accounts, bots, eitaas, keys, files, jobs, audit, queueStats,
       uploadBusy, uploadProgress, uploadPct, nowSec, dashCards,
       accDlg, botDlg, eitDlg, keyDlg, qrDlg,
+      nodesList, settingsItems, settingsDraft, settingsGroups, settingsBusy,
+      saveSettings, resetSettings, fmtSettingHint, settingLabels,
+      setupDlg, setupNeeded, setupNext, setupSkip,
       doLogin: submitLogin, logout, switchTab, fmtBytes, fmtTime,
       accOpen, accSend, accDone, accToggle, accTest, accReset, accDelete,
       botSave, botToggle, botDelete,

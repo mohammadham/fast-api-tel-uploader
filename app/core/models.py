@@ -59,6 +59,7 @@ class Job:
     next_run_at: float = 0.0
     lease_until: float = 0.0
     lease_owner: str = ""
+    origin_node: str = ""
     created_at: float = 0.0
     updated_at: float = 0.0
     finished_at: Optional[float] = None
@@ -78,6 +79,14 @@ class UserRepo:
         await self.db.execute(
             "INSERT INTO users(username, password_hash, role, created_at) VALUES(?,?, 'admin', ?)",
             (username, hash_password(password), now()),
+        )
+
+    async def set_password(self, username: str, password: str) -> None:
+        from .security import hash_password
+
+        await self.db.execute(
+            "UPDATE users SET password_hash=? WHERE username=?",
+            (hash_password(password), username),
         )
 
     async def get(self, username: str) -> Optional[Dict[str, Any]]:
@@ -169,13 +178,16 @@ class AccountRepo:
         self.db = db
 
     async def create(self, label: str, phone: str = "", session_enc: str = "", is_premium: bool = False) -> int:
-        cur_last = await self.db.scalar("SELECT COALESCE(MAX(id),0) FROM tg_accounts")
-        await self.db.execute(
+        sql = (
             "INSERT INTO tg_accounts(label, phone, session_enc, is_premium, status, created_at)"
-            " VALUES(?,?,?,?, 'pending', ?)",
-            (label, phone, session_enc, int(is_premium), now()),
+            " VALUES(?,?,?,?, 'pending', ?)"
         )
-        return int(cur_last) + 1
+        params = (label, phone, session_enc, int(is_premium), now())
+        if self.db.is_sqlite:
+            await self.db.execute(sql, params)
+            return await self.db.last_insert_rowid()
+        row = await self.db.fetch_one(sql + " RETURNING id", params)
+        return int(row["id"]) if row else 0
 
     async def list(self) -> List[Dict[str, Any]]:
         return await self.db.fetch_all(
@@ -238,12 +250,13 @@ class BotRepo:
         self.db = db
 
     async def create(self, label: str, token_enc: str) -> int:
-        nxt = int(await self.db.scalar("SELECT COALESCE(MAX(id),0) FROM bot_tokens") or 0) + 1
-        await self.db.execute(
-            "INSERT INTO bot_tokens(label, token_enc, status, created_at) VALUES(?,?, 'pending', ?)",
-            (label, token_enc, now()),
-        )
-        return nxt
+        sql = "INSERT INTO bot_tokens(label, token_enc, status, created_at) VALUES(?,?, 'pending', ?)"
+        params = (label, token_enc, now())
+        if self.db.is_sqlite:
+            await self.db.execute(sql, params)
+            return await self.db.last_insert_rowid()
+        row = await self.db.fetch_one(sql + " RETURNING id", params)
+        return int(row["id"]) if row else 0
 
     async def list(self) -> List[Dict[str, Any]]:
         return await self.db.fetch_all(
@@ -270,12 +283,13 @@ class EitaaAccountRepo:
         self.db = db
 
     async def create(self, label: str, token_enc: str, chat_id: str) -> int:
-        nxt = int(await self.db.scalar("SELECT COALESCE(MAX(id),0) FROM eitaa_accounts") or 0) + 1
-        await self.db.execute(
-            "INSERT INTO eitaa_accounts(label, token_enc, chat_id, status, created_at) VALUES(?,?,?, 'pending', ?)",
-            (label, token_enc, chat_id, now()),
-        )
-        return nxt
+        sql = "INSERT INTO eitaa_accounts(label, token_enc, chat_id, status, created_at) VALUES(?,?,?, 'pending', ?)"
+        params = (label, token_enc, chat_id, now())
+        if self.db.is_sqlite:
+            await self.db.execute(sql, params)
+            return await self.db.last_insert_rowid()
+        row = await self.db.fetch_one(sql + " RETURNING id", params)
+        return int(row["id"]) if row else 0
 
     async def list(self) -> List[Dict[str, Any]]:
         return await self.db.fetch_all(
@@ -386,8 +400,8 @@ class JobRepo:
 
         await self.db.execute(
             "INSERT INTO jobs(id, kind, priority, seq, correlation_id, status, payload, attempts, max_retries,"
-            " next_run_at, lease_until, lease_owner, created_at, updated_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " next_run_at, lease_until, lease_owner, origin_node, created_at, updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 job.id,
                 job.kind,
@@ -401,6 +415,7 @@ class JobRepo:
                 job.next_run_at,
                 job.lease_until,
                 job.lease_owner,
+                job.origin_node,
                 job.created_at or now(),
                 now(),
             ),
@@ -456,6 +471,16 @@ class JobRepo:
     async def purge_finished(self, older_than: float) -> int:
         return await self.db.execute(
             "DELETE FROM jobs WHERE status IN ('done','failed') AND finished_at < ?", (older_than,)
+        )
+
+    async def renew_leases(self, job_ids: List[str], owner: str, ttl: float) -> None:
+        """Extend lease_until for jobs still running on this node."""
+        if not job_ids:
+            return
+        ph = ",".join("?" for _ in job_ids)
+        await self.db.execute(
+            f"UPDATE jobs SET lease_until=?, updated_at=? WHERE id IN ({ph}) AND lease_owner LIKE ?",
+            (now() + ttl, now(), *job_ids, f"{owner}%"),
         )
 
 

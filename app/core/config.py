@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     redis_url: str = ""  # e.g. redis://localhost:6379/0 (empty → SQLite only)
     redis_enabled: bool = False
 
+    # ── external database / multi-server ──
+    database_url: str = ""  # postgres://… (empty → local SQLite); MySQL not supported
+    node_id: str = ""  # unique per server in multi-node deploys (default: hostname)
+
     @property
     def blocked_ext_set(self) -> set[str]:
         return {e.strip().lower() for e in self.blocked_extensions.split(",") if e.strip()}

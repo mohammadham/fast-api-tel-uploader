@@ -38,9 +38,8 @@ async def lifespan(app: FastAPI):
     os.makedirs(s.data_dir, exist_ok=True)
     os.makedirs(s.final_tmp_dir(), exist_ok=True)
 
-    db = Database(s.final_db_path())
-    await db.connect()
-    state.db = db
+    db = await state.db_instance()
+    state.node_id = s.node_id or state.node_id
 
     # bootstrap admin
     username = s.admin_username or "admin"
@@ -60,12 +59,25 @@ async def lifespan(app: FastAPI):
             log.warning("generated admin password stored at %s", pwd_file)
     await UserRepo(db).ensure_admin(username, password)
 
+    # starter flag migration: installs that already have data/env password are initialized
+    from app.core.settings_service import is_initialized, mark_initialized
+
+    if not await is_initialized(db):
+        has_data = False
+        for t in ("api_keys", "tg_accounts", "bot_tokens", "eitaa_accounts", "files"):
+            if (await db.scalar(f"SELECT COUNT(*) FROM {t}") or 0) > 0:
+                has_data = True
+                break
+        if s.admin_password or has_data:
+            await mark_initialized(db)
+            log.info("existing install detected → marked initialized")
+
     # services
     manager = TGManager(db)
     await manager.start()
     state.manager = manager
 
-    queue = QueueManager(db, manager)
+    queue = QueueManager(db, manager, node_id=s.node_id or "")
     state.queue = queue
 
     bots = BotService(db, manager, queue)
