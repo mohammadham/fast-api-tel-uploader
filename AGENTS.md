@@ -18,3 +18,4 @@
 ## ایتا (ایتایار)
 - API فقط ارسال: `POST /api/{token}/sendFile` multipart → `{"status":"success","message_id":...}`؛ دانلود فقط اسکرپ صفحه‌ی عمومی کانال؛ حذف API ندارد
 - مقصد ایتا باید کانال عمومی باشد و @sender مدیرش شود
+- **درس regex (باگ c21c61c):** در `_DOWNLOAD` (eitaa_backend.py) علامت `?` لیترالِ URL باید `\?` باشد. الگوی `...{8,64}?token=` کامپایل می‌شود و SyntaxError نمی‌دهد، ولی `?` را lazy-quantifier می‌گیرد → الگو دنبال `token=` بلافاصله بعد از hex می‌گردد و هرگز با URL واقعی (`hex?token=`) match نمی‌شود. علامت: تست‌های اسکرپر همیشه None برمی‌گردانند و به‌اشتباه شبیه «تغییر markup ایتا» به‌نظر می‌رسند. قبل از مقصر دانستن markup سایت، regex را با URL نمونه‌ی خود تست جدا تست کن (`re.search(pattern, sample_url)`).
