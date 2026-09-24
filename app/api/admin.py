@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+from ..core.config import get_settings
 from ..core.metrics import metrics
 from ..core.state import get_db, state
 from .deps import get_current_admin
@@ -176,17 +177,33 @@ async def reset_settings(admin: str = Depends(get_current_admin), db=Depends(get
 # ── setup wizard (first-run flag in system_meta) ─────────────────
 @router.get("/setup/status")
 async def setup_status(_: str = Depends(get_current_admin), db=Depends(get_db)):
+    from ..core import state as app_state
     from ..core.settings_service import get_meta
 
+    s = get_settings()
+    pg_configured = bool((s.database_url or "").strip().startswith(("postgres://", "postgresql://")))
+    engine = "postgres" if (db is not None and not getattr(db, "is_sqlite", True)) else "sqlite"
     return {
         "initialized": (await get_meta(db, "initialized")) == "1",
         "initialized_at": float(await get_meta(db, "initialized_at") or 0),
+        "database": {
+            "engine": engine,
+            "pg_configured": pg_configured,
+            "pg_error": app_state.db_error if engine == "sqlite" and pg_configured else "",
+            "hint": (
+                "postgres در .env تنظیم شده اما در دسترس نیست — سرویس با SQLite ادامه می‌دهد؛ "
+                "URL/دسترسی را بررسی کنید یا SQLite را انتخاب کنید"
+                if engine == "sqlite" and pg_configured
+                else ""
+            ),
+        },
     }
 
 
 class SetupCompleteIn(BaseModel):
     new_password: str = ""
     default_backend: str = ""
+    db_engine: str = ""  # 'sqlite' | 'postgres' — wizard choice (postgres only honored when reachable)
 
 
 @router.post("/setup/complete")
@@ -196,12 +213,31 @@ async def setup_complete(
     db=Depends(get_db),
 ):
     from ..core.models import UserRepo
-    from ..core.settings_service import get_meta, set_meta
+    from ..core.settings_service import get_meta, set_meta, set_engine_hint
 
     if body.new_password:
         if len(body.new_password) < 6:
             raise HTTPException(status_code=400, detail="password too short (min 6)")
         await UserRepo(db).set_password(admin, body.new_password)
+    if body.db_engine:
+        engine = body.db_engine.strip().lower()
+        if engine not in ("sqlite", "postgres"):
+            raise HTTPException(status_code=400, detail="db_engine must be 'sqlite' or 'postgres'")
+        if engine == "postgres" and db.is_sqlite:
+            s = get_settings()
+            if not (s.database_url or "").strip().startswith(("postgres://", "postgresql://")):
+                raise HTTPException(
+                    status_code=400,
+                    detail="postgres انتخاب شد اما TGDRIVE_DATABASE_URL در .env تنظیم نشده؛ ابتدا URL را تنظیم و سرویس را ری‌استارت کنید",
+                )
+            if state.db_error:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"postgres در دسترس نیست: {state.db_error[:200]} — اتصال را برقرار کنید یا sqlite را انتخاب کنید",
+                )
+        # persist the wizard's engine choice (honored on next restarts)
+        await set_meta(db, "db_engine", engine)
+        set_engine_hint(engine)
     if body.default_backend:
         be = body.default_backend.strip().lower()
         if be not in ("telegram", "eitaa"):

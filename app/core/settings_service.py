@@ -237,12 +237,39 @@ async def get_meta(db, key: str) -> str:
     return str(row["value"]) if row else ""
 
 
+# wizard's engine choice is read during DB bootstrap (before any DB exists),
+# so it is cached in-process from the last known value + seeded from env
+_engine_hint: Optional[str] = None
+
+
+def get_meta_sync_hint() -> Optional[str]:
+    """Last-known wizard engine choice without a DB handle ('sqlite'|'postgres'|None).
+
+    Seeded from TGDRIVE_DB_ENGINE env so a deliberate sqlite choice survives
+    restarts even before system_meta can be read.
+    """
+    global _engine_hint
+    if _engine_hint is None:
+        import os
+
+        env = (os.environ.get("TGDRIVE_DB_ENGINE") or "").strip().lower()
+        _engine_hint = env if env in ("sqlite", "postgres") else None
+    return _engine_hint
+
+
+def set_engine_hint(value: Optional[str]) -> None:
+    global _engine_hint
+    _engine_hint = value if value in ("sqlite", "postgres") else None
+
+
 async def set_meta(db, key: str, value: str) -> None:
     await db.execute(
         "INSERT INTO system_meta(key, value) VALUES(?,?)"
         " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (key, value),
     )
+    if key == "db_engine":
+        set_engine_hint(value or None)
 
 
 async def mark_initialized(db) -> bool:

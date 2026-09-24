@@ -468,6 +468,19 @@
               <option value="eitaa">ایتا</option>
             </select>
           </div>
+          <div class="field">
+            <label>دیتابیس</label>
+            <select v-model="setupDlg.dbEngine">
+              <option value="sqlite">SQLite (محلی — بدون تنظیمات)</option>
+              <option value="postgres" :disabled="!setupDlg.dbInfo || !setupDlg.dbInfo.pg_configured">
+                PostgreSQL {{ setupDlg.dbInfo && setupDlg.dbInfo.pg_configured ? (setupDlg.dbInfo.engine === 'postgres' ? '(فعال)' : '(از ری‌استارت بعدی)') : '(در .env تنظیم نشده)' }}
+              </option>
+            </select>
+          </div>
+          <p v-if="setupDlg.dbInfo && setupDlg.dbInfo.pg_error" class="err" style="font-size:12px">
+            Postgres در دسترس نیست: {{ setupDlg.dbInfo.pg_error }}
+          </p>
+          <p v-if="setupDlg.dbInfo && setupDlg.dbInfo.hint" class="muted" style="font-size:12px">{{ setupDlg.dbInfo.hint }}</p>
         </template>
         <p class="err">{{ setupDlg.msg }}</p>
         <button class="primary" style="width:100%" @click="setupNext">{{ setupDlg.step === 3 ? "تکمیل راه‌اندازی" : "مرحله بعد" }}</button>
@@ -821,13 +834,19 @@ const doLogin = submitLogin;
     }
 
     /* ---------- setup wizard (starter) ---------- */
-    const setupDlg = reactive({ open: false, step: 1, pass: "", pass2: "", backend: "telegram", msg: "" });
+    const setupDlg = reactive({ open: false, step: 1, pass: "", pass2: "", backend: "telegram", dbEngine: "", dbInfo: null, msg: "" });
     const setupNeeded = ref(false);
     async function checkSetup() {
       try {
         const d = await api("/api/v1/admin/setup/status");
         setupNeeded.value = !d.initialized;
-        if (!d.initialized) { Object.assign(setupDlg, { open: true, step: 1, pass: "", pass2: "", backend: "telegram", msg: "" }); }
+        if (!d.initialized) {
+          Object.assign(setupDlg, {
+            open: true, step: 1, pass: "", pass2: "", backend: "telegram", msg: "",
+            dbEngine: d.database?.engine === "postgres" ? "postgres" : (d.database?.pg_configured ? "" : "sqlite"),
+            dbInfo: d.database || null,
+          });
+        }
       } catch (e) { /* non-admin or transient: ignore */ }
     }
     async function setupNext() {
@@ -841,9 +860,14 @@ const doLogin = submitLogin;
         setupDlg.step = 3;
       } else {
         try {
-          await api("/api/v1/admin/setup/complete", { method: "POST", json: { new_password: setupDlg.pass || "", default_backend: setupDlg.backend } });
+          await api("/api/v1/admin/setup/complete", { method: "POST", json: {
+            new_password: setupDlg.pass || "",
+            default_backend: setupDlg.backend,
+            db_engine: setupDlg.dbEngine || "",
+          } });
           setupDlg.open = false; setupNeeded.value = false;
           showToast("راه‌اندازی اولیه کامل شد");
+          if (setupDlg.dbEngine === "postgres") showToast("انتخاب Postgres در ری‌استارت بعدی اعمال می‌شود", 5000);
         } catch (e) { setupDlg.msg = e.message; }
       }
     }
