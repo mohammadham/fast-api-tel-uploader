@@ -7,6 +7,7 @@ import csv
 import gzip
 import io
 import json
+import os
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -172,6 +173,44 @@ async def reset_settings(admin: str = Depends(get_current_admin), db=Depends(get
 
     await reset_runtime_settings(db, actor=admin)
     return {"ok": True}
+
+
+# ── setup wizard: .env provisioning ──────────────────────────
+@router.get("/setup/env")
+async def setup_env_get(_: str = Depends(get_current_admin)):
+    """Bootstrap-key status for the wizard (secrets masked, never returned)."""
+    from ..services import env_service
+
+    return env_service.env_status()
+
+
+class SetupEnvIn(BaseModel):
+    values: dict[str, str] = {}
+    generate_secret: bool = False  # auto-fill TGDRIVE_SECRET when unset
+
+
+@router.put("/setup/env")
+async def setup_env_put(body: SetupEnvIn, admin: str = Depends(get_current_admin)):
+    """Write bootstrap values into .env (creates the file when missing).
+
+    Applies only keys the admin actually sent; TGDRIVE_SECRET can be
+    auto-generated. Process env wins until restart, so the response reminds
+    the admin which keys need a restart to take effect.
+    """
+    from ..services import env_service
+
+    values = dict(body.values or {})
+    if body.generate_secret:
+        current = (os.environ.get("TGDRIVE_SECRET") or "").strip() or env_service.read_env_file().get("TGDRIVE_SECRET", "").strip()
+        if not current:
+            values.setdefault("TGDRIVE_SECRET", env_service.generate_secret())
+    try:
+        result = env_service.write_env_values(values, actor=admin)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    # which of the written keys are shadowed by process env until restart?
+    stale = [k for k in result["written"] if (os.environ.get(k) or "").strip()]
+    return {**result, "restart_keys": stale}
 
 
 # ── setup wizard (first-run flag in system_meta) ─────────────────

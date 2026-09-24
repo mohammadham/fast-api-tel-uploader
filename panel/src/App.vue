@@ -451,8 +451,28 @@
 
       <!-- Setup wizard dialog -->
       <dialog :open="setupDlg.open" @close="setupDlg.open = false">
-        <h3>راه‌اندازی اولیه — مرحله {{ setupDlg.step }} از ۳</h3>
-        <template v-if="setupDlg.step === 1">
+        <h3>راه‌اندازی اولیه — مرحله {{ setupDlg.step + 1 }} از ۴</h3>
+        <template v-if="setupDlg.step === 0">
+          <p class="muted" style="font-size:13px">
+            تنظیمات اولیه فایل <code>.env</code> {{ setupDlg.envFileExists ? "(فایل موجود است — فقط مقادیر ارسالی به‌روزرسانی می‌شوند)" : "(فایل موجود نیست — با ذخیره ساخته می‌شود)" }}.
+            مقادیر خالی می‌توانند بعداً هم تنظیم شوند؛ کلید حساس «کلید رمزنگاری» در صورت خالی بودن خودکار تولید می‌شود.
+          </p>
+          <div v-for="it in setupDlg.envItems" :key="it.key" class="field">
+            <label>{{ it.label }} <span class="muted" dir="ltr" style="font-size:11px">{{ it.key }}</span>
+              <span v-if="it.required && !it.configured" class="err" style="font-size:11px">(الزامی)</span>
+            </label>
+            <template v-if="it.secret">
+              <div style="display:flex;gap:8px;align-items:center">
+                <input v-if="it._new != null" v-model="it._new" :type="it._show ? 'text' : 'password'" :placeholder="it.configured ? 'بدون تغییر' : 'مقدار جدید'" dir="ltr" autocomplete="off">
+                <input v-else :value="it.preview || '— تنظیم نشده —'" disabled dir="ltr" style="opacity:.6">
+                <button class="ghost" style="white-space:nowrap" @click="it._new = ''">{{ it.configured ? "تغییر" : "تنظیم" }}</button>
+              </div>
+            </template>
+            <input v-else v-model="it.value" dir="ltr" :placeholder="it.configured ? '' : 'خالی → پیش‌فرض سیستم'">
+          </div>
+          <button class="ghost" style="width:100%" :disabled="setupDlg.envSaving" @click="saveSetupEnv">ذخیره در .env</button>
+        </template>
+        <template v-else-if="setupDlg.step === 1">
           <p class="muted" style="font-size:13px">رمز ادمین را تغییر دهید (اختیاری — خالی بگذارید تا تغییر نکند).</p>
           <div class="field"><label>رمز جدید</label><input v-model="setupDlg.pass" type="password" autocomplete="new-password"></div>
           <div class="field"><label>تکرار رمز</label><input v-model="setupDlg.pass2" type="password" autocomplete="new-password"></div>
@@ -834,23 +854,55 @@ const doLogin = submitLogin;
     }
 
     /* ---------- setup wizard (starter) ---------- */
-    const setupDlg = reactive({ open: false, step: 1, pass: "", pass2: "", backend: "telegram", dbEngine: "", dbInfo: null, msg: "" });
+    const setupDlg = reactive({ open: false, step: 0, pass: "", pass2: "", backend: "telegram", dbEngine: "", dbInfo: null, msg: "",
+      envItems: [], envFileExists: false, envSaving: false, envGenerated: "" });
     const setupNeeded = ref(false);
+    async function loadSetupEnv() {
+      try {
+        const d = await api("/api/v1/admin/setup/env");
+        setupDlg.envItems = d.items || [];
+        setupDlg.envFileExists = !!d.file_exists;
+      } catch (e) { setupDlg.envItems = []; }
+    }
     async function checkSetup() {
       try {
         const d = await api("/api/v1/admin/setup/status");
         setupNeeded.value = !d.initialized;
         if (!d.initialized) {
           Object.assign(setupDlg, {
-            open: true, step: 1, pass: "", pass2: "", backend: "telegram", msg: "",
+            open: true, step: 0, pass: "", pass2: "", backend: "telegram", msg: "", envGenerated: "",
             dbEngine: d.database?.engine === "postgres" ? "postgres" : (d.database?.pg_configured ? "" : "sqlite"),
             dbInfo: d.database || null,
           });
+          await loadSetupEnv();
         }
       } catch (e) { /* non-admin or transient: ignore */ }
     }
+    async function saveSetupEnv() {
+      setupDlg.envSaving = true;
+      try {
+        const values = {};
+        for (const it of setupDlg.envItems) {
+          if (it.secret) {
+            if (it._new) values[it.key] = it._new;           // new secret value typed by admin
+          } else if (it.value != null && it.value !== "") {
+            values[it.key] = it.value;
+          }
+        }
+        const d = await api("/api/v1/admin/setup/env", { method: "PUT", json: { values, generate_secret: true } });
+        if (d.restart_keys && d.restart_keys.length) {
+          showToast("تغییر " + d.restart_keys.length + " کلید بعد از ری‌استارت اعمال می‌شود", 5000);
+        } else {
+          showToast("فایل .env ذخیره شد" + (d.created ? " (ساخته شد)" : ""));
+        }
+        await loadSetupEnv();
+      } catch (e) { setupDlg.msg = e.message; }
+      setupDlg.envSaving = false;
+    }
     async function setupNext() {
-      if (setupDlg.step === 1) {
+      if (setupDlg.step === 0) {
+        setupDlg.msg = ""; setupDlg.step = 1;
+      } else if (setupDlg.step === 1) {
         if (setupDlg.pass || setupDlg.pass2) {
           if (setupDlg.pass.length < 6) { setupDlg.msg = "رمز حداقل ۶ کاراکتر باشد"; return; }
           if (setupDlg.pass !== setupDlg.pass2) { setupDlg.msg = "تکرار رمز مطابقت ندارد"; return; }
