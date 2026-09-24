@@ -180,6 +180,30 @@ const app = createApp({
     const settingsItems = ref([]);
     const settingsDraft = reactive({});
     const settingsBusy = ref(false);
+    const settingsErrors = reactive({}); // key → error message
+
+    function validateSetting(it, value) {
+      if (it.type === "int") {
+        if (value === "" || value === null || value === undefined || Number.isNaN(Number(value)))
+          return "عدد وارد کنید";
+        if (!Number.isInteger(Number(value))) return "عدد صحیح وارد کنید";
+        if (Number(value) < 0) return "باید ≥ 0 باشد";
+        const mustBePositive = ["max_upload_size", "split_threshold", "default_key_rpm", "presigned_ttl", "upload_session_ttl_minutes", "download_workers", "upload_workers", "max_concurrent_downloads", "max_concurrent_uploads"];
+        if (mustBePositive.includes(it.key) && Number(value) < 1) return "باید ≥ 1 باشد";
+      } else if (it.key === "default_backend") {
+        if (!["telegram", "eitaa"].includes(value)) return "تلگرام یا ایتا";
+      }
+      return "";
+    }
+    function dirtySettings() {
+      const updates = {};
+      for (const it of settingsItems.value) {
+        const v = settingsDraft[it.key];
+        if (v !== "" && v != null && String(v) !== String(it.current)) updates[it.key] = v;
+      }
+      return updates;
+    }
+    const dirtyCount = computed(() => Object.keys(dirtySettings()).length);
     const settingLabels = {
       max_upload_size: "حداکثر حجم آپلود (بایت)",
       split_threshold: "آستانه تقسیم فایل (بایت)",
@@ -208,18 +232,23 @@ const app = createApp({
         const [s, n] = await Promise.all([api("/api/v1/admin/settings"), api("/api/v1/admin/nodes")]);
         settingsItems.value = s.items || [];
         for (const it of settingsItems.value) settingsDraft[it.key] = it.current;
+        for (const k of Object.keys(settingsErrors)) delete settingsErrors[k];
         nodesList.value = n.items || [];
       } catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
     async function saveSettings() {
+      // validate every touched field first
+      for (const it of settingsItems.value) {
+        const v = settingsDraft[it.key];
+        const err = (v !== "" && v != null) ? validateSetting(it, v) : "";
+        if (err) settingsErrors[it.key] = err; else delete settingsErrors[it.key];
+      }
+      if (Object.keys(settingsErrors).length) { showToast("خطاهای اعتبارسنجی را برطرف کنید", 4000, true); return; }
+      const updates = dirtySettings();
+      for (const [k, v] of Object.entries(updates)) updates[k] = settingsItems.value.find(i => i.key === k)?.type === "int" ? Number(v) : String(v);
+      if (!Object.keys(updates).length) { showToast("تغییری برای ذخیره نیست"); return; }
       settingsBusy.value = true;
       try {
-        const updates = {};
-        for (const it of settingsItems.value) {
-          const v = settingsDraft[it.key];
-          if (v !== it.current && v !== "" && v != null) updates[it.key] = it.type === "int" ? Number(v) : String(v);
-        }
-        if (!Object.keys(updates).length) { showToast("تغییری برای ذخیره نیست"); return; }
         await api("/api/v1/admin/settings", { method: "PUT", json: updates });
         showToast("تنظیمات ذخیره و اعمال شد");
         await loaders.settings();
@@ -232,8 +261,22 @@ const app = createApp({
       showToast("به پیش‌فرض برگشت");
       await loaders.settings();
     }
+    function discardSettings() {
+      for (const it of settingsItems.value) settingsDraft[it.key] = it.current;
+      for (const k of Object.keys(settingsErrors)) delete settingsErrors[k];
+      showToast("تغییرات ذخیره‌نشده لغو شد");
+    }
+    function onSettingInput(it) {
+      const v = settingsDraft[it.key];
+      if (v === "" || v == null) { delete settingsErrors[it.key]; return; }
+      const err = validateSetting(it, v);
+      if (err) settingsErrors[it.key] = err; else delete settingsErrors[it.key];
+    }
     function fmtSettingHint(it) {
-      if (it.key.includes("size") || it.key.includes("quota")) return " (= " + fmtBytes(it.current) + ")";
+      if (it.type === "int" && (it.key.includes("size") || it.key.includes("quota"))) {
+        const base = dirtySettings()[it.key] != null ? Number(dirtySettings()[it.key]) : it.current;
+        return " (= " + fmtBytes(base) + ")";
+      }
       return "";
     }
 
@@ -446,6 +489,7 @@ const app = createApp({
       uploadBusy, uploadProgress, uploadPct, nowSec, dashCards,
       accDlg, botDlg, eitDlg, keyDlg, qrDlg,
       nodesList, settingsItems, settingsDraft, settingsGroups, settingsBusy,
+      settingsErrors, dirtyCount, validateSetting, discardSettings, onSettingInput,
       saveSettings, resetSettings, fmtSettingHint, settingLabels,
       setupDlg, setupNeeded, setupNext, setupSkip,
       doLogin: submitLogin, logout, switchTab, fmtBytes, fmtTime,
