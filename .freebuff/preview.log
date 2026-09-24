@@ -1,0 +1,231 @@
+{"ts": 1790161577.155, "level": "INFO", "logger": "tgdrive.queue", "msg": "queue recovered 0 pending jobs"}
+{"ts": 1790161577.155, "level": "INFO", "logger": "tgdrive.queue", "msg": "queue started with 6 workers"}
+{"ts": 1790161659.027, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_2c58f2deea699e1b", "correlation_id": "req_2c58f2deea699e1b", "method": "GET", "path": "/api/v1/admin/healthz", "status": 200, "duration_ms": 41.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53519 - "GET /api/v1/admin/healthz HTTP/1.1" 200 OK
+{"ts": 1790161698.518, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_206b01bd1e5b2a2e", "correlation_id": "req_206b01bd1e5b2a2e", "method": "GET", "path": "/api/v1/admin/healthz", "status": 200, "duration_ms": 0.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53522 - "GET /api/v1/admin/healthz HTTP/1.1" 200 OK
+{"ts": 1790161698.815, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_c0ae5df2ffe3ffbd", "correlation_id": "req_c0ae5df2ffe3ffbd", "method": "POST", "path": "/api/v1/auth/login", "status": 200, "duration_ms": 207.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:53523 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+{"ts": 1790161698.875, "level": "INFO", "logger": "tgdrive.queue", "msg": "job enqueued", "request_id": "req_71404e0bb3a622f5", "correlation_id": "req_71404e0bb3a622f5", "kind": "upload", "priority": 40, "file_id": "f_9ea10e922a00d3a0603a3e10"}
+INFO:     127.0.0.1:53524 - "POST /api/v1/files/upload HTTP/1.1" 200 OK
+{"ts": 1790161698.88, "level": "INFO", "logger": "tgdrive.queue", "msg": "upload complete", "correlation_id": "req_71404e0bb3a622f5", "job_id": "j_148556644a6114525f8a1779", "file_id": "f_9ea10e922a00d3a0603a3e10", "size": 289, "parts": 1, "account": "acc:2", "duration_ms": 2.4}
+{"ts": 1790161698.881, "level": "INFO", "logger": "tgdrive.queue", "msg": "job done", "correlation_id": "req_71404e0bb3a622f5", "job_id": "j_148556644a6114525f8a1779", "kind": "upload", "worker": "dl3", "duration_ms": 3.6}
+{"ts": 1790161731.9, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_93e6fe14cad3e6d4", "correlation_id": "req_93e6fe14cad3e6d4", "method": "GET", "path": "/", "status": 200, "duration_ms": 54.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58312 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58312 - "GET /static/vendor/vue.global.prod.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:58313 - "GET /static/app.js HTTP/1.1" 200 OK
+{"ts": 1790161731.968, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_a34147ec03825ffb", "correlation_id": "req_a34147ec03825ffb", "method": "GET", "path": "/api/v1/admin/overview", "status": 401, "duration_ms": 3.3, "ip": "127.0.0.1"}
+{"ts": 1790161731.968, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_f4eafd9fe7a67166", "correlation_id": "req_f4eafd9fe7a67166", "method": "GET", "path": "/api/v1/accounts", "status": 401, "duration_ms": 2.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58313 - "GET /api/v1/admin/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:58312 - "GET /api/v1/accounts HTTP/1.1" 401 Unauthorized
+{"ts": 1790161731.976, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_274b0e16575ddff0", "correlation_id": "req_274b0e16575ddff0", "method": "POST", "path": "/api/v1/auth/refresh", "status": 200, "duration_ms": 3.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58312 - "POST /api/v1/auth/refresh HTTP/1.1" 200 OK
+{"ts": 1790161731.978, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_d89395054a93afc2", "correlation_id": "req_d89395054a93afc2", "method": "POST", "path": "/api/v1/auth/refresh", "status": 200, "duration_ms": 3.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58313 - "POST /api/v1/auth/refresh HTTP/1.1" 200 OK
+{"ts": 1790161731.984, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_12b91d0e5f922942", "correlation_id": "req_12b91d0e5f922942", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 2.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58312 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790161731.993, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_f0c7581921982d44", "correlation_id": "req_f0c7581921982d44", "method": "GET", "path": "/api/v1/admin/overview", "status": 200, "duration_ms": 12.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58313 - "GET /api/v1/admin/overview HTTP/1.1" 200 OK
+{"ts": 1790161805.443, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_6aaa0c77b0b99473", "correlation_id": "req_6aaa0c77b0b99473", "method": "GET", "path": "/api/v1/files", "status": 200, "duration_ms": 2.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58328 - "GET /api/v1/files HTTP/1.1" 200 OK
+{"ts": 1790161806.637, "level": "INFO", "logger": "tgdrive.queue", "msg": "job enqueued", "request_id": "req_44fed418db2e40a2", "correlation_id": "req_44fed418db2e40a2", "kind": "upload", "priority": 40, "file_id": "f_9fda9ac0211546d525cc4a33"}
+INFO:     127.0.0.1:58328 - "POST /api/v1/files/upload HTTP/1.1" 200 OK
+{"ts": 1790161806.647, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_3014df1ce4803206", "correlation_id": "req_3014df1ce4803206", "method": "GET", "path": "/api/v1/files", "status": 200, "duration_ms": 1.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58328 - "GET /api/v1/files HTTP/1.1" 200 OK
+{"ts": 1790161806.648, "level": "INFO", "logger": "tgdrive.queue", "msg": "upload complete", "correlation_id": "req_44fed418db2e40a2", "job_id": "j_f4989a8aac6e92d53dd65bfc", "file_id": "f_9fda9ac0211546d525cc4a33", "size": 32, "parts": 1, "account": "acc:1", "duration_ms": 8.9}
+{"ts": 1790161806.648, "level": "INFO", "logger": "tgdrive.queue", "msg": "job done", "correlation_id": "req_44fed418db2e40a2", "job_id": "j_f4989a8aac6e92d53dd65bfc", "kind": "upload", "worker": "ul1", "duration_ms": 9.9}
+{"ts": 1790161883.602, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_18d8c211f68ab4d2", "correlation_id": "req_18d8c211f68ab4d2", "method": "GET", "path": "/api/v1/files", "status": 200, "duration_ms": 1.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:49314 - "GET /api/v1/files HTTP/1.1" 200 OK
+{"ts": 1790161940.642, "level": "INFO", "logger": "tgdrive.queue", "msg": "job enqueued", "request_id": "req_60608e0f46aee320", "correlation_id": "req_60608e0f46aee320", "kind": "delete", "priority": 10, "file_id": "f_9fda9ac0211546d525cc4a33"}
+INFO:     127.0.0.1:64026 - "DELETE /api/v1/files/f_9fda9ac0211546d525cc4a33?purge=true HTTP/1.1" 200 OK
+{"ts": 1790161940.652, "level": "INFO", "logger": "tgdrive.queue", "msg": "file deleted", "correlation_id": "req_60608e0f46aee320", "job_id": "j_9232753d973af7abbe18d7fc", "file_id": "f_9fda9ac0211546d525cc4a33", "parts": 1}
+{"ts": 1790161940.653, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_66c806210332da06", "correlation_id": "req_66c806210332da06", "method": "GET", "path": "/api/v1/files", "status": 200, "duration_ms": 1.8, "ip": "127.0.0.1"}
+{"ts": 1790161940.653, "level": "INFO", "logger": "tgdrive.queue", "msg": "job done", "correlation_id": "req_60608e0f46aee320", "job_id": "j_9232753d973af7abbe18d7fc", "kind": "delete", "worker": "dl2", "duration_ms": 3.8}
+INFO:     127.0.0.1:64026 - "GET /api/v1/files HTTP/1.1" 200 OK
+{"ts": 1790161982.302, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_26b6bde5c9d034c3", "correlation_id": "req_26b6bde5c9d034c3", "method": "GET", "path": "/api/v1/files", "status": 200, "duration_ms": 1.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:55276 - "GET /api/v1/files HTTP/1.1" 200 OK
+{"ts": 1790162075.277, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_978097916e82ca9b", "correlation_id": "req_978097916e82ca9b", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:55057 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790162075.291, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e9cdb58d625acfb6", "correlation_id": "req_e9cdb58d625acfb6", "method": "GET", "path": "/api/v1/admin/overview", "status": 200, "duration_ms": 16.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:55056 - "GET /api/v1/admin/overview HTTP/1.1" 200 OK
+{"ts": 1790163158.762, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_8c977a4ef0c10fb7", "correlation_id": "req_8c977a4ef0c10fb7", "method": "GET", "path": "/api/v1/accounts", "status": 401, "duration_ms": 0.8, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52564 - "GET /api/v1/accounts HTTP/1.1" 401 Unauthorized
+{"ts": 1790163158.767, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_a99532634c53fbdc", "correlation_id": "req_a99532634c53fbdc", "method": "POST", "path": "/api/v1/auth/refresh", "status": 200, "duration_ms": 1.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52564 - "POST /api/v1/auth/refresh HTTP/1.1" 200 OK
+{"ts": 1790163158.771, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_bcd479c406a23782", "correlation_id": "req_bcd479c406a23782", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52564 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790163162.063, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_890cd1e0bd70e482", "correlation_id": "req_890cd1e0bd70e482", "method": "GET", "path": "/api/v1/bots", "status": 200, "duration_ms": 1.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52564 - "GET /api/v1/bots HTTP/1.1" 200 OK
+{"ts": 1790163163.035, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_674f55dbd4c69d59", "correlation_id": "req_674f55dbd4c69d59", "method": "GET", "path": "/api/v1/eitaa", "status": 200, "duration_ms": 1.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52564 - "GET /api/v1/eitaa HTTP/1.1" 200 OK
+{"ts": 1790163163.954, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_180c3c9881efe369", "correlation_id": "req_180c3c9881efe369", "method": "GET", "path": "/api/v1/keys", "status": 200, "duration_ms": 1.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52564 - "GET /api/v1/keys HTTP/1.1" 200 OK
+{"ts": 1790163164.675, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_65706730b277103d", "correlation_id": "req_65706730b277103d", "method": "GET", "path": "/api/v1/files", "status": 200, "duration_ms": 2.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52564 - "GET /api/v1/files HTTP/1.1" 200 OK
+{"ts": 1790163165.355, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_ef0a694795994faf", "correlation_id": "req_ef0a694795994faf", "method": "GET", "path": "/api/v1/queue/jobs", "status": 200, "duration_ms": 2.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52567 - "GET /api/v1/queue/jobs HTTP/1.1" 200 OK
+{"ts": 1790163165.363, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_5adf6fffa1382de2", "correlation_id": "req_5adf6fffa1382de2", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 8.8, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52564 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790163166.306, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_460d721938dcd026", "correlation_id": "req_460d721938dcd026", "method": "GET", "path": "/api/v1/admin/audit", "status": 200, "duration_ms": 2.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52564 - "GET /api/v1/admin/audit HTTP/1.1" 200 OK
+{"ts": 1790163166.965, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_6fddb10aeb069a56", "correlation_id": "req_6fddb10aeb069a56", "method": "GET", "path": "/api/v1/queue/jobs", "status": 200, "duration_ms": 2.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52569 - "GET /api/v1/queue/jobs HTTP/1.1" 200 OK
+{"ts": 1790163166.971, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_74b42b9bffb4a8f1", "correlation_id": "req_74b42b9bffb4a8f1", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 10.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52568 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790163181.483, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_bf8a458e73b7de15", "correlation_id": "req_bf8a458e73b7de15", "method": "GET", "path": "/api/v1/admin/audit", "status": 200, "duration_ms": 2.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:52578 - "GET /api/v1/admin/audit HTTP/1.1" 200 OK
+{"ts": 1790163969.97, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_02f34ed6843b1583", "correlation_id": "req_02f34ed6843b1583", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58019 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58019 - "GET /static/vendor/vue.global.prod.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:58020 - "GET /static/app.js HTTP/1.1" 200 OK
+{"ts": 1790163970.045, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_de09f3cf6b171f2b", "correlation_id": "req_de09f3cf6b171f2b", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58019 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790163970.055, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_7e3238b910a44d73", "correlation_id": "req_7e3238b910a44d73", "method": "GET", "path": "/api/v1/admin/overview", "status": 200, "duration_ms": 13.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58020 - "GET /api/v1/admin/overview HTTP/1.1" 200 OK
+{"ts": 1790164167.669, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_accd5d5e96fd68b9", "correlation_id": "req_accd5d5e96fd68b9", "method": "GET", "path": "/api/v1/files", "status": 401, "duration_ms": 1.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58227 - "GET /api/v1/files HTTP/1.1" 401 Unauthorized
+{"ts": 1790164167.673, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_ecc03d743597b0e8", "correlation_id": "req_ecc03d743597b0e8", "method": "POST", "path": "/api/v1/auth/refresh", "status": 200, "duration_ms": 1.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58227 - "POST /api/v1/auth/refresh HTTP/1.1" 200 OK
+{"ts": 1790164167.677, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_6fa7d06be2f393e8", "correlation_id": "req_6fa7d06be2f393e8", "method": "GET", "path": "/api/v1/files", "status": 200, "duration_ms": 1.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58227 - "GET /api/v1/files HTTP/1.1" 200 OK
+{"ts": 1790164168.72, "level": "INFO", "logger": "tgdrive.queue", "msg": "job enqueued", "request_id": "req_6cbee7b0b60ddfc3", "correlation_id": "req_6cbee7b0b60ddfc3", "kind": "upload", "priority": 40, "file_id": "f_e4be0eac1d6ad573a8ed9167"}
+INFO:     127.0.0.1:58227 - "POST /api/v1/files/upload HTTP/1.1" 200 OK
+{"ts": 1790164168.733, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_ce2ea990550286e9", "correlation_id": "req_ce2ea990550286e9", "method": "GET", "path": "/api/v1/files", "status": 200, "duration_ms": 1.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58227 - "GET /api/v1/files HTTP/1.1" 200 OK
+{"ts": 1790164168.735, "level": "INFO", "logger": "tgdrive.queue", "msg": "upload complete", "correlation_id": "req_6cbee7b0b60ddfc3", "job_id": "j_4dcd3bd107aaf08dc0f59b33", "file_id": "f_e4be0eac1d6ad573a8ed9167", "size": 3145728, "parts": 1, "account": "acc:1", "duration_ms": 13.6}
+{"ts": 1790164168.735, "level": "INFO", "logger": "tgdrive.queue", "msg": "job done", "correlation_id": "req_6cbee7b0b60ddfc3", "job_id": "j_4dcd3bd107aaf08dc0f59b33", "kind": "upload", "worker": "ul0", "duration_ms": 14.7}
+{"ts": 1790164436.253, "level": "INFO", "logger": "tgdrive.queue", "msg": "job enqueued", "request_id": "req_aad458f3475f4993", "correlation_id": "req_aad458f3475f4993", "kind": "upload", "priority": 40, "file_id": "f_4c742d9f9d6712e0fb43a7ed"}
+INFO:     127.0.0.1:63749 - "POST /api/v1/files/upload HTTP/1.1" 200 OK
+{"ts": 1790164436.264, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_2efd6970b2148de9", "correlation_id": "req_2efd6970b2148de9", "method": "GET", "path": "/api/v1/files", "status": 200, "duration_ms": 2.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63749 - "GET /api/v1/files HTTP/1.1" 200 OK
+{"ts": 1790164436.266, "level": "INFO", "logger": "tgdrive.queue", "msg": "upload complete", "correlation_id": "req_aad458f3475f4993", "job_id": "j_d6064ff211a0699dc3a28549", "file_id": "f_4c742d9f9d6712e0fb43a7ed", "size": 5242880, "parts": 1, "account": "acc:2", "duration_ms": 12.5}
+{"ts": 1790164436.267, "level": "INFO", "logger": "tgdrive.queue", "msg": "job done", "correlation_id": "req_aad458f3475f4993", "job_id": "j_d6064ff211a0699dc3a28549", "kind": "upload", "worker": "ul1", "duration_ms": 13.7}
+{"ts": 1790172429.308, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_2dd13a14cb5551aa", "correlation_id": "req_2dd13a14cb5551aa", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:50805 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50805 - "GET /static/vendor/vue.global.prod.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50809 - "GET /static/app.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50810 - "GET /static/style.css HTTP/1.1" 200 OK
+{"ts": 1790172441.01, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_fb896315c546ee8f", "correlation_id": "req_fb896315c546ee8f", "method": "POST", "path": "/api/v1/auth/login", "status": 200, "duration_ms": 246.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64799 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+{"ts": 1790172441.019, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_62df51d912a2e492", "correlation_id": "req_62df51d912a2e492", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64800 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172441.029, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_5c57d4841320bb90", "correlation_id": "req_5c57d4841320bb90", "method": "GET", "path": "/api/v1/admin/overview", "status": 200, "duration_ms": 12.8, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64799 - "GET /api/v1/admin/overview HTTP/1.1" 200 OK
+{"ts": 1790172442.981, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_3d88ea42b4f30a9d", "correlation_id": "req_3d88ea42b4f30a9d", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64800 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172443.676, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_39a3adb30210bf1f", "correlation_id": "req_39a3adb30210bf1f", "method": "GET", "path": "/api/v1/bots", "status": 200, "duration_ms": 1.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64800 - "GET /api/v1/bots HTTP/1.1" 200 OK
+{"ts": 1790172444.402, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_2a972b9a01962537", "correlation_id": "req_2a972b9a01962537", "method": "GET", "path": "/api/v1/eitaa", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64800 - "GET /api/v1/eitaa HTTP/1.1" 200 OK
+{"ts": 1790172444.78, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_c3e4a1eb239942c8", "correlation_id": "req_c3e4a1eb239942c8", "method": "GET", "path": "/api/v1/keys", "status": 200, "duration_ms": 1.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64800 - "GET /api/v1/keys HTTP/1.1" 200 OK
+{"ts": 1790172446.318, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_ba22e9f78d1d5de1", "correlation_id": "req_ba22e9f78d1d5de1", "method": "GET", "path": "/api/v1/files", "status": 200, "duration_ms": 2.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:64800 - "GET /api/v1/files HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49398 - "POST /api/v1/files/f_4c742d9f9d6712e0fb43a7ed/share HTTP/1.1" 200 OK
+{"ts": 1790172462.046, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_f34512c00d313560", "correlation_id": "req_f34512c00d313560", "method": "GET", "path": "/s3e0d30849bb/qr", "status": 200, "duration_ms": 61.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:49398 - "GET /s3e0d30849bb/qr HTTP/1.1" 200 OK
+{"ts": 1790172472.176, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_31cab58b16879f79", "correlation_id": "req_31cab58b16879f79", "method": "GET", "path": "/s3e0d30849bb", "status": 200, "duration_ms": 2.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:60518 - "GET /s3e0d30849bb HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60524 - "GET /d/s3e0d30849bb/dl HTTP/1.1" 200 OK
+{"ts": 1790172507.648, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_50c3922b98eee4cd", "correlation_id": "req_50c3922b98eee4cd", "method": "GET", "path": "/api/v1/queue/jobs", "status": 200, "duration_ms": 2.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:60543 - "GET /api/v1/queue/jobs HTTP/1.1" 200 OK
+{"ts": 1790172507.662, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_1bc3c3a35da9a349", "correlation_id": "req_1bc3c3a35da9a349", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 17.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:60542 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790172531.585, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_31350eb8df354c8b", "correlation_id": "req_31350eb8df354c8b", "method": "GET", "path": "/api/v1/admin/audit", "status": 200, "duration_ms": 3.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63007 - "GET /api/v1/admin/audit HTTP/1.1" 200 OK
+{"ts": 1790172537.721, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_53e30cf8edafca5d", "correlation_id": "req_53e30cf8edafca5d", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63010 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172537.73, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_f75b0ad0f5757fcd", "correlation_id": "req_f75b0ad0f5757fcd", "method": "GET", "path": "/api/v1/admin/overview", "status": 200, "duration_ms": 12.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63009 - "GET /api/v1/admin/overview HTTP/1.1" 200 OK
+{"ts": 1790172545.91, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e174dab80fd09e67", "correlation_id": "req_e174dab80fd09e67", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172548.774, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_3f93743fbfc1cd55", "correlation_id": "req_3f93743fbfc1cd55", "method": "POST", "path": "/api/v1/accounts/1/test", "status": 200, "duration_ms": 2.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "POST /api/v1/accounts/1/test HTTP/1.1" 200 OK
+{"ts": 1790172549.542, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_378d223e9c9b3ae8", "correlation_id": "req_378d223e9c9b3ae8", "method": "POST", "path": "/api/v1/accounts/2/test", "status": 200, "duration_ms": 1.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "POST /api/v1/accounts/2/test HTTP/1.1" 200 OK
+{"ts": 1790172551.07, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_f04fafef8d603034", "correlation_id": "req_f04fafef8d603034", "method": "POST", "path": "/api/v1/accounts/1/reset", "status": 200, "duration_ms": 2.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "POST /api/v1/accounts/1/reset HTTP/1.1" 200 OK
+{"ts": 1790172551.075, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_fdf180c39d914b04", "correlation_id": "req_fdf180c39d914b04", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172551.871, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_0ba8650d249ad616", "correlation_id": "req_0ba8650d249ad616", "method": "POST", "path": "/api/v1/accounts/2/reset", "status": 200, "duration_ms": 2.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "POST /api/v1/accounts/2/reset HTTP/1.1" 200 OK
+{"ts": 1790172551.876, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_2af1956bdf2c2468", "correlation_id": "req_2af1956bdf2c2468", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172554.815, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_c68fa14bde59fb86", "correlation_id": "req_c68fa14bde59fb86", "method": "POST", "path": "/api/v1/accounts/1/toggle", "status": 200, "duration_ms": 2.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "POST /api/v1/accounts/1/toggle HTTP/1.1" 200 OK
+{"ts": 1790172554.82, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_919889a2863c6878", "correlation_id": "req_919889a2863c6878", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172555.838, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_8d9dbbd8cd99700a", "correlation_id": "req_8d9dbbd8cd99700a", "method": "POST", "path": "/api/v1/accounts/2/toggle", "status": 200, "duration_ms": 1.8, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "POST /api/v1/accounts/2/toggle HTTP/1.1" 200 OK
+{"ts": 1790172555.844, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e76a3043bb914e04", "correlation_id": "req_e76a3043bb914e04", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172557.927, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_83d693b7cd81db85", "correlation_id": "req_83d693b7cd81db85", "method": "POST", "path": "/api/v1/accounts/2/toggle", "status": 200, "duration_ms": 2.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "POST /api/v1/accounts/2/toggle HTTP/1.1" 200 OK
+{"ts": 1790172557.939, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_7f28d870d09d2cd7", "correlation_id": "req_7f28d870d09d2cd7", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172559.063, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_8f741481cc5e9270", "correlation_id": "req_8f741481cc5e9270", "method": "POST", "path": "/api/v1/accounts/1/toggle", "status": 200, "duration_ms": 2.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "POST /api/v1/accounts/1/toggle HTTP/1.1" 200 OK
+{"ts": 1790172559.069, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_5ab3b4a2a0df6372", "correlation_id": "req_5ab3b4a2a0df6372", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63012 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172569.966, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_596c6fa49b9b5bb1", "correlation_id": "req_596c6fa49b9b5bb1", "method": "GET", "path": "/api/v1/bots", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63020 - "GET /api/v1/bots HTTP/1.1" 200 OK
+{"ts": 1790172574.327, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_91a94f7703910524", "correlation_id": "req_91a94f7703910524", "method": "GET", "path": "/api/v1/eitaa", "status": 200, "duration_ms": 1.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63020 - "GET /api/v1/eitaa HTTP/1.1" 200 OK
+{"ts": 1790172581.103, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_8f51c67dc5a9ed37", "correlation_id": "req_8f51c67dc5a9ed37", "method": "GET", "path": "/api/v1/bots", "status": 200, "duration_ms": 1.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63023 - "GET /api/v1/bots HTTP/1.1" 200 OK
+{"ts": 1790172581.871, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_c5c39b4f28e696d7", "correlation_id": "req_c5c39b4f28e696d7", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63023 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172598.536, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_46c1d54dde38f7f9", "correlation_id": "req_46c1d54dde38f7f9", "method": "GET", "path": "/api/v1/bots", "status": 200, "duration_ms": 1.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63026 - "GET /api/v1/bots HTTP/1.1" 200 OK
+{"ts": 1790172612.448, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_329cfaa4878d537c", "correlation_id": "req_329cfaa4878d537c", "method": "GET", "path": "/api/v1/eitaa", "status": 200, "duration_ms": 1.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63030 - "GET /api/v1/eitaa HTTP/1.1" 200 OK
+{"ts": 1790172615.343, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_97e2220ef2ce968e", "correlation_id": "req_97e2220ef2ce968e", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63030 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172616.35, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_ec11cea8cbd80d6f", "correlation_id": "req_ec11cea8cbd80d6f", "method": "GET", "path": "/api/v1/bots", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63030 - "GET /api/v1/bots HTTP/1.1" 200 OK
+{"ts": 1790172617.48, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_5881a3540299a6b7", "correlation_id": "req_5881a3540299a6b7", "method": "GET", "path": "/api/v1/files", "status": 200, "duration_ms": 1.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63030 - "GET /api/v1/files HTTP/1.1" 200 OK
+{"ts": 1790172618.714, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e00aa1fe76c1f822", "correlation_id": "req_e00aa1fe76c1f822", "method": "GET", "path": "/api/v1/queue/jobs", "status": 200, "duration_ms": 2.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63033 - "GET /api/v1/queue/jobs HTTP/1.1" 200 OK
+{"ts": 1790172618.728, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_6c2998cdec2ee8c6", "correlation_id": "req_6c2998cdec2ee8c6", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 18.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63030 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790172619.729, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_46dacffda9ea493f", "correlation_id": "req_46dacffda9ea493f", "method": "GET", "path": "/api/v1/admin/audit", "status": 200, "duration_ms": 3.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63030 - "GET /api/v1/admin/audit HTTP/1.1" 200 OK
+{"ts": 1790172620.601, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e4a3941f69fd1692", "correlation_id": "req_e4a3941f69fd1692", "method": "GET", "path": "/api/v1/queue/jobs", "status": 200, "duration_ms": 2.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63033 - "GET /api/v1/queue/jobs HTTP/1.1" 200 OK
+{"ts": 1790172620.608, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_652d29e37403a1da", "correlation_id": "req_652d29e37403a1da", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 10.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63030 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790172943.477, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_87032191db12d73d", "correlation_id": "req_87032191db12d73d", "method": "GET", "path": "/api/v1/admin/healthz", "status": 200, "duration_ms": 1.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58050 - "GET /api/v1/admin/healthz HTTP/1.1" 200 OK
+{"ts": 1790172950.349, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_dc015aea7de633da", "correlation_id": "req_dc015aea7de633da", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58057 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58057 - "GET /static/style.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58058 - "GET /static/vendor/vue.global.prod.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:58059 - "GET /static/app.js HTTP/1.1" 200 OK
+{"ts": 1790172950.42, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_43b87d5eef923105", "correlation_id": "req_43b87d5eef923105", "method": "GET", "path": "/api/v1/admin/overview", "status": 401, "duration_ms": 1.6, "ip": "127.0.0.1"}
+{"ts": 1790172950.421, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_4e272a602608e87c", "correlation_id": "req_4e272a602608e87c", "method": "GET", "path": "/api/v1/accounts", "status": 401, "duration_ms": 1.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58059 - "GET /api/v1/admin/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:58057 - "GET /api/v1/accounts HTTP/1.1" 401 Unauthorized
+{"ts": 1790172950.431, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_266447379e4021fc", "correlation_id": "req_266447379e4021fc", "method": "POST", "path": "/api/v1/auth/refresh", "status": 200, "duration_ms": 4.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58057 - "POST /api/v1/auth/refresh HTTP/1.1" 200 OK
+{"ts": 1790172950.433, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e240224830055ff0", "correlation_id": "req_e240224830055ff0", "method": "POST", "path": "/api/v1/auth/refresh", "status": 200, "duration_ms": 5.3, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58059 - "POST /api/v1/auth/refresh HTTP/1.1" 200 OK
+{"ts": 1790172950.439, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_175799ccf7172dbd", "correlation_id": "req_175799ccf7172dbd", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 1.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58059 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172950.449, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_b797b23eb8b1cc4f", "correlation_id": "req_b797b23eb8b1cc4f", "method": "GET", "path": "/api/v1/admin/overview", "status": 200, "duration_ms": 14.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58057 - "GET /api/v1/admin/overview HTTP/1.1" 200 OK
+{"ts": 1790172963.934, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_b309b2fc3b13e463", "correlation_id": "req_b309b2fc3b13e463", "method": "GET", "path": "/", "status": 200, "duration_ms": 1.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58073 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58073 - "GET /static/app.js HTTP/1.1" 304 Not Modified
+{"ts": 1790172964.125, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_fb9b90613b795606", "correlation_id": "req_fb9b90613b795606", "method": "GET", "path": "/api/v1/accounts", "status": 200, "duration_ms": 3.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58074 - "GET /api/v1/accounts HTTP/1.1" 200 OK
+{"ts": 1790172964.136, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_49f15b8e55171781", "correlation_id": "req_49f15b8e55171781", "method": "GET", "path": "/api/v1/admin/overview", "status": 200, "duration_ms": 13.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58073 - "GET /api/v1/admin/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58077 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+{"ts": 1790172964.282, "level": "ERROR", "logger": "asyncio", "msg": "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)\nhandle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>", "exc": "Traceback (most recent call last):\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\events.py\", line 88, in _run\n    self._context.run(self._callback, *self._args)\n  File \"C:\\Users\\USER\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\Lib\\asyncio\\proactor_events.py\", line 165, in _call_connection_lost\n    self._sock.shutdown(socket.SHUT_RDWR)\nConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host"}
+{"ts": 1790172992.648, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_fb1806921c234715", "correlation_id": "req_fb1806921c234715", "method": "GET", "path": "/api/v1/files", "status": 200, "duration_ms": 1.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:58113 - "GET /api/v1/files HTTP/1.1" 200 OK
+{"ts": 1790173021.791, "level": "INFO", "logger": "tgdrive.queue", "msg": "job enqueued", "request_id": "req_966820afa8478b60", "correlation_id": "req_966820afa8478b60", "kind": "upload", "priority": 40, "file_id": "f_8255d3a7d7b9261b04fa1b89"}
+INFO:     127.0.0.1:62611 - "POST /api/v1/files/upload HTTP/1.1" 200 OK
+{"ts": 1790173021.803, "level": "INFO", "logger": "tgdrive.queue", "msg": "upload complete", "correlation_id": "req_966820afa8478b60", "job_id": "j_3ae2facd187331cdfa2c3850", "file_id": "f_8255d3a7d7b9261b04fa1b89", "size": 45, "parts": 1, "account": "acc:2", "duration_ms": 10.2}
+{"ts": 1790173021.804, "level": "INFO", "logger": "tgdrive.queue", "msg": "job done", "correlation_id": "req_966820afa8478b60", "job_id": "j_3ae2facd187331cdfa2c3850", "kind": "upload", "worker": "ul1", "duration_ms": 11.7}

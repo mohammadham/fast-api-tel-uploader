@@ -1,0 +1,35 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.redis.railway
+    ports:
+      - "8000:8000"
+    environment:
+      TGDRIVE_FAKE_TG: "1"
+      TGDRIVE_DATA_DIR: "/app/data"
+      TGDRIVE_SECRET: "${RAILWAY TGDRIVE_SECRET}"
+      # Redis configuration - enable with TGDRIVE_REDIS_ENABLED=1
+      # and set TGDRIVE_REDIS_URL to point to the Redis service below
+      TGDRIVE_REDIS_ENABLED: "0"
+      TGDRIVE_REDIS_URL: "redis://redis:6379/0"
+    volumes:
+      - ./data:/app/data:cached
+    restart: unless-stopped
+    # NOTE: single worker — the priority queue is in-process (SQLite-backed).
+    # For production scale with Redis, consider moving queue to Redis.
+
+  # Redis service - optional, enable TGDRIVE_REDIS_ENABLED=1 to use
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+    volumes:
+      - redis-data:/var/lib/redis
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+    driver: local

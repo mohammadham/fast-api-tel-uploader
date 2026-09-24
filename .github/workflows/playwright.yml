@@ -1,0 +1,65 @@
+name: Playwright Smoke Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * 0'  # Weekly run
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    services:
+      # Start the FastAPI app in background
+      app:
+        image: mcr.microsoft.com/python:3.12-slim
+        env:
+          TGDRIVE_FAKE_TG: "1"
+          TGDRIVE_SECRET: "test-secret-please-change-me-32chars"
+          TGDRIVE_ADMIN_USERNAME: "admin"
+          TGDRIVE_ADMIN_PASSWORD: "e2e-admin-pass"
+          TGDRIVE_DATA_DIR: "data-e2e"
+          TGDRIVE_PORT: "8000"
+          PYTHONUNBUFFERED: "1"
+        ports:
+          - 8000:8000
+        options: >-
+          --workdir /app
+          -v ${{ github.workspace }}:/app:rw
+        command: >
+          sh -c "pip install fastapi uvicorn[standard] sqlalchemy[asyncio] aiosqlite telethon pytest pytest-asyncio qrcode asgi-lifespan && python -c \"import os; os.makedirs('data-e2e', exist_ok=True)\" && python app/main.py"
+        timeout-seconds: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run Playwright smoke tests
+        env:
+          TGDRIVE_TEST_PORT: 8000
+        run: npx playwright test
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failure-artifacts
+          path: |
+            playwright-report/
+            *.log
+          retention-days: 7
