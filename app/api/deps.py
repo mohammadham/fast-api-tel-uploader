@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Query, Request, status
 
 from ..core.config import get_settings
 from ..core.state import get_db
@@ -31,13 +31,21 @@ async def get_api_key(
     db: Database = Depends(get_db),
     authorization: Optional[str] = Header(default=None),
     x_api_key: Optional[str] = Header(default=None),
+    token: str = Query(default=""),  # media tags can't set headers → ?token= fallback
 ):
-    """API-key auth for programmatic clients + rate limit + quota check."""
+    """API-key auth for programmatic clients + rate limit + quota check.
+
+    ``?token=`` is accepted as a last resort so browser media tags
+    (<img>/<video>/<iframe>) — which cannot set Authorization headers — can
+    load panel-authenticated streams (preview).
+    """
     raw = None
     if authorization and authorization.lower().startswith("bearer "):
         raw = authorization.split(" ", 1)[1].strip()
     elif x_api_key:
         raw = x_api_key.strip()
+    elif token:
+        raw = token.strip()
     if not raw:
         raise HTTPException(status_code=401, detail="missing API key")
 

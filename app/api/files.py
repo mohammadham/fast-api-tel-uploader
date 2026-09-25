@@ -234,6 +234,7 @@ async def block_file(file_id: str, body: FileBlockIn, db=Depends(get_db), key=De
 async def preview_file(
     file_id: str,
     request: Request,
+    token: str = "",
     db=Depends(get_db),
     key=Depends(get_api_key),
 ):

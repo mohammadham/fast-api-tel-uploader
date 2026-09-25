@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..core.config import get_settings
 from ..core.db import Database
+from ..core.settings_service import runtime_settings
 from ..core.models import AccountRepo, BotRepo, EitaaAccountRepo
 from ..core.metrics import metrics
 from .base import BackendClient, FloodWait, SendFailure, TransferError
@@ -60,7 +61,27 @@ class TGManager:
         self._proxy_by_backend: Dict[str, Optional[int]] = {}
 
     def _settings(self):
-        return get_settings()
+        """Env config overlaid with runtime DB overrides (fake_tg, tg api creds).
+
+        Overlay is applied to the cached get_settings() instance so a runtime
+        change (e.g. fake_tg toggled from the panel) is picked up live without
+        a restart; invalidate() below clears it when settings change.
+        """
+        s = get_settings()
+        try:
+            cache = runtime_settings()._cache
+            if cache:
+                if "fake_tg" in cache:
+                    s.fake_tg = bool(int(cache["fake_tg"] or 0))
+                if cache.get("tg_api_id"):
+                    s.tg_api_id = int(cache["tg_api_id"])
+                if cache.get("tg_api_hash"):
+                    s.tg_api_hash = str(cache["tg_api_hash"])
+                if "tg_storage_chat" in cache:
+                    s.tg_storage_chat = str(cache["tg_storage_chat"] or "")
+        except Exception:
+            pass
+        return s
 
     async def start(self) -> None:
         self._stopped = False
@@ -182,7 +203,8 @@ class TGManager:
                 session,
                 api_id=s.tg_api_id,
                 api_hash=s.tg_api_hash,
-                storage_chat=row["storage_chat_id"] or "me",
+                # global storage channel (runtime setting) wins over per-account
+                storage_chat=s.tg_storage_chat or row["storage_chat_id"] or "me",
                 proxy=proxy,
             )
             await backend.start()

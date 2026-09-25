@@ -1,65 +1,151 @@
-name: Playwright Smoke Tests
+name: CI — backend pytest + panel e2e
+
+# Runs on every push: the full backend test suite (pinned to the project .venv)
+# and the Playwright panel smoke tests. The e2e backend is the project's own
+# FastAPI app in fake-TG mode, started by playwright.config.mjs itself — no
+# separate service/container needed.
+#
+# Interpreter pinning: pytest ALWAYS runs through .venv/bin/python after
+# installing the complete requirements.txt into .venv, and a preflight step
+# fails loudly if that interpreter is missing any runtime dependency — an
+# interpreter without telethon/python_socks used to surface as two cryptic
+# test_proxies.py assertion failures instead of a clear "missing dependency".
 
 on:
   push:
-    branches: [main, develop]
   pull_request:
-    branches: [main]
   schedule:
-    - cron: '0 2 * * 0'  # Weekly run
+    - cron: '0 2 * * 0'  # weekly run
+
+env:
+  PYTHON_VERSION: "3.12"
 
 jobs:
-  test:
-    runs-on: windows-latest
-    timeout-minutes: 30
-
-    services:
-      # Start the FastAPI app in background
-      app:
-        image: mcr.microsoft.com/python:3.12-slim
-        env:
-          TGDRIVE_FAKE_TG: "1"
-          TGDRIVE_SECRET: "test-secret-please-change-me-32chars"
-          TGDRIVE_ADMIN_USERNAME: "admin"
-          TGDRIVE_ADMIN_PASSWORD: "e2e-admin-pass"
-          TGDRIVE_DATA_DIR: "data-e2e"
-          TGDRIVE_PORT: "8000"
-          PYTHONUNBUFFERED: "1"
-        ports:
-          - 8000:8000
-        options: >-
-          --workdir /app
-          -v ${{ github.workspace }}:/app:rw
-        command: >
-          sh -c "pip install fastapi uvicorn[standard] sqlalchemy[asyncio] aiosqlite telethon pytest pytest-asyncio qrcode asgi-lifespan && python -c \"import os; os.makedirs('data-e2e', exist_ok=True)\" && python app/main.py"
-        timeout-seconds: 120
-
+  pytest:
+    name: backend tests (pinned .venv)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: '20'
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Create project venv (.venv)
+        run: python -m venv .venv
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install full dependency manifest into .venv
+        run: |
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Preflight — .venv interpreter must have every runtime dep
+        run: |
+          .venv/bin/python - <<'PY'
+          import importlib, sys
+          mods = ("fastapi", "uvicorn", "aiosqlite", "sqlalchemy", "telethon",
+                  "python_socks", "aiogram", "pydantic_settings", "jwt",
+                  "multipart", "qrcode", "asgi_lifespan", "pytest",
+                  "pytest_asyncio")
+          missing = []
+          for m in mods:
+              try:
+                  importlib.import_module(m)
+              except ImportError:
+                  missing.append(m)
+          if missing:
+              sys.exit("FAIL: %s is missing: %s — install the full requirements.txt into .venv"
+                       % (sys.executable, ", ".join(missing)))
+          print("preflight OK:", sys.executable)
+          PY
+
+      - name: Run backend test suite (pinned to .venv)
+        run: .venv/bin/python -m pytest
+
+  e2e:
+    name: panel e2e (Playwright, real backend in fake-TG mode)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Create project venv (.venv)
+        run: python -m venv .venv
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install full dependency manifest into .venv
+        run: |
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Preflight — .venv interpreter must have every runtime dep
+        run: |
+          .venv/bin/python - <<'PY'
+          import importlib, sys
+          mods = ("fastapi", "uvicorn", "aiosqlite", "sqlalchemy", "telethon",
+                  "python_socks", "aiogram", "pydantic_settings", "jwt",
+                  "multipart", "qrcode", "asgi_lifespan", "pytest",
+                  "pytest_asyncio")
+          missing = []
+          for m in mods:
+              try:
+                  importlib.import_module(m)
+              except ImportError:
+                  missing.append(m)
+          if missing:
+              sys.exit("FAIL: %s is missing: %s — install the full requirements.txt into .venv"
+                       % (sys.executable, ", ".join(missing)))
+          print("preflight OK:", sys.executable)
+          PY
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm  # root package-lock.json (@playwright/test)
+
+      - name: Install e2e deps (@playwright/test)
+        run: npm ci --no-fund --no-audit
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps
+        run: npx playwright install --with-deps chromium
 
-      - name: Run Playwright smoke tests
-        env:
-          TGDRIVE_TEST_PORT: 8000
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: panel/package-lock.json
+
+      - name: Install panel deps
+        working-directory: panel
+        run: npm ci --no-fund --no-audit
+
+      - name: Build panel (test the real source, not a stale committed static/)
+        working-directory: panel
+        run: npm run build
+
+      - name: Run Playwright e2e suite
         run: npx playwright test
 
       - name: Upload test artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-failure-artifacts
+          name: e2e-failure-artifacts
           path: |
+            test-results/
             playwright-report/
-            *.log
           retention-days: 7

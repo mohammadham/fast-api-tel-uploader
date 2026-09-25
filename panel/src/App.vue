@@ -850,7 +850,9 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
           previewDlg.text = (await r.text()).slice(0, 20000);
         } catch (e) { showToast("خطا در پیش‌نمایش: " + e.message, 4000, true); previewDlg.open = false; }
       } else {
-        previewDlg.url = url; // <img>/<video>/... send the Authorization header via cookie-less fetch? No: they can't, so use presigned-less direct URL with token query fallback
+        // <img>/<video>/<iframe> cannot send Authorization headers → pass the
+        // panel JWT as a query param (get_api_key accepts it)
+        previewDlg.url = url + "?token=" + encodeURIComponent(token.value);
       }
     }
     function fileDownload(f) {
