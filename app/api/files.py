@@ -183,11 +183,19 @@ async def list_files(
     offset: int = 0,
     storage_chat: str = "",
     default_channel: int = 0,
+    q: str = "",
+    mime: str = "",
+    order: str = "date",
+    blocked: int = 0,
     principal=Depends(get_admin_or_key),
     db=Depends(get_db),
 ):
-    """List files; ?storage_chat=@chan or ?default_channel=1 filters by the
-    telegram channel the files were actually stored in (panel drill-down)."""
+    """List files with panel-grade filters.
+
+    ?storage_chat=@chan / ?default_channel=1 → channel drill-down,
+    ?q=name → name search, ?mime=image/ → type filter, ?order=date|size|downloads|name,
+    ?blocked=1 → only blocked files. Response carries total for pagination.
+    """
     kw = {}
     if storage_chat:
         kw = {"storage_chat": storage_chat}
@@ -196,11 +204,62 @@ async def list_files(
 
         default_chat = str(await get_runtime(db, "tg_storage_chat") or "").strip()
         kw = {"storage_chat": default_chat, "storage_chat_is_default": True}
-    return {
-        "items": await FileRepo(db).list(
-            limit=min(limit, 500), offset=offset, **kw
-        )
-    }
+    common = dict(q=q.strip(), mime_prefix=mime.strip().lower(), blocked_only=bool(blocked))
+    items = await FileRepo(db).list(
+        limit=min(limit, 500), offset=offset, order=order if order in ("date", "size", "downloads", "name") else "date", **kw, **common
+    )
+    total = await FileRepo(db).count(**kw, **common)
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+class FileBlockIn(BaseModel):
+    blocked: bool
+
+
+@router.patch("/{file_id}/block")
+async def block_file(file_id: str, body: FileBlockIn, db=Depends(get_db), key=Depends(get_api_key)):
+    """Ban/unban: blocked files refuse every serving path (panel, presigned,
+    share links) with 403 while the telegram copy stays untouched."""
+    require_scope(key, "write")
+    repo = FileRepo(db)
+    rec = await repo.get(file_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="file not found")
+    await repo.set_blocked(file_id, body.blocked)
+    await db.audit(f"key:{key['id']}", "file.block" if body.blocked else "file.unblock", target=file_id)
+    return {"ok": True, "file_id": file_id, "blocked": body.blocked}
+
+
+@router.get("/{file_id}/preview")
+async def preview_file(
+    file_id: str,
+    request: Request,
+    db=Depends(get_db),
+    key=Depends(get_api_key),
+):
+    """Inline preview stream (Range-capable) for browser-viewable media.
+    Blocked files are refused; everything else falls back to attachment.
+    """
+    require_scope(key, "read")
+    rec = await FileRepo(db).get(file_id)
+    if not rec or rec["status"] != "ready" or rec.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="file not found or not ready")
+    if rec.get("blocked"):
+        raise HTTPException(status_code=403, detail="file is blocked")
+    if not (rec["mime"] or "").lower().startswith(("image/", "video/", "audio/", "application/pdf", "text/")):
+        raise HTTPException(status_code=415, detail="no inline preview for this type")
+    parts = await FileRepo(db).parts(file_id)
+    return await file_response(
+        db=db,
+        manager=state.manager,
+        rec=rec,
+        parts=parts,
+        range_header=request.headers.get("range"),
+        filename=rec["name"],
+        mime=rec["mime"] or "application/octet-stream",
+        head_only=request.method == "HEAD",
+        inline=True,
+    )
 
 
 @router.get("/{file_id}")
@@ -262,6 +321,7 @@ async def download_content(
     rec = await FileRepo(db).get(file_id)
     if not rec or rec["status"] != "ready":
         raise HTTPException(status_code=404, detail="file not found or not ready")
+    _blocked_guard(rec)
     parts = await FileRepo(db).parts(file_id)
     resp = await file_response(
         db=db,
@@ -278,6 +338,11 @@ async def download_content(
 
 
 # ── advanced share links (slug / password / max downloads) ─────
+def _blocked_guard(rec: dict) -> None:
+    if rec.get("blocked"):
+        raise HTTPException(status_code=403, detail="file is blocked")
+
+
 def _pwd_hash(pw: str) -> str:
     from ..core.security import key_hash
 
@@ -319,6 +384,25 @@ async def make_share_link(file_id: str, body: ShareIn, request: Request, db=Depe
     await db.audit(f"key:{key['id']}", "link.share", target=file_id, details=slug)
     base = str(request.base_url).rstrip("/")
     return {"slug": slug, "url": f"{base}/{slug}", "download_url": f"{base}/d/{slug}", "protected": bool(body.password), "max_downloads": link_id and int(body.max_downloads or 0)}
+
+
+class LinkPatch(BaseModel):
+    disabled: bool
+
+
+@router.patch("/{file_id}/links/{link_id}")
+async def patch_link(file_id: str, link_id: int, body: LinkPatch, db=Depends(get_db), key=Depends(get_api_key)):
+    """Enable/disable a share link without deleting it (quick kill-switch)."""
+    require_scope(key, "write")
+    from ..core.models import LinkRepo
+
+    repo = LinkRepo(db)
+    rows = await repo.list_for_file(file_id)
+    if not any(r["id"] == link_id for r in rows):
+        raise HTTPException(status_code=404, detail="link not found")
+    await repo.set_disabled(link_id, body.disabled)
+    await db.audit(f"key:{key['id']}", "link." + ("disable" if body.disabled else "enable"), target=file_id, details=f"link={link_id}")
+    return {"ok": True, "link_id": link_id, "disabled": body.disabled}
 
 
 @router.get("/{file_id}/links")
@@ -368,6 +452,7 @@ async def public_download(file_id: str, request: Request, db=Depends(get_db)):
     rec = await FileRepo(db).get(file_id)
     if not rec or rec["status"] != "ready":
         raise HTTPException(status_code=404, detail="file not found or not ready")
+    _blocked_guard(rec)
     parts = await FileRepo(db).parts(file_id)
     return await file_response(
         db=db,
@@ -431,6 +516,8 @@ async def _check_slug_access(request: Request, db, slug: str):
     rec = await FileRepo(db).get(link["file_id"])
     if not rec or rec["status"] != "ready" or rec.get("deleted_at"):
         return None, HTMLResponse("<h3>فایل در دسترس نیست</h3>", status_code=404)
+    if rec.get("blocked"):
+        return None, HTMLResponse("<h3>این فایل مسدود شده است</h3>", status_code=403)
     if link["max_downloads"] and link["hits"] >= link["max_downloads"]:
         return None, HTMLResponse("<h3>سقف دانلود این لینک پر شده است</h3>", status_code=403)
     if link["pwd_hash"]:

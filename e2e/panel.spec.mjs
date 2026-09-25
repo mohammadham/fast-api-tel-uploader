@@ -339,6 +339,63 @@ test.describe.serial("panel smoke", () => {
     }
   });
 
+  test("file manager: search filter, preview dialog, block flag", async ({ page }) => {
+    await login(page);
+    await proxyCall(page, "/api/v1/accounts/login/start", { method: "POST", body: { phone: "+989120000002", label: "e2e-acc2" } });
+    const key = await proxyCall(page, "/api/v1/keys", { method: "POST", body: { name: "e2e-mgr-key", scopes: "read,write" } });
+    const upload = await page.evaluate(async (raw) => {
+      const s = await fetch("/api/v1/files/upload/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": raw },
+        body: JSON.stringify({ name: "e2e-mgr.png", size: 5 }),
+      }).then((r) => r.json());
+      return await fetch(`/api/v1/files/upload/session/${s.session_id}`, {
+        method: "PATCH",
+        headers: { "X-API-Key": raw, "X-Offset": "0", "Content-Type": "application/octet-stream" },
+        body: "hello",
+      }).then((r) => r.json());
+    }, key.key);
+    expect(upload.completed).toBeTruthy();
+    let row = null;
+    for (let i = 0; i < 40; i++) {
+      const { items } = await proxyCall(page, "/api/v1/files");
+      row = items.find((f) => f.id === upload.file_id);
+      if (row?.status === "ready") break;
+      await page.waitForTimeout(250);
+    }
+    expect(row?.status).toBe("ready");
+
+    try {
+      await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+      const section = page.locator("main section:visible");
+      // search box narrows the list to the seeded file
+      await section.locator("input[placeholder='جستجوی نام فایل...']").fill("e2e-mgr");
+      await page.waitForTimeout(600); // debounce
+      await expect(section.locator("tbody")).toContainText("e2e-mgr.png");
+      // preview dialog opens with an image inside
+      await section.getByRole("button", { name: "پیش‌نمایش" }).first().click();
+      const dlg = page.locator("dialog:visible");
+      await expect(dlg.locator("img")).toBeVisible();
+      await dlg.getByRole("button", { name: "بستن" }).click();
+      // block → badge appears + unblock clears it (auto-accept the confirm)
+      page.on("dialog", (d) => d.accept());
+      await section.getByRole("button", { name: "بن", exact: true }).first().click();
+      await expect(section.locator(".tag", { hasText: "بن" }).first()).toBeVisible();
+      await section.getByRole("button", { name: "رفع بن" }).first().click();
+      await expect(section.locator(".tag", { hasText: "بن" })).toHaveCount(0);
+    } finally {
+      await proxyCall(page, `/api/v1/files/${upload.file_id}?purge=true`, { method: "DELETE", allowMissing: true });
+      const { items } = await proxyCall(page, "/api/v1/keys");
+      for (const k of items) {
+        if (k.name === "e2e-mgr-key") await proxyCall(page, `/api/v1/keys/${k.id}`, { method: "DELETE" });
+      }
+      const { items: accs } = await proxyCall(page, "/api/v1/accounts");
+      for (const a of accs) {
+        if (a.label === "e2e-acc2") await proxyCall(page, `/api/v1/accounts/${a.id}`, { method: "DELETE" });
+      }
+    }
+  });
+
   test("logout returns to landing", async ({ page }) => {
     await login(page);
     await page.getByRole("button", { name: "خروج" }).click();

@@ -96,20 +96,24 @@ async def file_response(
     mime: str,
     head_only: bool = False,
     range_start: Optional[int] = None,
+    inline: bool = False,
 ) -> "typing.Any":
     """Build a Starlette StreamingResponse with Range/206 handling.
 
     The telegram backend is acquired inside the generator so slow clients do
     not hold pool slots while queued (acquire happens right before first byte).
+    ``inline=True`` serves browser-previewable media without the download
+    attachment header (image/video/audio/pdf preview in the panel).
     """
     from fastapi.responses import StreamingResponse
 
     total = int(rec["size"])
     start, end = 0, total - 1
     status = 200
+    disposition = "inline" if inline else "attachment"
     headers = {
         "Accept-Ranges": "bytes",
-        "Content-Disposition": f'attachment; filename="{_ascii_name(filename)}"; filename*=UTF-8\'\'{_quote(filename)}',
+        "Content-Disposition": f'{disposition}; filename="{_ascii_name(filename)}"; filename*=UTF-8\'\'{_quote(filename)}',
         "ETag": f'"{rec["id"]}"',
         "Cache-Control": "public, max-age=3600",
     }

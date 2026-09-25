@@ -176,6 +176,74 @@ async def test_files_filter_by_storage_channel(client, admin_headers):
     await db.execute("DELETE FROM files WHERE id LIKE 'fc-%'")
 
 
+async def test_file_manager_block_search_order(client, admin_headers):
+    """Block/unban blocks every serving path; search/mime/order/total filters work."""
+    from app.core.state import get_db as gdb
+
+    db = await gdb()
+    from app.tg.fake import FakeBackend
+
+    FakeBackend.STORE.clear()
+    for fid, name, mime, size, dl in (
+        ("fm-1", "alpha.png", "image/png", 300, 5),
+        ("fm-2", "beta.mp4", "video/mp4", 900, 2),
+        ("fm-3", "gamma.txt", "text/plain", 100, 0),
+    ):
+        FakeBackend.STORE[("me", 100 + int(fid[-1]))] = (b"x" * size, mime)
+        await db.execute(
+            "INSERT INTO files(id, name, size, mime, uploader, source, backend, status, message_ids, downloads, created_at)"
+            " VALUES(?,?,?,?,?,?,?,'ready','[1]',?,?)",
+            (fid, name, size, mime, "t", "api", "telegram", dl, 1.0),
+        )
+        await db.execute("INSERT INTO file_parts(file_id, idx, message_id, size) VALUES(?,?,?,?)", (fid, 0, 100 + int(fid[-1]), size))
+
+    # list filters
+    d = (await client.get("/api/v1/files", params={"q": "alpha"}, headers=admin_headers)).json()
+    assert [i["id"] for i in d["items"]] == ["fm-1"] and d["total"] == 1
+    d = (await client.get("/api/v1/files", params={"mime": "image/"}, headers=admin_headers)).json()
+    assert {i["id"] for i in d["items"]} == {"fm-1"}
+    d = (await client.get("/api/v1/files", params={"order": "size"}, headers=admin_headers)).json()
+    assert d["items"][0]["id"] == "fm-2"
+    d = (await client.get("/api/v1/files", params={"order": "downloads"}, headers=admin_headers)).json()
+    assert d["items"][0]["id"] == "fm-1"
+
+    # block
+    r = await client.patch("/api/v1/files/fm-1/block", json={"blocked": True}, headers=admin_headers)
+    assert r.status_code == 200 and r.json()["blocked"] is True
+    d = (await client.get("/api/v1/files", params={"blocked": "1"}, headers=admin_headers)).json()
+    assert {i["id"] for i in d["items"]} == {"fm-1"}
+    # blocked file refuses content + preview + presigned public path
+    assert (await client.get("/api/v1/files/fm-1/content", headers=admin_headers)).status_code == 403
+    assert (await client.get("/api/v1/files/fm-1/preview", headers=admin_headers)).status_code == 403
+    # unblock restores serving
+    await client.patch("/api/v1/files/fm-1/block", json={"blocked": False}, headers=admin_headers)
+    assert (await client.get("/api/v1/files/fm-1/preview", headers=admin_headers)).status_code == 200
+    assert (await client.get("/api/v1/files/fm-3/preview", headers=admin_headers)).status_code == 200  # text inline
+
+    # preview of a non-previewable type is 415
+    await db.execute("UPDATE files SET mime='application/zip' WHERE id='fm-2'")
+    assert (await client.get("/api/v1/files/fm-2/preview", headers=admin_headers)).status_code == 415
+
+    # share link disable/enable kills and restores the slug download
+    r = await client.post("/api/v1/files/fm-2/share", json={"slug": "fm2link"}, headers=admin_headers)
+    assert r.status_code == 200, r.text
+    links = (await client.get("/api/v1/files/fm-2/links", headers=admin_headers)).json()["items"]
+    lid = links[0]["id"]
+    assert (await client.get("/d/fm2link/dl")).status_code == 200
+    await client.patch(f"/api/v1/files/fm-2/links/{lid}", json={"disabled": True}, headers=admin_headers)
+    assert (await client.get("/d/fm2link/dl")).status_code == 404
+    await client.patch(f"/api/v1/files/fm-2/links/{lid}", json={"disabled": False}, headers=admin_headers)
+    assert (await client.get("/d/fm2link/dl")).status_code == 200
+    # blocked file also kills the slug link
+    await client.patch("/api/v1/files/fm-2/block", json={"blocked": True}, headers=admin_headers)
+    assert (await client.get("/d/fm2link/dl")).status_code == 403
+
+    await db.execute("DELETE FROM file_parts WHERE file_id LIKE 'fm-%'")
+    await db.execute("DELETE FROM links WHERE file_id LIKE 'fm-%'")
+    await db.execute("DELETE FROM files WHERE id LIKE 'fm-%'")
+    FakeBackend.STORE.clear()
+
+
 async def test_folder_caption_reaches_telegram_backend(client, admin_headers):
     """Queue _handle_upload builds '#docs #2026' caption from the folder path."""
     from app.tg.fake import FakeBackend

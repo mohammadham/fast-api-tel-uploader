@@ -464,13 +464,33 @@ class FileRepo:
         include_subfolders: bool = False,
         storage_chat: Optional[str] = None,
         storage_chat_is_default: bool = False,
+        q: str = "",
+        mime_prefix: str = "",
+        order: str = "date",
+        blocked_only: bool = False,
     ) -> List[Dict[str, Any]]:
         cols = (
             "SELECT id, name, size, mime, status, parts, downloads, bytes_served, uploader, source,"
-            " backend, storage_chat, folder_id, created_at, ready_at, error FROM files"
+            " backend, storage_chat, folder_id, blocked, created_at, ready_at, error FROM files"
         )
         params: list = []
-        prefix, conds = "", []
+        prefix, conds = "", ["deleted_at IS NULL"]
+        if q:
+            conds.append("name LIKE ?")
+            params.append(f"%{q}%")
+        if mime_prefix:
+            conds.append("mime LIKE ?")
+            params.append(f"{mime_prefix}%")
+        if blocked_only:
+            conds.append("blocked=1")
+        if order == "size":
+            order_sql = " ORDER BY size DESC"
+        elif order == "downloads":
+            order_sql = " ORDER BY downloads DESC"
+        elif order == "name":
+            order_sql = " ORDER BY name COLLATE NOCASE"
+        else:
+            order_sql = " ORDER BY created_at DESC"
         if folder_id is not None:
             params.append(folder_id)
             if include_subfolders:
@@ -492,9 +512,55 @@ class FileRepo:
             else:
                 conds.append("storage_chat=?")
         where = (" WHERE " + " AND ".join(conds)) if conds else ""
-        sql = prefix + cols + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        sql = prefix + cols + where + order_sql + " LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         return await self.db.fetch_all(sql, params)
+
+    async def count(
+        self,
+        *,
+        folder_id: Optional[int] = None,
+        include_subfolders: bool = False,
+        storage_chat: Optional[str] = None,
+        storage_chat_is_default: bool = False,
+        q: str = "",
+        mime_prefix: str = "",
+        blocked_only: bool = False,
+    ) -> int:
+        """Same filter set as list() but returns the total row count."""
+        params: list = []
+        prefix, conds = "", ["deleted_at IS NULL"]
+        if q:
+            conds.append("name LIKE ?")
+            params.append(f"%{q}%")
+        if mime_prefix:
+            conds.append("mime LIKE ?")
+            params.append(f"{mime_prefix}%")
+        if blocked_only:
+            conds.append("blocked=1")
+        if folder_id is not None:
+            params.append(folder_id)
+            if include_subfolders:
+                prefix = (
+                    "WITH folder_tree(id) AS ("
+                    " SELECT id FROM folders WHERE id=?"
+                    " UNION ALL SELECT f.id FROM folders f JOIN folder_tree t ON f.parent_id=t.id) "
+                )
+                conds.append("folder_id IN (SELECT id FROM folder_tree)")
+            else:
+                conds.append("folder_id=?")
+        if storage_chat is not None:
+            params.append(storage_chat)
+            if storage_chat_is_default:
+                conds.append("(storage_chat='' OR storage_chat=?)")
+            else:
+                conds.append("storage_chat=?")
+        where = (" WHERE " + " AND ".join(conds)) if conds else ""
+        sql = prefix + "SELECT COUNT(*) FROM files" + where
+        return int(await self.db.scalar(sql, params) or 0)
+
+    async def set_blocked(self, file_id: str, blocked: bool) -> None:
+        await self.db.execute("UPDATE files SET blocked=? WHERE id=?", (1 if blocked else 0, file_id))
 
     async def set_status(self, file_id: str, status: str, error: str = "") -> None:
         extra = ""
@@ -773,3 +839,6 @@ class LinkRepo:
 
     async def delete(self, link_id: int) -> int:
         return await self.db.execute("DELETE FROM links WHERE id=?", (link_id,))
+
+    async def set_disabled(self, link_id: int, disabled: bool) -> int:
+        return await self.db.execute("UPDATE links SET disabled=? WHERE id=?", (1 if disabled else 0, link_id))

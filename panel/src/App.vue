@@ -237,6 +237,26 @@
           <span v-if="channelFilterIsDefault" class="tag" style="font-size:11px">پیش‌فرض سیستم (فایل‌های بدون کانال هم اینجا هستند)</span>
           <button class="ghost" style="padding:2px 10px;font-size:11px" @click="clearChannelFilter">حذف فیلتر ×</button>
         </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+          <input v-model="filesQuery" dir="auto" placeholder="جستجوی نام فایل..." style="max-width:220px;padding:5px 10px;font-size:13px" @input="filesSearch">
+          <select v-model="filesMime" style="padding:5px 8px;font-size:13px" @change="loaders.files()">
+            <option value="">همه انواع</option>
+            <option value="image/">تصویر</option>
+            <option value="video/">ویدیو</option>
+            <option value="audio/">صوت</option>
+            <option value="text/">متن/کد</option>
+            <option value="application/pdf">PDF</option>
+            <option value="application/zip">آرشیو</option>
+          </select>
+          <select v-model="filesOrder" style="padding:5px 8px;font-size:13px" @change="loaders.files()">
+            <option value="date">جدیدترین</option>
+            <option value="name">نام</option>
+            <option value="size">حجم</option>
+            <option value="downloads">بیشترین دانلود</option>
+          </select>
+          <button class="ghost" :style="filesBlockedOnly ? 'border-color:var(--err);color:var(--err)' : ''" style="padding:5px 10px;font-size:12px" @click="filesBlockedOnly = !filesBlockedOnly; loaders.files()">فقط بن‌شده‌ها</button>
+          <span class="muted" style="font-size:12px">{{ filesTotal }} فایل</span>
+        </div>
         <div style="display:flex;gap:14px;align-items:flex-start">
           <div class="card" style="width:230px;flex-shrink:0;padding:10px 12px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
@@ -276,15 +296,20 @@
             <tbody>
               <tr v-for="f in files" :key="f.id">
                 <td dir="ltr"><code>{{ f.id }}</code></td>
-                <td>{{ f.name }}</td><td>{{ fmtBytes(f.size) }}</td>
+                <td><a href="#" style="color:inherit;text-decoration:underline dotted" @click.prevent="filePreview(f)" :title="f.mime">{{ f.name }}</a><span v-if="f.blocked" class="tag" style="background:var(--err);color:#fff;font-size:10px;margin-inline-start:6px">بن</span></td>
+                <td>{{ fmtBytes(f.size) }}</td>
                 <td><span class="badge" :class="f.status">{{ f.status }}</span></td>
                 <td>{{ f.backend || "tg" }}</td>
                 <td dir="ltr"><code style="font-size:11px">{{ f.storage_chat || 'default' }}</code></td>
                 <td>{{ f.downloads }}</td>
                 <td class="muted">{{ fmtTime(f.created_at) }}</td>
                 <td>
+                  <button @click="filePreview(f)">پیش‌نمایش</button>
                   <button @click="fileLink(f)">لینک</button>
+                  <button @click="fileLinksDlg(f)">لینک‌ها</button>
                   <button @click="fileMoveDlg(f)">پوشه</button>
+                  <button v-if="f.blocked" @click="fileBlock(f, false)">رفع بن</button>
+                  <button v-else class="danger" @click="fileBlock(f, true)">بن</button>
                   <button v-if="f.deleted_at" @click="fileRestore(f)">بازیابی</button>
                   <button class="danger" @click="fileDelete(f)">حذف</button>
                 </td>
@@ -292,6 +317,11 @@
               <tr v-if="!files.length"><td colspan="9" class="muted">فایلی نیست</td></tr>
             </tbody>
           </table>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;justify-content:center;margin-top:10px">
+          <button class="ghost" style="padding:4px 10px;font-size:12px" :disabled="filesOffset === 0" @click="filesOffset = Math.max(0, filesOffset - filesLimit); loaders.files()">قبلی</button>
+          <span class="muted" style="font-size:12px">صفحه {{ Math.floor(filesOffset / filesLimit) + 1 }} از {{ Math.max(1, Math.ceil(filesTotal / filesLimit)) }}</span>
+          <button class="ghost" style="padding:4px 10px;font-size:12px" :disabled="filesOffset + filesLimit >= filesTotal" @click="filesOffset += filesLimit; loaders.files()">بعدی</button>
         </div>
           </div>
         </div>
@@ -524,6 +554,39 @@
       <button class="ghost" style="width:100%" @click="eitDlg.open = false">انصراف</button>
     </dialog>
 
+    <dialog :open="previewDlg.open" @close="previewDlg.open = false" style="max-width:860px;width:calc(100vw - 40px)">
+      <h3 style="margin-top:0">{{ previewDlg.name }}</h3>
+      <p class="muted" style="font-size:12px;margin:0 0 8px" dir="ltr">{{ previewDlg.mime }} · {{ fmtBytes(previewDlg.size) }}</p>
+      <div style="text-align:center;background:#0b1120;border-radius:8px;padding:8px;min-height:120px">
+        <img v-if="previewDlg.kind === 'image'" :src="previewDlg.url" style="max-width:100%;max-height:60vh;border-radius:6px">
+        <video v-else-if="previewDlg.kind === 'video'" :src="previewDlg.url" controls autoplay style="max-width:100%;max-height:60vh"></video>
+        <audio v-else-if="previewDlg.kind === 'audio'" :src="previewDlg.url" controls style="width:100%"></audio>
+        <iframe v-else-if="previewDlg.kind === 'pdf'" :src="previewDlg.url" style="width:100%;height:60vh;border:0;border-radius:6px"></iframe>
+        <pre v-else-if="previewDlg.kind === 'text'" style="text-align:start;max-height:60vh;overflow:auto;font-size:12px;color:#e2e8f0"><code>{{ previewDlg.text }}</code></pre>
+        <p v-else class="muted">پیش‌نمایش برای این نوع فایل موجود نیست</p>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="primary" style="flex:1" @click="fileDownload(previewDlg)">دانلود</button>
+        <button class="ghost" style="flex:1" @click="previewDlg.open = false">بستن</button>
+      </div>
+    </dialog>
+
+    <dialog :open="linksDlg.open" @close="linksDlg.open = false">
+      <h3>لینک‌های اشتراک — {{ linksDlg.name }}</h3>
+      <div v-if="linksDlg.items.length" style="max-height:300px;overflow:auto">
+        <div v-for="l in linksDlg.items" :key="l.id" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border,#2a2f3a)">
+          <code dir="ltr" style="font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis">/{{ l.slug }}</code>
+          <span class="muted" style="font-size:11px">{{ l.hits }}/{{ l.max_downloads || '∞' }}</span>
+          <span v-if="l.disabled" class="tag" style="font-size:10px;background:var(--err);color:#fff">غیرفعال</span>
+          <button class="ghost" style="padding:2px 8px;font-size:11px" @click="linkCopy(l)">کپی</button>
+          <button class="ghost" style="padding:2px 8px;font-size:11px" @click="linkToggle(l)">{{ l.disabled ? 'فعال' : 'غیرفعال' }}</button>
+          <button class="danger" style="padding:2px 8px;font-size:11px" @click="linkDelete(l)">حذف</button>
+        </div>
+      </div>
+      <p v-else class="muted" style="font-size:13px">برای این فایل لینک عمومی‌ای ساخته نشده — از دکمه «لینک» یکی بساز.</p>
+      <button class="ghost" style="width:100%;margin-top:10px" @click="linksDlg.open = false">بستن</button>
+    </dialog>
+
     <dialog :open="folderDlg.open" @close="folderDlg.open = false">
       <h3>پوشه جدید</h3>
       <div class="field"><label>مسیر (برای تو در تو از / استفاده کن، مثل projects/2026)</label>
@@ -751,6 +814,75 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
     const filesFolderDraft = ref(""); // X-Folder for panel uploads
     const channelFilter = ref(""); // files tab: filter by storage channel
     const channelFilterIsDefault = ref(false);
+    /* ---------- file manager: search/filter/pagination/preview/block/links ---------- */
+    const filesQuery = ref("");
+    const filesMime = ref("");
+    const filesOrder = ref("date");
+    const filesBlockedOnly = ref(false);
+    const filesTotal = ref(0);
+    const filesLimit = ref(50);
+    const filesOffset = ref(0);
+    const previewDlg = reactive({ open: false, id: "", name: "", mime: "", size: 0, kind: "", url: "", text: "" });
+    const linksDlg = reactive({ open: false, fileId: "", name: "", items: [] });
+    let searchTimer = null;
+    function filesSearch() {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => { filesOffset.value = 0; loaders.files(); }, 300);
+    }
+    function _previewKind(mime) {
+      const m = (mime || "").toLowerCase();
+      if (m.startsWith("image/")) return "image";
+      if (m.startsWith("video/")) return "video";
+      if (m.startsWith("audio/")) return "audio";
+      if (m === "application/pdf") return "pdf";
+      if (m.startsWith("text/") || m === "application/json") return "text";
+      return "";
+    }
+    async function filePreview(f) {
+      const kind = _previewKind(f.mime);
+      Object.assign(previewDlg, { open: true, id: f.id, name: f.name, mime: f.mime, size: f.size, kind, url: "", text: "" });
+      if (!kind) return;
+      const url = `/api/v1/files/${f.id}/preview`;
+      if (kind === "text") {
+        try {
+          const r = await fetch(url, { headers: { Authorization: "Bearer " + token.value } });
+          if (!r.ok) throw new Error(await r.text());
+          previewDlg.text = (await r.text()).slice(0, 20000);
+        } catch (e) { showToast("خطا در پیش‌نمایش: " + e.message, 4000, true); previewDlg.open = false; }
+      } else {
+        previewDlg.url = url; // <img>/<video>/... send the Authorization header via cookie-less fetch? No: they can't, so use presigned-less direct URL with token query fallback
+      }
+    }
+    function fileDownload(f) {
+      // attachment download honoring auth header via fetch+blob
+      fetch(`/api/v1/files/${f.id}/content`, { headers: { Authorization: "Bearer " + token.value } })
+        .then((r) => { if (!r.ok) throw new Error("download failed"); return r.blob(); })
+        .then((b) => { const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = f.name; a.click(); URL.revokeObjectURL(a.href); })
+        .catch((e) => showToast("خطا: " + e.message, 4000, true));
+    }
+    async function fileBlock(f, blocked) {
+      if (blocked && !confirm("این فایل بن شود؟ همه لینک‌ها و پیش‌نمایش‌ها بسته می‌شود (فایل تلگرامی دست‌نخورده می‌ماند).")) return;
+      await api(`/api/v1/files/${f.id}/block`, { method: "PATCH", json: { blocked } });
+      showToast(blocked ? "فایل بن شد" : "بن برداشته شد");
+      loaders.files();
+    }
+    async function fileLinksDlg(f) {
+      Object.assign(linksDlg, { open: true, fileId: f.id, name: f.name, items: [] });
+      try { const d = await api(`/api/v1/files/${f.id}/links`); linksDlg.items = d.items || []; }
+      catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    }
+    function linkCopy(l) { navigator.clipboard.writeText(location.origin + "/" + l.slug); showToast("کپی شد"); }
+    async function linkToggle(l) {
+      await api(`/api/v1/files/${linksDlg.fileId}/links/${l.id}`, { method: "PATCH", json: { disabled: !l.disabled } });
+      l.disabled = !l.disabled;
+      showToast(l.disabled ? "لینک غیرفعال شد" : "لینک فعال شد");
+    }
+    async function linkDelete(l) {
+      if (!confirm("این لینک حذف شود؟")) return;
+      await api(`/api/v1/files/${linksDlg.fileId}/links/${l.id}`, { method: "DELETE" });
+      linksDlg.items = linksDlg.items.filter((x) => x.id !== l.id);
+      showToast("لینک حذف شد");
+    }
     const folderDlg = reactive({ open: false, path: "", msg: "" });
     const moveDlg = reactive({ open: false, fileId: "", fileName: "", path: "", msg: "" });
     const proxiesList = ref([]);
@@ -885,14 +1017,20 @@ const doLogin = submitLogin;
     };
     loaders.files = async () => {
       try {
-        let url = "/api/v1/files";
+        const p = new URLSearchParams();
+        p.set("limit", String(filesLimit.value));
+        p.set("offset", String(filesOffset.value));
+        if (filesQuery.value.trim()) p.set("q", filesQuery.value.trim());
+        if (filesMime.value) p.set("mime", filesMime.value);
+        if (filesOrder.value !== "date") p.set("order", filesOrder.value);
+        if (filesBlockedOnly.value) p.set("blocked", "1");
         if (channelFilter.value) {
-          url += channelFilterIsDefault.value
-            ? "?default_channel=1&limit=500"
-            : "?storage_chat=" + encodeURIComponent(channelFilter.value) + "&limit=500";
+          if (channelFilterIsDefault.value) p.set("default_channel", "1");
+          else p.set("storage_chat", channelFilter.value);
         }
-        const [d, fo] = await Promise.all([api(url), api("/api/v1/folders")]);
+        const [d, fo] = await Promise.all([api("/api/v1/files?" + p.toString()), api("/api/v1/folders")]);
         files.value = d.items || [];
+        filesTotal.value = d.total || 0;
         foldersFlat.value = fo.items || [];
       }
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
@@ -912,6 +1050,7 @@ const doLogin = submitLogin;
     async function openFolder(id) {
       currentFolderId.value = id;
       channelFilter.value = ""; channelFilterIsDefault.value = false; // mutually exclusive
+      filesOffset.value = 0;
       if (id === null) {
         currentFolderPath.value = "";
         filesFolderDraft.value = "";

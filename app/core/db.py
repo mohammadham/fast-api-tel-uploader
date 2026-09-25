@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS files (
   created_at REAL NOT NULL,
   ready_at REAL,
   error TEXT NOT NULL DEFAULT '',
-  folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL
+  folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL,
+  blocked INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS folders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -277,7 +278,8 @@ CREATE TABLE IF NOT EXISTS files (
   deleted_at DOUBLE PRECISION,
   thumb_message_id INTEGER,
   backend TEXT NOT NULL DEFAULT '',
-  folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL
+  folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL,
+  blocked INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS folders (
   id SERIAL PRIMARY KEY,
@@ -426,6 +428,7 @@ class Database:
             "ALTER TABLE api_keys ADD COLUMN storage_chat TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE files ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL",
             "ALTER TABLE upload_sessions ADD COLUMN folder_path TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE files ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0",
         ):
             try:
                 await self._conn.execute(stmt)
