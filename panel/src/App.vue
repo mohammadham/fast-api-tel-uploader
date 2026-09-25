@@ -120,12 +120,13 @@
         </div>
         <div class="card wide">
           <table>
-            <thead><tr><th>شناسه</th><th>برچسب</th><th>تلفن</th><th>وضعیت</th><th>آپلودها</th><th>دانلودها</th><th>حجم آپلود</th><th>عملیات</th></tr></thead>
+            <thead><tr><th>شناسه</th><th>برچسب</th><th>تلفن</th><th>وضعیت</th><th>آپلودها</th><th>دانلودها</th><th>حجم آپلود</th><th>کانال ذخیره</th><th>عملیات</th></tr></thead>
             <tbody>
               <tr v-for="a in accounts" :key="a.id">
                 <td>{{ a.id }}</td><td>{{ a.label }}</td><td dir="ltr">{{ a.phone }}</td>
                 <td><span class="badge" :class="a.status">{{ a.status }}</span></td>
                 <td>{{ a.uploads_done }}</td><td>{{ a.downloads_done }}</td><td>{{ fmtBytes(a.bytes_up) }}</td>
+                <td dir="ltr"><code style="font-size:11px">{{ a.storage_chat_id || 'default' }}</code></td>
                 <td>
                   <button @click="accToggle(a)">{{ a.enabled ? "غیرفعال" : "فعال" }}</button>
                   <button @click="accTest(a)">تست</button>

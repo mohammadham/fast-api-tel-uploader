@@ -1612,3 +1612,75 @@ INFO:     127.0.0.1:51386 - "GET /api/v1/admin/nodes HTTP/1.1" 200 OK
 INFO:     127.0.0.1:51387 - "GET /api/v1/admin/proxies HTTP/1.1" 200 OK
 {"ts": 1790367191.302, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_fef6f3d163c706c2", "correlation_id": "req_fef6f3d163c706c2", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 16.6, "ip": "127.0.0.1"}
 INFO:     127.0.0.1:51385 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790367221.296, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_c2839d434fb9cb62", "correlation_id": "req_c2839d434fb9cb62", "method": "GET", "path": "/api/v1/admin/nodes", "status": 200, "duration_ms": 3.9, "ip": "127.0.0.1"}
+{"ts": 1790367221.296, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_f90d297d8ad9e145", "correlation_id": "req_f90d297d8ad9e145", "method": "GET", "path": "/api/v1/admin/proxies", "status": 200, "duration_ms": 4.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51406 - "GET /api/v1/admin/nodes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51407 - "GET /api/v1/admin/proxies HTTP/1.1" 200 OK
+{"ts": 1790367221.306, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_4c2d80a874349dcb", "correlation_id": "req_4c2d80a874349dcb", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 16.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51405 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790367251.293, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_0de8fc0f110f1a19", "correlation_id": "req_0de8fc0f110f1a19", "method": "GET", "path": "/api/v1/admin/nodes", "status": 200, "duration_ms": 4.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51446 - "GET /api/v1/admin/nodes HTTP/1.1" 200 OK
+{"ts": 1790367251.294, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_94f8397dbdb10864", "correlation_id": "req_94f8397dbdb10864", "method": "GET", "path": "/api/v1/admin/proxies", "status": 200, "duration_ms": 5.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51447 - "GET /api/v1/admin/proxies HTTP/1.1" 200 OK
+{"ts": 1790367251.304, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_dc05caf422868643", "correlation_id": "req_dc05caf422868643", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 17.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51445 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790367281.29, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_8d8851d3a0b5e3a6", "correlation_id": "req_8d8851d3a0b5e3a6", "method": "GET", "path": "/api/v1/admin/nodes", "status": 200, "duration_ms": 5.2, "ip": "127.0.0.1"}
+{"ts": 1790367281.29, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_f81fdefc5d3dbd03", "correlation_id": "req_f81fdefc5d3dbd03", "method": "GET", "path": "/api/v1/admin/proxies", "status": 200, "duration_ms": 5.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51453 - "GET /api/v1/admin/nodes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51454 - "GET /api/v1/admin/proxies HTTP/1.1" 200 OK
+{"ts": 1790367281.302, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_08799784db21ba06", "correlation_id": "req_08799784db21ba06", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 19.4, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51452 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790367311.282, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_03dc66358a69ad15", "correlation_id": "req_03dc66358a69ad15", "method": "GET", "path": "/api/v1/admin/nodes", "status": 200, "duration_ms": 4.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51482 - "GET /api/v1/admin/nodes HTTP/1.1" 200 OK
+{"ts": 1790367311.283, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_1580fa05b02f44aa", "correlation_id": "req_1580fa05b02f44aa", "method": "GET", "path": "/api/v1/admin/proxies", "status": 200, "duration_ms": 3.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51483 - "GET /api/v1/admin/proxies HTTP/1.1" 200 OK
+{"ts": 1790367311.293, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_d27491208ce5d864", "correlation_id": "req_d27491208ce5d864", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 17.1, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51481 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790367341.298, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_74f8a219efc64f7d", "correlation_id": "req_74f8a219efc64f7d", "method": "GET", "path": "/api/v1/admin/nodes", "status": 200, "duration_ms": 4.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51591 - "GET /api/v1/admin/nodes HTTP/1.1" 200 OK
+{"ts": 1790367341.3, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_a3ade3abdd44b156", "correlation_id": "req_a3ade3abdd44b156", "method": "GET", "path": "/api/v1/admin/proxies", "status": 200, "duration_ms": 5.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51592 - "GET /api/v1/admin/proxies HTTP/1.1" 200 OK
+{"ts": 1790367341.311, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_b8f503c8c5b3ea89", "correlation_id": "req_b8f503c8c5b3ea89", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 17.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:51590 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790367371.284, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_cedc1f0f0e71839d", "correlation_id": "req_cedc1f0f0e71839d", "method": "GET", "path": "/api/v1/admin/nodes", "status": 200, "duration_ms": 4.8, "ip": "127.0.0.1"}
+{"ts": 1790367371.286, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_be53c36c50ee15de", "correlation_id": "req_be53c36c50ee15de", "method": "GET", "path": "/api/v1/admin/proxies", "status": 200, "duration_ms": 3.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:55056 - "GET /api/v1/admin/nodes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55057 - "GET /api/v1/admin/proxies HTTP/1.1" 200 OK
+{"ts": 1790367371.296, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_c97b64a3df8115cc", "correlation_id": "req_c97b64a3df8115cc", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 16.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:55055 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790367401.282, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e6bc68f139e37810", "correlation_id": "req_e6bc68f139e37810", "method": "GET", "path": "/api/v1/admin/nodes", "status": 200, "duration_ms": 3.7, "ip": "127.0.0.1"}
+{"ts": 1790367401.283, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_95ca8a0ca0818c3b", "correlation_id": "req_95ca8a0ca0818c3b", "method": "GET", "path": "/api/v1/admin/proxies", "status": 200, "duration_ms": 4.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:55116 - "GET /api/v1/admin/nodes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55117 - "GET /api/v1/admin/proxies HTTP/1.1" 200 OK
+{"ts": 1790367401.293, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_e58530aaf611ec77", "correlation_id": "req_e58530aaf611ec77", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 16.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:55115 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790367431.294, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_6414be532a5f466b", "correlation_id": "req_6414be532a5f466b", "method": "GET", "path": "/api/v1/admin/nodes", "status": 200, "duration_ms": 4.3, "ip": "127.0.0.1"}
+{"ts": 1790367431.294, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_40749702c694700b", "correlation_id": "req_40749702c694700b", "method": "GET", "path": "/api/v1/admin/proxies", "status": 200, "duration_ms": 3.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54703 - "GET /api/v1/admin/nodes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54704 - "GET /api/v1/admin/proxies HTTP/1.1" 200 OK
+{"ts": 1790367431.304, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_1e16235a7c14b1bd", "correlation_id": "req_1e16235a7c14b1bd", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 16.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54702 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790367461.283, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_9d7727c610889c28", "correlation_id": "req_9d7727c610889c28", "method": "GET", "path": "/api/v1/admin/nodes", "status": 200, "duration_ms": 5.2, "ip": "127.0.0.1"}
+{"ts": 1790367461.284, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_3073d030e6768914", "correlation_id": "req_3073d030e6768914", "method": "GET", "path": "/api/v1/admin/proxies", "status": 200, "duration_ms": 5.9, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54714 - "GET /api/v1/admin/nodes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54715 - "GET /api/v1/admin/proxies HTTP/1.1" 200 OK
+{"ts": 1790367461.293, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_17d62eb8b2fdd4c3", "correlation_id": "req_17d62eb8b2fdd4c3", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 17.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:54713 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790367491.297, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_50dff84ab1a9a5db", "correlation_id": "req_50dff84ab1a9a5db", "method": "GET", "path": "/api/v1/admin/nodes", "status": 200, "duration_ms": 4.2, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:62980 - "GET /api/v1/admin/nodes HTTP/1.1" 200 OK
+{"ts": 1790367491.299, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_fb40e5c7e4d662b4", "correlation_id": "req_fb40e5c7e4d662b4", "method": "GET", "path": "/api/v1/admin/proxies", "status": 200, "duration_ms": 4.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:62981 - "GET /api/v1/admin/proxies HTTP/1.1" 200 OK
+{"ts": 1790367491.309, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_10316e40bb0ffd67", "correlation_id": "req_10316e40bb0ffd67", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 18.6, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:62979 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790367521.288, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_9e6f412ccdca973a", "correlation_id": "req_9e6f412ccdca973a", "method": "GET", "path": "/api/v1/admin/nodes", "status": 200, "duration_ms": 3.8, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63024 - "GET /api/v1/admin/nodes HTTP/1.1" 200 OK
+{"ts": 1790367521.289, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_4d4e4c6cb0378384", "correlation_id": "req_4d4e4c6cb0378384", "method": "GET", "path": "/api/v1/admin/proxies", "status": 200, "duration_ms": 5.5, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63025 - "GET /api/v1/admin/proxies HTTP/1.1" 200 OK
+{"ts": 1790367521.297, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_93204441a62fa55c", "correlation_id": "req_93204441a62fa55c", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 15.0, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63023 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
+{"ts": 1790367552.031, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_ebab9310a70ce6e8", "correlation_id": "req_ebab9310a70ce6e8", "method": "GET", "path": "/api/v1/admin/nodes", "status": 200, "duration_ms": 4.4, "ip": "127.0.0.1"}
+{"ts": 1790367552.032, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_78bb939e7a455cd7", "correlation_id": "req_78bb939e7a455cd7", "method": "GET", "path": "/api/v1/admin/proxies", "status": 200, "duration_ms": 3.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63035 - "GET /api/v1/admin/nodes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63036 - "GET /api/v1/admin/proxies HTTP/1.1" 200 OK
+{"ts": 1790367552.043, "level": "INFO", "logger": "tgdrive.access", "msg": "request", "request_id": "req_96a5a568fed16d6a", "correlation_id": "req_96a5a568fed16d6a", "method": "GET", "path": "/api/v1/queue/stats", "status": 200, "duration_ms": 16.7, "ip": "127.0.0.1"}
+INFO:     127.0.0.1:63034 - "GET /api/v1/queue/stats HTTP/1.1" 200 OK
