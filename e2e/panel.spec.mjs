@@ -271,6 +271,74 @@ test.describe.serial("panel smoke", () => {
     await proxyCall(page, `/api/v1/folders/${rootId}`, { method: "DELETE", allowMissing: true });
   });
 
+  test("storage channel click drills down to its files", async ({ page }) => {
+    await login(page);
+
+    // seed: key with dedicated channel + one ready upload through it
+    const { items: existingKeys } = await proxyCall(page, "/api/v1/keys");
+    for (const k of existingKeys) {
+      if (k.name === "e2e-chan-key" && !k.revoked) await proxyCall(page, `/api/v1/keys/${k.id}`, { method: "DELETE" });
+    }
+    const { items: existingAccs } = await proxyCall(page, "/api/v1/accounts");
+    for (const a of existingAccs) {
+      if (a.label === "e2e-acc") await proxyCall(page, `/api/v1/accounts/${a.id}`, { method: "DELETE" });
+    }
+    await proxyCall(page, "/api/v1/accounts/login/start", { method: "POST", body: { phone: "+989120000001", label: "e2e-acc" } });
+    const key = await proxyCall(page, "/api/v1/keys", {
+      method: "POST",
+      body: { name: "e2e-chan-key", scopes: "read,write", storage_chat: "@e2e-drill-chan" },
+    });
+    const upload = await page.evaluate(async (raw) => {
+      const s = await fetch("/api/v1/files/upload/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": raw },
+        body: JSON.stringify({ name: "e2e-drill.png", size: 5 }),
+      }).then((r) => r.json());
+      return await fetch(`/api/v1/files/upload/session/${s.session_id}`, {
+        method: "PATCH",
+        headers: { "X-API-Key": raw, "X-Offset": "0", "Content-Type": "application/octet-stream" },
+        body: "hello",
+      }).then((r) => r.json());
+    }, key.key);
+    expect(upload.completed).toBeTruthy();
+    let row = null;
+    for (let i = 0; i < 40; i++) {
+      const { items } = await proxyCall(page, "/api/v1/files");
+      row = items.find((f) => f.id === upload.file_id);
+      if (row?.status === "ready") break;
+      await page.waitForTimeout(250);
+    }
+    expect(row?.status).toBe("ready");
+
+    try {
+      // channels card → click the channel name → files tab opens filtered
+      await page.locator("#tabs button", { hasText: "تنظیمات" }).click();
+      await page.locator("button", { hasText: "بارگذاری/به‌روزرسانی" }).click();
+      const card = page.locator(".card", { hasText: "کانال‌های ذخیره‌سازی" });
+      await expect(card).toBeVisible();
+      await card.locator("b", { hasText: "@e2e-drill-chan" }).click();
+      // now on the files tab with the filter chip
+      const section = page.locator("main section:visible");
+      await expect(section.locator(".tag", { hasText: "@e2e-drill-chan" })).toBeVisible();
+      // the uploaded file is listed with its channel in the new column
+      await expect(section.locator("tbody")).toContainText("e2e-drill.png");
+      await expect(section.locator("tbody")).toContainText("@e2e-drill-chan");
+      // clearing the filter restores the unfiltered list
+      await section.getByRole("button", { name: "حذف فیلتر ×" }).click();
+      await expect(section.locator(".tag", { hasText: "@e2e-drill-chan" })).toHaveCount(0);
+    } finally {
+      await proxyCall(page, `/api/v1/files/${upload.file_id}?purge=true`, { method: "DELETE" });
+      const { items } = await proxyCall(page, "/api/v1/keys");
+      for (const k of items) {
+        if (k.name === "e2e-chan-key") await proxyCall(page, `/api/v1/keys/${k.id}`, { method: "DELETE" });
+      }
+      const { items: accs } = await proxyCall(page, "/api/v1/accounts");
+      for (const a of accs) {
+        if (a.label === "e2e-acc") await proxyCall(page, `/api/v1/accounts/${a.id}`, { method: "DELETE" });
+      }
+    }
+  });
+
   test("logout returns to landing", async ({ page }) => {
     await login(page);
     await page.getByRole("button", { name: "خروج" }).click();

@@ -146,6 +146,36 @@ async def test_upload_with_folder_creates_tag_caption(client, admin_headers, api
     assert up.status_code == 400
 
 
+async def test_files_filter_by_storage_channel(client, admin_headers):
+    """Files list ?storage_chat= / ?default_channel=1 drill-down from the channels card."""
+    from app.core.state import get_db as gdb
+
+    db = await gdb()
+    for fid, chat in (("fc-1", "@chan-a"), ("fc-2", "@chan-a"), ("fc-3", "@chan-b"), ("fc-4", "")):
+        await db.execute(
+            "INSERT INTO files(id, name, size, mime, uploader, source, backend, status, storage_chat, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (fid, f"{fid}.bin", 5, "image/png", "t", "api", "telegram", "ready", chat, 1.0),
+        )
+    r = await client.put("/api/v1/admin/settings", json={"tg_storage_chat": "@sys-default"}, headers=admin_headers)
+    assert r.status_code == 200
+
+    # dedicated channel filter
+    d = (await client.get("/api/v1/files", params={"storage_chat": "@chan-a"}, headers=admin_headers)).json()
+    assert {i["id"] for i in d["items"]} == {"fc-1", "fc-2"}
+    # default channel: explicit rows + legacy empty ones
+    d = (await client.get("/api/v1/files", params={"default_channel": "1"}, headers=admin_headers)).json()
+    assert {i["id"] for i in d["items"]} == {"fc-4"}
+    # after the default is set to @chan-b, fc-3 joins the default view
+    await client.put("/api/v1/admin/settings", json={"tg_storage_chat": "@chan-b"}, headers=admin_headers)
+    d = (await client.get("/api/v1/files", params={"default_channel": "1"}, headers=admin_headers)).json()
+    assert {i["id"] for i in d["items"]} == {"fc-3", "fc-4"}
+    # unfiltered list is unchanged
+    d = (await client.get("/api/v1/files", headers=admin_headers)).json()
+    assert len(d["items"]) >= 4
+    await db.execute("DELETE FROM files WHERE id LIKE 'fc-%'")
+
+
 async def test_folder_caption_reaches_telegram_backend(client, admin_headers):
     """Queue _handle_upload builds '#docs #2026' caption from the folder path."""
     from app.tg.fake import FakeBackend

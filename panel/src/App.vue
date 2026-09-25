@@ -232,6 +232,11 @@
           </button>
           <input ref="fileInput" type="file" style="display:none" @change="upload">
         </div>
+        <div v-if="channelFilter" style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
+          <span class="tag" style="font-size:12px">کانال: <b dir="ltr">{{ channelFilter }}</b></span>
+          <span v-if="channelFilterIsDefault" class="tag" style="font-size:11px">پیش‌فرض سیستم (فایل‌های بدون کانال هم اینجا هستند)</span>
+          <button class="ghost" style="padding:2px 10px;font-size:11px" @click="clearChannelFilter">حذف فیلتر ×</button>
+        </div>
         <div style="display:flex;gap:14px;align-items:flex-start">
           <div class="card" style="width:230px;flex-shrink:0;padding:10px 12px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
@@ -267,13 +272,15 @@
         <button class="ghost" @click="readLastFile" style="margin-left:8px">خوانش آخرین فایل</button>
         <div class="card wide">
           <table>
-            <thead><tr><th>شناسه</th><th>نام</th><th>حجم</th><th>وضعیت</th><th>ذخیره</th><th>دانلود</th><th>تاریخ</th><th>عملیات</th></tr></thead>
+            <thead><tr><th>شناسه</th><th>نام</th><th>حجم</th><th>وضعیت</th><th>ذخیره</th><th>کانال</th><th>دانلود</th><th>تاریخ</th><th>عملیات</th></tr></thead>
             <tbody>
               <tr v-for="f in files" :key="f.id">
                 <td dir="ltr"><code>{{ f.id }}</code></td>
                 <td>{{ f.name }}</td><td>{{ fmtBytes(f.size) }}</td>
                 <td><span class="badge" :class="f.status">{{ f.status }}</span></td>
-                <td>{{ f.backend || "tg" }}</td><td>{{ f.downloads }}</td>
+                <td>{{ f.backend || "tg" }}</td>
+                <td dir="ltr"><code style="font-size:11px">{{ f.storage_chat || 'default' }}</code></td>
+                <td>{{ f.downloads }}</td>
                 <td class="muted">{{ fmtTime(f.created_at) }}</td>
                 <td>
                   <button @click="fileLink(f)">لینک</button>
@@ -282,7 +289,7 @@
                   <button class="danger" @click="fileDelete(f)">حذف</button>
                 </td>
               </tr>
-              <tr v-if="!files.length"><td colspan="8" class="muted">فایلی نیست</td></tr>
+              <tr v-if="!files.length"><td colspan="9" class="muted">فایلی نیست</td></tr>
             </tbody>
           </table>
         </div>
@@ -440,7 +447,7 @@
           <div v-if="storageChannelsLoaded" style="margin-top:10px">
             <div v-for="c in storageChannels" :key="c.chat || '(default)'" style="border:1px solid var(--border,#2a2f3a);border-radius:8px;padding:10px 12px;margin-bottom:10px">
               <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                <b dir="ltr" style="font-size:13px">{{ c.chat || '(بدون کانال)' }}</b>
+                <b dir="ltr" style="font-size:13px;cursor:pointer;text-decoration:underline dotted" title="مدیریت فایل‌های این کانال" @click="openChannelFiles(c)">{{ c.chat || '(بدون کانال)' }}</b>
                 <span v-if="c.is_system_default" class="tag" style="background:var(--ok,#22C55E);color:#08120b">پیش‌فرض سیستم</span>
                 <span class="tag" style="font-size:11px">{{ c.kind === 'default' ? 'مقصد کلیدهای بدون کانال' : 'اختصاصی' }}</span>
                 <span class="muted" style="font-size:12px">{{ c.files }} فایل • {{ fmtBytes(c.bytes) }}</span>
@@ -742,6 +749,8 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
     const currentFolderId = ref(null); // null = all files (root)
     const currentFolderPath = ref("");
     const filesFolderDraft = ref(""); // X-Folder for panel uploads
+    const channelFilter = ref(""); // files tab: filter by storage channel
+    const channelFilterIsDefault = ref(false);
     const folderDlg = reactive({ open: false, path: "", msg: "" });
     const moveDlg = reactive({ open: false, fileId: "", fileName: "", path: "", msg: "" });
     const proxiesList = ref([]);
@@ -876,14 +885,33 @@ const doLogin = submitLogin;
     };
     loaders.files = async () => {
       try {
-        const [d, fo] = await Promise.all([api("/api/v1/files"), api("/api/v1/folders")]);
+        let url = "/api/v1/files";
+        if (channelFilter.value) {
+          url += channelFilterIsDefault.value
+            ? "?default_channel=1&limit=500"
+            : "?storage_chat=" + encodeURIComponent(channelFilter.value) + "&limit=500";
+        }
+        const [d, fo] = await Promise.all([api(url), api("/api/v1/folders")]);
         files.value = d.items || [];
         foldersFlat.value = fo.items || [];
       }
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
+    async function openChannelFiles(c) {
+      channelFilter.value = c.chat || "(بدون کانال)";
+      channelFilterIsDefault.value = !!c.is_system_default;
+      // jump to the files tab with the channel filter applied
+      switchTab("files");
+      showToast(c.files + " فایل در " + (c.chat || "کانال پیش‌فرض"), 3000);
+    }
+    function clearChannelFilter() {
+      channelFilter.value = "";
+      channelFilterIsDefault.value = false;
+      loaders.files();
+    }
     async function openFolder(id) {
       currentFolderId.value = id;
+      channelFilter.value = ""; channelFilterIsDefault.value = false; // mutually exclusive
       if (id === null) {
         currentFolderPath.value = "";
         filesFolderDraft.value = "";

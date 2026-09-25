@@ -181,10 +181,26 @@ async def upload_chunk(
 async def list_files(
     limit: int = 50,
     offset: int = 0,
+    storage_chat: str = "",
+    default_channel: int = 0,
     principal=Depends(get_admin_or_key),
     db=Depends(get_db),
 ):
-    return {"items": await FileRepo(db).list(limit=min(limit, 500), offset=offset)}
+    """List files; ?storage_chat=@chan or ?default_channel=1 filters by the
+    telegram channel the files were actually stored in (panel drill-down)."""
+    kw = {}
+    if storage_chat:
+        kw = {"storage_chat": storage_chat}
+    elif default_channel:
+        from ..core.settings_service import get_runtime
+
+        default_chat = str(await get_runtime(db, "tg_storage_chat") or "").strip()
+        kw = {"storage_chat": default_chat, "storage_chat_is_default": True}
+    return {
+        "items": await FileRepo(db).list(
+            limit=min(limit, 500), offset=offset, **kw
+        )
+    }
 
 
 @router.get("/{file_id}")

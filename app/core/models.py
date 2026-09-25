@@ -462,13 +462,15 @@ class FileRepo:
         offset: int = 0,
         folder_id: Optional[int] = None,
         include_subfolders: bool = False,
+        storage_chat: Optional[str] = None,
+        storage_chat_is_default: bool = False,
     ) -> List[Dict[str, Any]]:
         cols = (
             "SELECT id, name, size, mime, status, parts, downloads, bytes_served, uploader, source,"
-            " backend, folder_id, created_at, ready_at, error FROM files"
+            " backend, storage_chat, folder_id, created_at, ready_at, error FROM files"
         )
         params: list = []
-        prefix, where = "", ""
+        prefix, conds = "", []
         if folder_id is not None:
             params.append(folder_id)
             if include_subfolders:
@@ -478,9 +480,18 @@ class FileRepo:
                     " SELECT id FROM folders WHERE id=?"
                     " UNION ALL SELECT f.id FROM folders f JOIN folder_tree t ON f.parent_id=t.id) "
                 )
-                where = " WHERE folder_id IN (SELECT id FROM folder_tree)"
+                conds.append("folder_id IN (SELECT id FROM folder_tree)")
             else:
-                where = " WHERE folder_id=?"
+                conds.append("folder_id=?")
+        if storage_chat is not None:
+            params.append(storage_chat)
+            if storage_chat_is_default:
+                # files saved before a default was configured carry '' and resolve
+                # to the system default chat — both belong to that channel view
+                conds.append("(storage_chat='' OR storage_chat=?)")
+            else:
+                conds.append("storage_chat=?")
+        where = (" WHERE " + " AND ".join(conds)) if conds else ""
         sql = prefix + cols + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         return await self.db.fetch_all(sql, params)
