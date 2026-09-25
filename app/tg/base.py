@@ -11,8 +11,12 @@ class BackendClient(abc.ABC):
     id: str
 
     @abc.abstractmethod
-    async def send_document(self, chat: str, path: str, name: str, mime: str) -> dict:
-        """Upload `path` as a document to `chat`. Returns {'message_id': int, 'size': int}."""
+    async def send_document(self, chat: str, path: str, name: str, mime: str, caption: str = "") -> dict:
+        """Upload `path` as a document to `chat`. Returns {'message_id': int, 'size': int}.
+
+        `caption` carries the folder-tag hashtags (e.g. '#projects #2026') so the
+        file stays searchable/organized inside the telegram client itself.
+        """
 
     @abc.abstractmethod
     async def iter_file(self, message_id: int, chat: str, *, start: int, end: Optional[int], size: Optional[int]) -> AsyncIterator[bytes]:

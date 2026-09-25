@@ -57,11 +57,11 @@ class TelethonBackend(BackendClient):
             raise TransferError("message has no document")
         return doc
 
-    async def send_document(self, chat: str, path: str, name: str, mime: str) -> dict:
+    async def send_document(self, chat: str, path: str, name: str, mime: str, caption: str = "") -> dict:
         try:
             await self.start()
             msg = await fast_transfer.send_file_message(
-                self._client, chat or self.storage_chat, path, file_name=name
+                self._client, chat or self.storage_chat, path, caption=caption, file_name=name
             )
             doc = self._location(msg)
             return {"message_id": int(msg.id), "size": int(getattr(doc, "size", os.path.getsize(path)))}

@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 
-from app.api import accounts, admin, auth, bots, eitaa, files, keys, queue as queue_api
+from app.api import accounts, admin, auth, bots, eitaa, files, folders, keys, queue as queue_api
 from app.api.deps import get_current_admin as _admin_dep
 from app.core.config import get_settings
 from app.core.db import Database
@@ -22,6 +22,7 @@ from app.core.models import UserRepo
 from app.core.obs import current_ids, monotonic_ms, new_request_id, request_id as rid_var, correlation_id as corr_var, setup_logging, slog
 from app.core.rate_limit import limiter
 from app.core.security import create_token, decode_token, hash_password
+from app.core.settings_service import runtime_settings
 from app.core.state import state
 from app.queue.queue_manager import QueueManager
 from app.services.janitor import Janitor
@@ -41,6 +42,13 @@ async def lifespan(app: FastAPI):
 
     db = await state.db_instance()
     state.node_id = s.node_id or state.node_id
+
+    # prime runtime settings before backends spawn so DB overrides of
+    # fake_tg / tg api credentials (saved from the panel) apply at startup
+    try:
+        await runtime_settings().get_all(db, force=True)
+    except Exception as exc:
+        log.warning("runtime settings prime skipped: %s", exc)
 
     # bootstrap admin
     username = s.admin_username or "admin"
@@ -223,6 +231,7 @@ app.include_router(eitaa.router)
 app.include_router(keys.router)
 app.include_router(files.router)
 app.include_router(files.public)
+app.include_router(folders.router)
 app.include_router(queue_api.router)
 app.include_router(admin.router)
 

@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
   expires_at REAL,
   revoked INTEGER NOT NULL DEFAULT 0,
   created_at REAL NOT NULL,
-  last_used_at REAL
+  last_used_at REAL,
+  storage_chat TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS tg_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,8 +84,16 @@ CREATE TABLE IF NOT EXISTS files (
   bytes_served INTEGER NOT NULL DEFAULT 0,
   created_at REAL NOT NULL,
   ready_at REAL,
-  error TEXT NOT NULL DEFAULT ''
+  error TEXT NOT NULL DEFAULT '',
+  folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL
 );
+CREATE TABLE IF NOT EXISTS folders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);
 CREATE TABLE IF NOT EXISTS file_parts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   file_id TEXT NOT NULL,
@@ -128,6 +137,7 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
   size INTEGER NOT NULL,
   mime TEXT NOT NULL DEFAULT 'application/octet-stream',
   offset INTEGER NOT NULL DEFAULT 0,
+  folder_path TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS eitaa_accounts (
@@ -216,7 +226,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
   revoked INTEGER NOT NULL DEFAULT 0,
   created_at DOUBLE PRECISION NOT NULL,
   last_used_at DOUBLE PRECISION,
-  backend TEXT NOT NULL DEFAULT ''
+  backend TEXT NOT NULL DEFAULT '',
+  storage_chat TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS tg_accounts (
   id SERIAL PRIMARY KEY,
@@ -265,7 +276,14 @@ CREATE TABLE IF NOT EXISTS files (
   error TEXT NOT NULL DEFAULT '',
   deleted_at DOUBLE PRECISION,
   thumb_message_id INTEGER,
-  backend TEXT NOT NULL DEFAULT ''
+  backend TEXT NOT NULL DEFAULT '',
+  folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS folders (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+  created_at DOUBLE PRECISION NOT NULL
 );
 CREATE TABLE IF NOT EXISTS file_parts (
   id SERIAL PRIMARY KEY,
@@ -405,6 +423,9 @@ class Database:
             "ALTER TABLE files ADD COLUMN thumb_message_id INTEGER",
             "ALTER TABLE files ADD COLUMN backend TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE api_keys ADD COLUMN backend TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE api_keys ADD COLUMN storage_chat TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE files ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL",
+            "ALTER TABLE upload_sessions ADD COLUMN folder_path TEXT NOT NULL DEFAULT ''",
         ):
             try:
                 await self._conn.execute(stmt)

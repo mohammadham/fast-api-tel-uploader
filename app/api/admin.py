@@ -9,6 +9,7 @@ import io
 import json
 import os
 import time
+from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
@@ -294,6 +295,7 @@ async def setup_status(_: str = Depends(get_current_admin), db=Depends(get_db)):
 class SetupCompleteIn(BaseModel):
     new_password: str = ""
     default_backend: str = ""
+    storage_chat: str = ""  # telegram storage channel (@username or -100… id)
     db_engine: str = ""  # 'sqlite' | 'postgres' — wizard choice (postgres only honored when reachable)
 
 
@@ -336,6 +338,10 @@ async def setup_complete(
         from ..core.settings_service import save_runtime_settings
 
         await save_runtime_settings(db, {"default_backend": be}, actor=admin)
+    if body.storage_chat.strip():
+        from ..core.settings_service import save_runtime_settings
+
+        await save_runtime_settings(db, {"tg_storage_chat": body.storage_chat.strip()}, actor=admin)
     if (await get_meta(db, "initialized")) != "1":
         await set_meta(db, "initialized", "1")
         await set_meta(db, "initialized_at", str(time.time()))
@@ -343,7 +349,114 @@ async def setup_complete(
     return {"ok": True, "initialized": True}
 
 
-# ── node registry (multi-server mode) ────────────────────────────
+# ── storage channels report ──────────────────────────────────────
+MIME_GROUP_LABELS = {
+    "image": "تصویر",
+    "video": "ویدیو",
+    "audio": "صوت",
+    "text": "متن/کد",
+    "archive": "آرشیو",
+    "application": "فایل/برنامه",
+    "other": "سایر",
+}
+
+
+def _mime_group(mime: str) -> str:
+    m = (mime or "").lower()
+    if m.startswith("image/"):
+        return "image"
+    if m.startswith("video/"):
+        return "video"
+    if m.startswith("audio/"):
+        return "audio"
+    if m.startswith("text/"):
+        return "text"
+    if m.startswith("application/"):
+        if any(x in m for x in ("zip", "tar", "rar", "7z", "gzip", "compressed", "x-iso")):
+            return "archive"
+        return "application"
+    return "other"
+
+
+@router.get("/storage-channels")
+async def storage_channels(_: str = Depends(get_current_admin), db=Depends(get_db)):
+    """Per storage channel: file count, total size and per-type breakdown.
+
+    Keys pin a dedicated channel (api_keys.storage_chat); files fall back to the
+    system default channel when a key has none. Both surfaces are reported so
+    the panel can show each channel with its owning keys and contents.
+    """
+    key_rows = await db.fetch_all(
+        "SELECT id, name, backend, revoked, storage_chat FROM api_keys ORDER BY id"
+    )
+    keys_by_chat: Dict[str, List[dict]] = {}
+    default_keys: List[dict] = []
+    for k in key_rows:
+        chat = (k.get("storage_chat") or "").strip()
+        entry = {"id": k["id"], "name": k["name"], "backend": k.get("backend") or "",
+                 "revoked": bool(k.get("revoked"))}
+        if chat:
+            keys_by_chat.setdefault(chat, []).append({**entry, "scope": "dedicated"})
+        else:
+            default_keys.append({**entry, "scope": "default"})
+
+    default_chat = ""
+    try:
+        from ..core.settings_service import get_runtime
+
+        default_chat = str((await get_runtime(db, "tg_storage_chat")) or "").strip()
+    except Exception:
+        default_chat = ""
+
+    file_rows = await db.fetch_all(
+        "SELECT COALESCE(NULLIF(storage_chat, ''), ?) AS chat, mime,"
+        " COUNT(*) AS n, COALESCE(SUM(size),0) AS bytes"
+        " FROM files WHERE deleted_at IS NULL AND status='ready'"
+        " GROUP BY 1, mime",
+        (default_chat,),
+    )
+    ch: Dict[str, dict] = {}
+    for r in file_rows:
+        chat = r["chat"] or ""
+        e = ch.setdefault(chat, {"files": 0, "bytes": 0, "by_type": {}})
+        e["files"] += int(r["n"] or 0)
+        e["bytes"] += int(r["bytes"] or 0)
+        g = _mime_group(r["mime"])
+        t = e["by_type"].setdefault(g, {"key": g, "count": 0, "bytes": 0})
+        t["count"] += int(r["n"] or 0)
+        t["bytes"] += int(r["bytes"] or 0)
+
+    items = []
+    order: List[str] = []
+    if default_chat or default_keys:
+        order.append(default_chat)
+    for chat in keys_by_chat:
+        if chat not in order:
+            order.append(chat)
+    for chat in ch:
+        if chat not in order:
+            order.append(chat)
+    for chat in order:
+        s = ch.get(chat, {"files": 0, "bytes": 0, "by_type": {}})
+        if chat == default_chat:
+            keys = default_keys
+            kind = "default"
+        else:
+            keys = keys_by_chat.get(chat, [])
+            kind = "dedicated"
+        by_type = [s["by_type"][g] for g in sorted(s["by_type"], key=lambda g: -s["by_type"][g]["count"])]
+        for t in by_type:
+            t["label"] = MIME_GROUP_LABELS.get(t["key"], t["key"])
+        items.append({
+            "chat": chat,
+            "kind": kind,
+            "is_system_default": chat == default_chat and bool(chat),
+            "keys": keys,
+            "files": s["files"],
+            "bytes": s["bytes"],
+            "by_type": by_type,
+        })
+    return {"items": items, "default_chat": default_chat}
 @router.get("/nodes")
 async def nodes(_: str = Depends(get_current_admin), db=Depends(get_db)):
     return {

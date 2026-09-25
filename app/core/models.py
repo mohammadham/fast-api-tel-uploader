@@ -106,14 +106,15 @@ class ApiKeyRepo:
         daily_quota_bytes: int = 0,
         expires_at: Optional[float] = None,
         backend: str = "",
+        storage_chat: str = "",
     ) -> Dict[str, Any]:
         from .security import key_hash, key_prefix
 
         ts = now()
         await self.db.execute(
-            "INSERT INTO api_keys(name, key_hash, key_prefix, scopes, rpm, daily_quota_bytes, expires_at, backend, created_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?)",
-            (name, key_hash(raw_key), key_prefix(raw_key), scopes, rpm, daily_quota_bytes, expires_at, backend, ts),
+            "INSERT INTO api_keys(name, key_hash, key_prefix, scopes, rpm, daily_quota_bytes, expires_at, backend, storage_chat, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (name, key_hash(raw_key), key_prefix(raw_key), scopes, rpm, daily_quota_bytes, expires_at, backend, storage_chat, ts),
         )
         return {
             "name": name,
@@ -124,6 +125,7 @@ class ApiKeyRepo:
             "daily_quota_bytes": daily_quota_bytes,
             "expires_at": expires_at,
             "backend": backend,
+            "storage_chat": storage_chat,
         }
 
     async def find_by_raw(self, raw: str) -> Optional[Dict[str, Any]]:
@@ -139,7 +141,7 @@ class ApiKeyRepo:
     async def list(self) -> List[Dict[str, Any]]:
         rows = await self.db.fetch_all(
             "SELECT id, name, key_prefix, scopes, rpm, daily_quota_bytes, used_bytes_today, quota_day,"
-            " expires_at, revoked, created_at, last_used_at, backend FROM api_keys ORDER BY id DESC"
+            " expires_at, revoked, created_at, last_used_at, backend, storage_chat FROM api_keys ORDER BY id DESC"
         )
         return rows
 
@@ -154,17 +156,21 @@ class ApiKeyRepo:
         daily_quota_bytes: Optional[int] = None,
         scopes: Optional[str] = None,
         backend: Optional[str] = None,
+        storage_chat: Optional[str] = None,
     ) -> None:
-        row = await self.db.fetch_one("SELECT rpm, daily_quota_bytes, scopes, backend FROM api_keys WHERE id=?", (key_id,))
+        row = await self.db.fetch_one(
+            "SELECT rpm, daily_quota_bytes, scopes, backend, storage_chat FROM api_keys WHERE id=?", (key_id,)
+        )
         if not row:
             return
         await self.db.execute(
-            "UPDATE api_keys SET rpm=?, daily_quota_bytes=?, scopes=?, backend=? WHERE id=?",
+            "UPDATE api_keys SET rpm=?, daily_quota_bytes=?, scopes=?, backend=?, storage_chat=? WHERE id=?",
             (
                 rpm if rpm is not None else row["rpm"],
                 daily_quota_bytes if daily_quota_bytes is not None else row["daily_quota_bytes"],
                 scopes if scopes is not None else row["scopes"],
                 backend if backend is not None else row["backend"],
+                storage_chat if storage_chat is not None else row["storage_chat"],
                 key_id,
             ),
         )
@@ -311,6 +317,121 @@ class EitaaAccountRepo:
         await self.db.execute("DELETE FROM eitaa_accounts WHERE id=?", (eitaa_id,))
 
 
+class FolderRepo:
+    """Virtual folders for organizing files (acts like tags with hierarchy).
+
+    A folder is (name, parent_id). The root is parent_id IS NULL. Nested
+    folders are supported: /projects/2026/reports resolves by walking parents;
+    names are unique among siblings only (like a real filesystem).
+    """
+
+    MAX_DEPTH = 32
+
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    async def list(self) -> List[Dict[str, Any]]:
+        """All folders + aggregated stats + full path of each node."""
+        rows = await self.db.fetch_all(
+            "SELECT id, name, parent_id, created_at FROM folders ORDER BY created_at, id"
+        )
+        stats = await self.db.fetch_all(
+            "SELECT COALESCE(folder_id, 0) AS fid, COUNT(*) AS n, COALESCE(SUM(size),0) AS bytes"
+            " FROM files WHERE deleted_at IS NULL GROUP BY 1"
+        )
+        by_id = {r["id"]: r for r in rows}
+        stat_map = {int(r["fid"]): (int(r["n"]), int(r["bytes"])) for r in stats}
+        out = []
+        for r in rows:
+            # resolve full path by walking up (guard against cycles)
+            path_parts = []
+            cur = r
+            seen = set()
+            while cur is not None and cur["id"] not in seen:
+                seen.add(cur["id"])
+                path_parts.append(cur["name"])
+                cur = by_id.get(cur["parent_id"])
+            n, total = stat_map.get(r["id"], (0, 0))
+            out.append({
+                "id": r["id"], "name": r["name"], "parent_id": r["parent_id"],
+                "path": "/".join(reversed(path_parts)),
+                "created_at": r["created_at"],
+                "file_count": n, "total_size": total,
+            })
+        return out
+
+    async def get(self, folder_id: int) -> Optional[Dict[str, Any]]:
+        return await self.db.fetch_one("SELECT id, name, parent_id, created_at FROM folders WHERE id=?", (folder_id,))
+
+    async def find_child(self, parent_id: Optional[int], name: str) -> Optional[Dict[str, Any]]:
+        if parent_id is None:
+            return await self.db.fetch_one("SELECT id, name, parent_id, created_at FROM folders WHERE parent_id IS NULL AND name=?", (name,))
+        return await self.db.fetch_one("SELECT id, name, parent_id, created_at FROM folders WHERE parent_id=? AND name=?", (parent_id, name))
+
+    async def create(self, name: str, parent_id: Optional[int] = None) -> int:
+        await self.db.execute(
+            "INSERT INTO folders(name, parent_id, created_at) VALUES(?,?,?)",
+            (name, parent_id, now()),
+        )
+        return await self.db.last_insert_rowid()
+
+    async def rename(self, folder_id: int, name: str) -> None:
+        await self.db.execute("UPDATE folders SET name=? WHERE id=?", (name, folder_id))
+
+    async def move(self, folder_id: int, parent_id: Optional[int]) -> None:
+        await self.db.execute("UPDATE folders SET parent_id=? WHERE id=?", (parent_id, folder_id))
+
+    async def delete(self, folder_id: int) -> int:
+        """Delete folder; files inside fall back to no folder (NOT recursive)."""
+        return await self.db.execute("DELETE FROM folders WHERE id=?", (folder_id,))
+
+    async def subtree_ids(self, folder_id: int) -> List[int]:
+        """BFS over children; guards against cycles via visited set."""
+        rows = await self.db.fetch_all("SELECT id, parent_id FROM folders")
+        children: Dict[Optional[int], List[int]] = {}
+        for r in rows:
+            children.setdefault(r["parent_id"], []).append(r["id"])
+        out, stack, seen = [], [folder_id], set()
+        while stack:
+            fid = stack.pop()
+            if fid in seen:
+                continue
+            seen.add(fid)
+            out.append(fid)
+            stack.extend(children.get(fid, []))
+        return out
+
+    async def path_of(self, folder_id: Optional[int]) -> str:
+        if not folder_id:
+            return ""
+        by_id = {r["id"]: r for r in await self.db.fetch_all("SELECT id, name, parent_id FROM folders")}
+        parts, cur, seen = [], by_id.get(folder_id), set()
+        while cur is not None and cur["id"] not in seen:
+            seen.add(cur["id"])
+            parts.append(cur["name"])
+            cur = by_id.get(cur["parent_id"])
+        return "/".join(reversed(parts))
+
+    async def resolve_path(self, path: str, *, create: bool = False) -> Optional[int]:
+        """'/a/b/c' → id of c; '' or '/' → None (root). Creates missing levels when create=True."""
+        parts = [p for p in (path or "").strip().strip("/").split("/") if p]
+        if not parts:
+            return None
+        parent: Optional[int] = None
+        for depth, raw in enumerate(parts):
+            name = (raw or "").strip()
+            if not name or len(name) > 100 or depth >= self.MAX_DEPTH:
+                raise ValueError("invalid folder path")
+            row = await self.find_child(parent, name)
+            if row:
+                parent = row["id"]
+            elif create:
+                parent = await self.create(name, parent)
+            else:
+                return None
+        return parent
+
+
 class FileRepo:
     def __init__(self, db: Database) -> None:
         self.db = db
@@ -324,22 +445,45 @@ class FileRepo:
         uploader: str = "api",
         source: str = "api",
         backend: str = "",
+        folder_id: Optional[int] = None,
     ) -> None:
         await self.db.execute(
-            "INSERT INTO files(id, name, size, mime, uploader, source, backend, status, created_at)"
-            " VALUES(?,?,?,?,?,?,?, 'queued', ?)",
-            (file_id, name, size, mime, uploader, source, backend, now()),
+            "INSERT INTO files(id, name, size, mime, uploader, source, backend, folder_id, status, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?, 'queued', ?)",
+            (file_id, name, size, mime, uploader, source, backend, folder_id, now()),
         )
 
     async def get(self, file_id: str) -> Optional[Dict[str, Any]]:
         return await self.db.fetch_one("SELECT * FROM files WHERE id=?", (file_id,))
 
-    async def list(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-        return await self.db.fetch_all(
+    async def list(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        folder_id: Optional[int] = None,
+        include_subfolders: bool = False,
+    ) -> List[Dict[str, Any]]:
+        cols = (
             "SELECT id, name, size, mime, status, parts, downloads, bytes_served, uploader, source,"
-            " backend, created_at, ready_at, error FROM files ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (limit, offset),
+            " backend, folder_id, created_at, ready_at, error FROM files"
         )
+        params: list = []
+        prefix, where = "", ""
+        if folder_id is not None:
+            params.append(folder_id)
+            if include_subfolders:
+                # recursive CTE keeps this single-query and index friendly
+                prefix = (
+                    "WITH folder_tree(id) AS ("
+                    " SELECT id FROM folders WHERE id=?"
+                    " UNION ALL SELECT f.id FROM folders f JOIN folder_tree t ON f.parent_id=t.id) "
+                )
+                where = " WHERE folder_id IN (SELECT id FROM folder_tree)"
+            else:
+                where = " WHERE folder_id=?"
+        sql = prefix + cols + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        return await self.db.fetch_all(sql, params)
 
     async def set_status(self, file_id: str, status: str, error: str = "") -> None:
         extra = ""
@@ -389,6 +533,9 @@ class FileRepo:
 
     async def set_thumb(self, file_id: str, message_id: int) -> None:
         await self.db.execute("UPDATE files SET thumb_message_id=? WHERE id=?", (message_id, file_id))
+
+    async def set_folder(self, file_id: str, folder_id: Optional[int]) -> None:
+        await self.db.execute("UPDATE files SET folder_id=? WHERE id=?", (folder_id, file_id))
 
 
 class JobRepo:
@@ -488,10 +635,10 @@ class UploadSessionRepo:
     def __init__(self, db: Database) -> None:
         self.db = db
 
-    async def create(self, session_id: str, name: str, size: int, mime: str) -> None:
+    async def create(self, session_id: str, name: str, size: int, mime: str, folder_path: str = "") -> None:
         await self.db.execute(
-            "INSERT INTO upload_sessions(id, name, size, mime, offset, created_at) VALUES(?,?,?,?,0,?)",
-            (session_id, name, size, mime, now()),
+            "INSERT INTO upload_sessions(id, name, size, mime, offset, folder_path, created_at) VALUES(?,?,?,?,0,?,?)",
+            (session_id, name, size, mime, folder_path, now()),
         )
 
     async def get(self, session_id: str) -> Optional[Dict[str, Any]]:

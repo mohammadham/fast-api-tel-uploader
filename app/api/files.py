@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
 from ..core.config import get_settings
-from ..core.models import FileRepo, UploadSessionRepo, new_id, now
+from ..core.models import FileRepo, FolderRepo, UploadSessionRepo, new_id, now
 from ..core.rate_limit import quota
 from ..core.settings_service import get_runtime
 from ..core.state import get_db, state
@@ -34,6 +34,23 @@ def _ext_blocked(name: str, blocked: str = "") -> bool:
     exts = {e.strip().lower() for e in blocked.split(",") if e.strip()}
     low = name.lower()
     return any(low.endswith(ext) for ext in exts)
+
+
+async def _resolve_folder(db, x_folder: Optional[str], q_folder: Optional[str]):
+    """Resolve the upload folder from X-Folder header (path) or ?folder= query.
+
+    Nested paths ('projects/2026/reports') are created on demand. Returns
+    (folder_id or None, canonical_path for the telegram caption tag).
+    """
+    raw = (x_folder or q_folder or "").strip()
+    if not raw or raw in ("/", "."):
+        return None, ""
+    repo = FolderRepo(db)
+    try:
+        fid = await repo.resolve_path(raw, create=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return fid, await repo.path_of(fid)
 
 
 @router.post("/upload")
@@ -73,11 +90,13 @@ async def upload(
         raise
 
     backend = (key.get("backend") or "") or (await get_runtime(db, "default_backend")) or get_settings().default_backend
-    await FileRepo(db).create(file_id, name, size, mime, uploader=f"key:{key['id']}", source="api", backend=backend)
-    await db.audit(f"key:{key['id']}", "file.upload", target=file_id, details=f"{size}B {name} backend={backend}")
+    storage_chat = (key.get("storage_chat") or "").strip()
+    folder_id, folder_path = await _resolve_folder(db, request.headers.get("x-folder"), request.query_params.get("folder"))
+    await FileRepo(db).create(file_id, name, size, mime, uploader=f"key:{key['id']}", source="api", backend=backend, folder_id=folder_id)
+    await db.audit(f"key:{key['id']}", "file.upload", target=file_id, details=f"{size}B {name} backend={backend} storage_chat={storage_chat or 'default'} folder={folder_path or 'root'}")
     await state.queue.enqueue(
         "upload",
-        {"file_id": file_id, "tmp_path": tmp_path, "size": size, "backend": backend, "webhook": request.query_params.get("webhook")},
+        {"file_id": file_id, "tmp_path": tmp_path, "size": size, "backend": backend, "storage_chat": storage_chat, "folder_path": folder_path, "webhook": request.query_params.get("webhook")},
         40,
     )
     quota.add(f"key:{key['id']}", size)
@@ -91,7 +110,7 @@ class SessionIn(BaseModel):
 
 
 @router.post("/upload/session")
-async def create_session(body: SessionIn, key=Depends(get_api_key), db=Depends(get_db)):
+async def create_session(request: Request, body: SessionIn, key=Depends(get_api_key), db=Depends(get_db)):
     """Resumable chunked upload session."""
     require_scope(key, "write")
     s = get_settings()
@@ -101,8 +120,9 @@ async def create_session(body: SessionIn, key=Depends(get_api_key), db=Depends(g
     name = _safe_name(body.name)
     if _ext_blocked(name, str(await get_runtime(db, "blocked_extensions") or "")):
         raise HTTPException(status_code=415, detail="file type not allowed")
+    folder_id, folder_path = await _resolve_folder(db, request.headers.get("x-folder"), request.query_params.get("folder"))
     session_id = new_id("us")
-    await UploadSessionRepo(db).create(session_id, name, body.size, body.mime or mimetypes.guess_type(name)[0] or "application/octet-stream")
+    await UploadSessionRepo(db).create(session_id, name, body.size, body.mime or mimetypes.guess_type(name)[0] or "application/octet-stream", folder_path=folder_path)
     os.makedirs(s.final_tmp_dir(), exist_ok=True)
     open(os.path.join(s.final_tmp_dir(), f"{session_id}.part"), "wb").close()
     return {"session_id": session_id, "chunk_size": 8 * 1024 * 1024, "offset": 0}
@@ -143,11 +163,14 @@ async def upload_chunk(
     if done:
         file_id = new_id("f")
         backend = (key.get("backend") or "") or (await get_runtime(db, "default_backend")) or get_settings().default_backend
+        storage_chat = (key.get("storage_chat") or "").strip()
+        folder_path = (sess.get("folder_path") or "").strip()
+        folder_id = await FolderRepo(db).resolve_path(folder_path) if folder_path else None
         await FileRepo(db).create(
-            file_id, sess["name"], int(sess["size"]), sess["mime"], uploader=f"key:{key['id']}", source="api", backend=backend
+            file_id, sess["name"], int(sess["size"]), sess["mime"], uploader=f"key:{key['id']}", source="api", backend=backend, folder_id=folder_id
         )
-        await db.audit(f"key:{key['id']}", "file.upload", target=file_id, details=f"resumable {int(sess['size'])}B backend={backend}")
-        await state.queue.enqueue("upload", {"file_id": file_id, "tmp_path": path, "size": int(sess["size"]), "backend": backend}, 40)
+        await db.audit(f"key:{key['id']}", "file.upload", target=file_id, details=f"resumable {int(sess['size'])}B backend={backend} storage_chat={storage_chat or 'default'} folder={folder_path or 'root'}")
+        await state.queue.enqueue("upload", {"file_id": file_id, "tmp_path": path, "size": int(sess["size"]), "backend": backend, "storage_chat": storage_chat, "folder_path": folder_path}, 40)
         quota.add(f"key:{key['id']}", int(sess["size"]))
         resp["file_id"] = file_id
         await repo.delete(session_id)

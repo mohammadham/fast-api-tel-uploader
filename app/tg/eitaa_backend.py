@@ -90,7 +90,7 @@ class EitaaBackend(BackendClient):
         self.storage_chat = chat
         self._http = httpx.AsyncClient(timeout=300, transport=transport)
 
-    async def send_document(self, chat: str, path: str, name: str, mime: str) -> dict:
+    async def send_document(self, chat: str, path: str, name: str, mime: str, caption: str = "") -> dict:
         # chat overrides the configured default when given explicitly
         target = chat or self.storage_chat
         if not target:
@@ -98,7 +98,7 @@ class EitaaBackend(BackendClient):
         with open(path, "rb") as fh:
             resp = await self._http.post(
                 f"{_BASE}/{self.token}/sendFile",
-                data={"chat_id": target, "caption": ""},
+                data={"chat_id": target, "caption": caption or ""},
                 files={"file": (name, fh, mime or "application/octet-stream")},
             )
         try:

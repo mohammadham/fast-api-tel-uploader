@@ -24,6 +24,7 @@ class KeyIn(BaseModel):
     daily_quota_gb: Optional[float] = None
     expires_in_days: Optional[int] = None
     backend: str = ""  # '' = follow system default; 'telegram' | 'eitaa'
+    storage_chat: str = ""  # per-key storage channel (@username or -100… id); '' = system default
 
 
 @router.get("")
@@ -39,6 +40,18 @@ async def list_keys(_: str = Depends(get_current_admin), db=Depends(get_db)):
     return {"items": rows}
 
 
+def _validate_storage_chat(db, raw: str) -> str:
+    """Validate a per-key storage chat: @username, numeric id, or '' (= system default)."""
+    v = (raw or "").strip()
+    if not v:
+        return ""
+    if v.startswith("@") and len(v) > 1:
+        return v
+    if v.lstrip("-").isdigit():
+        return v
+    raise HTTPException(status_code=400, detail="storage_chat must be @username, numeric chat id, or empty")
+
+
 @router.post("")
 async def create_key(body: KeyIn, admin: str = Depends(get_current_admin), db=Depends(get_db)):
     s = get_settings()
@@ -51,6 +64,7 @@ async def create_key(body: KeyIn, admin: str = Depends(get_current_admin), db=De
     backend = body.backend.strip().lower()
     if backend not in ("", "telegram", "eitaa"):
         raise HTTPException(status_code=400, detail="backend must be '', 'telegram' or 'eitaa'")
+    storage_chat = _validate_storage_chat(db, body.storage_chat)
     info = await ApiKeyRepo(db).create(
         name=body.name.strip() or "unnamed",
         raw_key=raw,
@@ -59,6 +73,7 @@ async def create_key(body: KeyIn, admin: str = Depends(get_current_admin), db=De
         daily_quota_bytes=int((body.daily_quota_gb or 0) * (1024**3)) or dflt_quota,
         expires_at=expires_at,
         backend=backend,
+        storage_chat=storage_chat,
     )
     await db.audit(admin, "apikey.create", target=str(info.get("prefix", "")), details=body.name[:100])
     return info  # includes raw `key` — shown exactly once
@@ -78,6 +93,7 @@ class KeyPatch(BaseModel):
     daily_quota_gb: Optional[float] = None
     scopes: Optional[str] = None
     backend: Optional[str] = None  # '' = follow default
+    storage_chat: Optional[str] = None  # '' = clear (system default)
 
 
 @router.patch("/{key_id}")
@@ -91,5 +107,6 @@ async def update_key(key_id: int, body: KeyPatch, admin: str = Depends(get_curre
         daily_quota_bytes=int(body.daily_quota_gb * (1024**3)) if body.daily_quota_gb is not None else None,
         scopes=body.scopes,
         backend=backend,
+        storage_chat=_validate_storage_chat(db, body.storage_chat) if body.storage_chat is not None else None,
     )
     return {"ok": True}

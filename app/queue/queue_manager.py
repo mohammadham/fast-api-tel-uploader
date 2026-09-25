@@ -30,6 +30,7 @@ from ..core.models import (
     AccountRepo,
     BotRepo,
     FileRepo,
+    FolderRepo,
     Job,
     JobRepo,
     KIND_DELETE,
@@ -533,11 +534,27 @@ class QueueManager:
         backend = payload.get("backend") or rec.get("backend") or "telegram"
 
         message_ids: List[int] = []
-        storage_chat = ""
+        # per-key storage channel (set at upload time) wins, then the file
+        # record, then the backend's own default (global/per-account/Saved)
+        storage_chat = (payload.get("storage_chat") or rec["storage_chat"] or "").strip()
+        # folder tag caption: every path level becomes a searchable hashtag
+        # (#projects #2026), synced with the file's folder at send time
+        folder_tag = ""
+        try:
+            folder_path = (payload.get("folder_path") or "").strip()
+            if not folder_path and rec.get("folder_id"):
+                folder_path = await FolderRepo(self.db).path_of(int(rec["folder_id"]))
+            if folder_path:
+                tags = " ".join("#" + p.strip().replace(" ", "_") for p in folder_path.split("/") if p.strip())
+                folder_tag = tags
+        except Exception as exc:  # never fail the upload because of a caption
+            slog_q.warning("folder tag skipped", file_id=file_id, error=str(exc)[:120])
         borrowed = await self.manager.acquire("acc", backend=backend)
         async with borrowed as be:
             account_key = borrowed.key
-            storage_chat = rec["storage_chat"] or getattr(be, "storage_chat", "me") or ""
+            # fall back to the backend default when neither the key nor the
+            # record pins a chat ('' → send_document resolves 'me'/global)
+            storage_chat = storage_chat or getattr(be, "storage_chat", "me") or ""
             if size > split_at and backend != "eitaa":
                 # split into parts below the MTProto 2GB cap
                 part_size = split_at
@@ -545,7 +562,7 @@ class QueueManager:
                 try:
                     for idx, ppath in enumerate(part_paths):
                         part_name = f"{name}.part{idx:04d}"
-                        result = await be.send_document(storage_chat, ppath, part_name, mime)
+                        result = await be.send_document(storage_chat, ppath, part_name, mime, caption=folder_tag)
                         message_ids.append(int(result["message_id"]))
                         await self.files.add_part(file_id, idx, int(result["message_id"]), int(result["size"]))
                 finally:
@@ -555,7 +572,7 @@ class QueueManager:
                         except OSError:
                             pass
             else:
-                result = await be.send_document(storage_chat, tmp_path, name, mime)
+                result = await be.send_document(storage_chat, tmp_path, name, mime, caption=folder_tag)
                 message_ids.append(int(result["message_id"]))
                 await self.files.add_part(file_id, 0, int(result["message_id"]), int(result["size"]))
 

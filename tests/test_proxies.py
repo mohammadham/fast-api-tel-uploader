@@ -40,11 +40,16 @@ def test_parse_rejects_garbage():
 
 
 def test_build_telethon_mtproto_arg():
+    # skip (not fail) on interpreters without telethon — a missing dep must
+    # not masquerade as a proxy regression (see AGENTS.md, CI preflight)
+    pytest.importorskip("telethon", reason="telethon not installed in this interpreter (use the project .venv / requirements.txt)")
     arg = build_telethon_proxy({"kind": "mtproto", "host": "1.2.3.4", "port": 443, "secret_hex": "dd" + "ab" * 16})
     assert arg is not None and arg[1] == "1.2.3.4" and arg[2] == 443
 
 
 def test_build_telethon_socks5_arg():
+    # same guard, for the python_socks dependency of the socks5/http path
+    pytest.importorskip("python_socks", reason="python_socks not installed in this interpreter (use the project .venv / requirements.txt)")
     arg = build_telethon_proxy({"kind": "socks5", "host": "1.2.3.4", "port": 1080, "username": "u", "_password_plain": "p"})
     assert arg is not None and arg[0] == 1 and arg[4] == "u" and arg[5] == "p"
 

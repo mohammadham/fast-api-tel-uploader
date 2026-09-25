@@ -22,6 +22,8 @@ class FakeBackend(BackendClient):
 
     # shared store: (chat, message_id) → bytes ; simulates telegram servers
     STORE: Dict[Tuple[str, int], Tuple[bytes, str]] = {}
+    # message_id → caption text (folder hashtags), so tests can assert the tag
+    CAPTIONS: Dict[int, str] = {}
 
     def __init__(self, cid: str, *, fail_rate: float = 0.0, flood_seconds: float = 0.0) -> None:
         self.id = cid
@@ -29,7 +31,7 @@ class FakeBackend(BackendClient):
         self.flood_seconds = flood_seconds
         self.closed = False
 
-    async def send_document(self, chat: str, path: str, name: str, mime: str) -> dict:
+    async def send_document(self, chat: str, path: str, name: str, mime: str, caption: str = "") -> dict:
         import asyncio
 
         if self.fail_rate > 0:
@@ -43,6 +45,8 @@ class FakeBackend(BackendClient):
             data = fh.read()
         mid = next(counter)
         self.STORE[(chat, mid)] = (data, mime)
+        if caption:
+            self.CAPTIONS[mid] = caption
         await asyncio.sleep(0)  # yield to event loop
         return {"message_id": mid, "size": len(data)}
 

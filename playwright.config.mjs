@@ -16,7 +16,12 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: `.venv\\Scripts\\uvicorn.exe app.main:app --host 127.0.0.1 --port ${PORT}`,
+    // the backend is the project's own app, run from the project venv
+    // (.venv\Scripts on Windows, .venv/bin on Linux/macOS — used by CI)
+    command:
+      process.platform === "win32"
+        ? `.venv\\Scripts\\uvicorn.exe app.main:app --host 127.0.0.1 --port ${PORT}`
+        : `.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port ${PORT}`,
     url: `http://127.0.0.1:${PORT}/api/v1/admin/healthz`,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,

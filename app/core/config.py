@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     default_backend: str = "telegram"  # default storage destination: telegram | eitaa
     tg_api_id: int = 0
     tg_api_hash: str = ""
+    tg_storage_chat: str = ""  # global storage channel (@username or id); empty → per-account / Saved Messages
+    # note: env file key is TGDRIVE_TG_STORAGE_CHAT (pydantic env_prefix maps it)
     bot_api_base: str = "https://api.telegram.org"
     bot_admin_ids: str = ""  # comma separated telegram user ids allowed to control the bot
 

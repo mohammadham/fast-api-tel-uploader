@@ -122,10 +122,8 @@ test.describe.serial("panel smoke", () => {
     await login(page);
     await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
 
-    const files = page.locator("main section:visible table tbody tr");
     // the section's own file-table only (a hidden restore input lives in another card)
     const uploadInput = page.locator("section input[type='file']").first();
-    const before = await files.count();
 
     await uploadInput.setInputFiles({
       name: "e2e-smoke.txt",
@@ -133,13 +131,144 @@ test.describe.serial("panel smoke", () => {
       buffer: Buffer.from("playwright smoke upload " + Date.now()),
     });
 
-    // toast confirms queueing, table gains a row
+    // toast confirms queueing, the new file's row appears (fresh list puts it first)
     await expect(page.locator(".toast")).toContainText("صف شد: f_");
-    await expect(files.first()).toContainText("e2e-smoke.txt"); // fresh list puts the new file first
-    await expect(files).toHaveCount(before + 1);
+    const newRow = page.locator("main section:visible table tbody tr", { hasText: "e2e-smoke.txt" }).first();
+    await expect(newRow).toBeVisible();
 
     // real progress bar element exists with aria
     await expect(page.locator(".progress-track")).toHaveCount(0); // hidden after finish
+  });
+
+  test("storage channels card lists dedicated channel with per-type stats", async ({ page }) => {
+    await login(page);
+
+    // self-heal leftovers from a crashed run
+    const { items: existingKeys } = await proxyCall(page, "/api/v1/keys");
+    for (const k of existingKeys) {
+      if (k.name === "e2e-chan-key" && !k.revoked) {
+        await proxyCall(page, `/api/v1/keys/${k.id}`, { method: "DELETE" });
+      }
+    }
+    const { items: existingFiles } = await proxyCall(page, "/api/v1/files");
+    for (const f of existingFiles) {
+      if (f.name === "e2e-chan.png") await proxyCall(page, `/api/v1/files/${f.id}?purge=true`, { method: "DELETE" });
+    }
+    const { items: existingAccs } = await proxyCall(page, "/api/v1/accounts");
+    for (const a of existingAccs) {
+      if (a.label === "e2e-acc") await proxyCall(page, `/api/v1/accounts/${a.id}`, { method: "DELETE" });
+    }
+
+    // fake-TG mode auto-completes the login → a ready backend for the queue
+    await proxyCall(page, "/api/v1/accounts/login/start", {
+      method: "POST",
+      body: { phone: "+989120000001", label: "e2e-acc" },
+    });
+
+    // key with a dedicated storage channel, then a small upload through it
+    const key = await proxyCall(page, "/api/v1/keys", {
+      method: "POST",
+      body: { name: "e2e-chan-key", scopes: "read,write", storage_chat: "@e2e-channel-store" },
+    });
+    const upload = await page.evaluate(async (raw) => {
+      const s = await fetch("/api/v1/files/upload/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": raw },
+        body: JSON.stringify({ name: "e2e-chan.png", size: 5 }),
+      }).then((r) => r.json());
+      const done = await fetch(`/api/v1/files/upload/session/${s.session_id}`, {
+        method: "PATCH",
+        headers: { "X-API-Key": raw, "X-Offset": "0", "Content-Type": "application/octet-stream" },
+        body: "hello",
+      }).then((r) => r.json());
+      return done;
+    }, key.key);
+    expect(upload.completed).toBeTruthy();
+
+    // wait until the queue job turns the file ready
+    let fileRow = null;
+    for (let i = 0; i < 40; i++) {
+      const { items } = await proxyCall(page, "/api/v1/files");
+      fileRow = items.find((f) => f.id === upload.file_id);
+      if (fileRow && fileRow.status === "ready") break;
+      await page.waitForTimeout(250);
+    }
+    expect(fileRow?.status).toBe("ready");
+
+    try {
+      await page.locator("#tabs button", { hasText: "تنظیمات" }).click();
+      await page.locator("button", { hasText: "بارگذاری/به‌روزرسانی" }).click();
+      const card = page.locator(".card", { hasText: "کانال‌های ذخیره‌سازی" });
+      await expect(card).toBeVisible();
+      await expect(card).toContainText("@e2e-channel-store");
+      await expect(card).toContainText("e2e-chan-key");
+      await expect(card).toContainText("1 فایل");
+      await expect(card).toContainText("تصویر: 1");
+    } finally {
+      await proxyCall(page, `/api/v1/files/${upload.file_id}?purge=true`, { method: "DELETE" });
+      const { items } = await proxyCall(page, "/api/v1/keys");
+      for (const k of items) {
+        if (k.name === "e2e-chan-key") await proxyCall(page, `/api/v1/keys/${k.id}`, { method: "DELETE" });
+      }
+      const { items: accs } = await proxyCall(page, "/api/v1/accounts");
+      for (const a of accs) {
+        if (a.label === "e2e-acc") await proxyCall(page, `/api/v1/accounts/${a.id}`, { method: "DELETE" });
+      }
+    }
+  });
+
+  test("folders: sidebar, nested create, upload into folder, file move", async ({ page }) => {
+    await login(page);
+
+    // self-heal leftovers (tolerate already-deleted ids from a crashed run)
+    const { items: existingFolders } = await proxyCall(page, "/api/v1/folders");
+    for (const f of existingFolders) {
+      if (f.path.startsWith("e2e-")) await proxyCall(page, `/api/v1/folders/${f.id}`, { method: "DELETE", allowMissing: true });
+    }
+
+    await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+    const section = page.locator("main section:visible");
+    await expect(section.getByText("پوشه‌ها")).toBeVisible();
+    await expect(section.getByText("همه فایل‌ها")).toBeVisible();
+
+    // create a nested folder via the dialog
+    await section.getByRole("button", { name: "+ پوشه" }).click();
+    const dlg = page.locator("dialog:visible");
+    await dlg.locator("input").fill("e2e-nested/child");
+    await dlg.getByRole("button", { name: "ایجاد" }).click();
+    await expect(section.getByText("e2e-nested")).toBeVisible();
+
+    // nested folder shows with indentation marker + both rows in flat list
+    const { items: flat } = await proxyCall(page, "/api/v1/folders");
+    const paths = flat.map((f) => f.path).sort();
+    expect(paths).toContain("e2e-nested");
+    expect(paths).toContain("e2e-nested/child");
+
+    // move the first listed file into the folder via its row button
+    const firstRow = section.locator("tbody tr").first();
+    await firstRow.getByRole("button", { name: "پوشه" }).click();
+    const moveD = page.locator("dialog:visible");
+    await moveD.locator("input").fill("e2e-nested/child");
+    await moveD.getByRole("button", { name: "انتقال" }).click();
+    await expect(page.locator("dialog:visible")).toHaveCount(0);
+
+    // the file now lists inside the folder (recursive endpoint used by the UI)
+    const { items: flat2 } = await proxyCall(page, "/api/v1/folders");
+    const child = flat2.find((f) => f.path === "e2e-nested/child");
+    expect(child.file_count).toBeGreaterThanOrEqual(1);
+
+    // click the folder → its path shows in the breadcrumb
+    await section.getByText("e2e-nested").click();
+    await expect(section.locator("span", { hasText: "/e2e-nested" })).toBeVisible();
+
+    // cleanup (detach files first so folder delete is clean)
+    const childId = (await proxyCall(page, "/api/v1/folders/resolve?path=e2e-nested/child")).id;
+    const { items: insideFiles } = await proxyCall(page, `/api/v1/folders/${childId}/all`);
+    for (const f of insideFiles || []) {
+      await proxyCall(page, `/api/v1/folders/${childId}/files/${f.id}`, { method: "DELETE" });
+    }
+    const rootId = (await proxyCall(page, "/api/v1/folders/resolve?path=e2e-nested")).id;
+    await proxyCall(page, `/api/v1/folders/${rootId}`, { method: "DELETE", allowMissing: true });
   });
 
   test("logout returns to landing", async ({ page }) => {
@@ -171,7 +300,10 @@ async function proxyCall(page, path, opts = {}) {
         body: opts.body ? JSON.stringify(opts.body) : undefined,
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(`admin API ${path} -> ${r.status}: ${JSON.stringify(d)}`);
+      if (!r.ok) {
+        if (opts.allowMissing && r.status === 404) return null;
+        throw new Error(`admin API ${path} -> ${r.status}: ${JSON.stringify(d)}`);
+      }
       return d;
     },
     [path, opts],

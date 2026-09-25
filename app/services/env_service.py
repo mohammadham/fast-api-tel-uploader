@@ -33,6 +33,8 @@ ENV_KEYS: List[dict] = [
      "label": "Telegram API ID (my.telegram.org)"},
     {"key": "TGDRIVE_TG_API_HASH", "secret": True, "required": False,
      "label": "Telegram API Hash (my.telegram.org)"},
+    {"key": "TGDRIVE_TG_STORAGE_CHAT", "secret": False, "required": False,
+     "label": "کانال ذخیره‌سازی تلگرام (@username یا -100… / خالی = Saved Messages)"},
     {"key": "TGDRIVE_SESSION_STR", "secret": True, "required": False,
      "label": "Session string اکانت (برای کانال خصوصی ایتا)"},
     {"key": "TGDRIVE_EITAA_TOKEN", "secret": True, "required": False,
@@ -43,6 +45,8 @@ ENV_KEYS: List[dict] = [
      "label": "URL پستگرس (خالی → SQLite محلی)"},
     {"key": "TGDRIVE_REDIS_URL", "secret": False, "required": False,
      "label": "URL ردیس برای صف توزیع‌شده (خالی → SQLite)"},
+    {"key": "TGDRIVE_FAKE_TG", "secret": False, "required": False,
+     "label": "حالت تست (فیک تلگرام درون‌حافظه‌ای) — 1=فعال، 0=واقعی (نیازمند ری‌استارت سرویس)"},
     {"key": "TGDRIVE_NODE_ID", "secret": False, "required": False,
      "label": "شناسه یکتای نود (چندسروره)"},
 ]

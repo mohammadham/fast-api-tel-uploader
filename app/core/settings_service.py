@@ -43,6 +43,24 @@ def _proxy_monitor_interval(v: int) -> str:
     return "" if v in (0, *range(2, 24 * 60)) else "0 = off, or 2..1440 minutes"
 
 
+def _eitaa_mode_ok(v: int) -> str:
+    return "" if v in (0, 1) else "must be 0 or 1"
+
+
+def _storage_chat_ok(v: str) -> str:
+    """Accept @username, numeric id (possibly -100…), or empty (= per-account)."""
+    s = str(v).strip()
+    if not s:
+        return ""
+    if s.startswith("@") and len(s) > 1:
+        return ""
+    try:
+        int(s)
+        return ""
+    except (ValueError, TypeError):
+        return "must be @username, numeric chat id, or empty";
+
+
 EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     # limits
     "max_upload_size": (int, _positive_int, "max upload size (bytes)"),
@@ -61,6 +79,15 @@ EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     "max_concurrent_uploads": (int, _gt_one_int, "max concurrent uploads"),
     # backend
     "default_backend": (str, _backend_ok, "default storage backend"),
+    # eitaa mode
+    "eitaa_mode": (int, _eitaa_mode_ok, "use eitaa backend (0=telegram, 1=eitaa)"),
+    # fake / real telegram toggle (runtime: rebuilds backends on change)
+    "fake_tg": (int, _int_flag, "use in-memory fake Telegram (0=real, 1=fake)"),
+    # telegram api credentials (my.telegram.org; used when fake_tg=0)
+    "tg_api_id": (int, _non_negative_int, "Telegram API ID (my.telegram.org)"),
+    "tg_api_hash": (str, _str_ok, "Telegram API Hash (my.telegram.org)"),
+    # global storage channel: files land here when set (overrides per-account)
+    "tg_storage_chat": (str, _storage_chat_ok, "storage channel: @username, -100… id, or empty for per-account/Saved"),
     # proxy
     "proxy_enabled": (int, _int_flag, "use telegram proxy pool (0/1)"),
     "proxy_strategy": (str, _proxy_strategy_ok, "proxy selection: speed | rr"),
@@ -83,6 +110,7 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "max_concurrent_uploads",
     ],
     "backend": ["default_backend"],
+    "telegram_api": ["fake_tg", "eitaa_mode", "tg_api_id", "tg_api_hash", "tg_storage_chat"],
     "proxy": ["proxy_enabled", "proxy_strategy", "proxy_monitor_interval"],
 }
 
@@ -153,7 +181,17 @@ async def apply_runtime(db, changed: Optional[list] = None) -> None:
             pass
     # proxy config changed → reconnect live telegram backends so new
     # connections pick up the new proxy decision
-    if changed and ("proxy_enabled" in changed or "proxy_strategy" in changed):
+    # fake_tg / tg api credentials changed → drop backends so the next
+    # acquire() rebuilds them in the new mode (fake ↔ real) or with the
+    # new credentials; both need a fresh Settings instance
+    if changed and (
+        "proxy_enabled" in changed
+        or "proxy_strategy" in changed
+        or "fake_tg" in changed
+        or "tg_api_id" in changed
+        or "tg_api_hash" in changed
+        or "tg_storage_chat" in changed
+    ):
         try:
             if state.manager is not None and hasattr(state.manager, "reload_all"):
                 await state.manager.reload_all()

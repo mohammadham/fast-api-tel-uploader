@@ -197,17 +197,27 @@
         </div>
         <div class="card wide">
           <table>
-            <thead><tr><th>شناسه</th><th>نام</th><th>پیشوند</th><th>سکوپ‌ها</th><th>ذخیره‌سازی</th><th>RPM</th><th>مصرف امروز</th><th>وضعیت</th><th>عملیات</th></tr></thead>
+            <thead><tr><th>شناسه</th><th>نام</th><th>پیشوند</th><th>سکوپ‌ها</th><th>ذخیره‌سازی</th><th>کانال</th><th>RPM</th><th>مصرف امروز</th><th>وضعیت</th><th>عملیات</th></tr></thead>
             <tbody>
               <tr v-for="k in keys" :key="k.id">
                 <td>{{ k.id }}</td><td>{{ k.name }}</td>
                 <td dir="ltr"><code>{{ k.key_prefix }}...</code></td>
                 <td>{{ k.scopes }}</td><td>{{ k.backend || "پیش‌فرض" }}</td>
+                <td dir="ltr">
+                  <template v-if="!k.revoked">
+                    <code v-if="k.storage_chat" style="font-size:11px">{{ k.storage_chat }}</code>
+                    <button v-else class="ghost" style="padding:2px 8px;font-size:11px" @click="keyEditChat(k)">+ کانال</button>
+                  </template>
+                  <span v-else class="muted">—</span>
+                </td>
                 <td>{{ k.rpm }}</td><td>{{ fmtBytes(k.used_bytes_today) }}</td>
                 <td><span class="badge" :class="k.revoked ? 'revoked' : 'ready'">{{ k.revoked ? "revoked" : "active" }}</span></td>
-                <td><button v-if="!k.revoked" class="danger" @click="keyRevoke(k)">Revoke</button></td>
+                <td>
+                  <button v-if="!k.revoked" @click="keyEditChat(k)">کانال</button>
+                  <button v-if="!k.revoked" class="danger" @click="keyRevoke(k)">Revoke</button>
+                </td>
               </tr>
-              <tr v-if="!keys.length"><td colspan="9" class="muted">کلیدی نیست</td></tr>
+              <tr v-if="!keys.length"><td colspan="10" class="muted">کلیدی نیست</td></tr>
             </tbody>
           </table>
         </div>
@@ -222,6 +232,30 @@
           </button>
           <input ref="fileInput" type="file" style="display:none" @change="upload">
         </div>
+        <div style="display:flex;gap:14px;align-items:flex-start">
+          <div class="card" style="width:230px;flex-shrink:0;padding:10px 12px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+              <b style="font-size:13px">پوشه‌ها</b>
+              <button class="ghost" style="padding:2px 8px;font-size:11px" @click="folderDlg.open = true">+ پوشه</button>
+            </div>
+            <div style="max-height:320px;overflow:auto">
+              <div style="padding:4px 6px;border-radius:6px;cursor:pointer;" :style="currentFolderId === null ? 'background:var(--accent,#3b82f6);color:#fff' : ''" @click="openFolder(null)">همه فایل‌ها</div>
+              <div v-for="f in foldersFlat" :key="f.id"
+                style="padding:4px 6px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;gap:6px"
+                :style="currentFolderId === f.id ? 'background:var(--accent,#3b82f6);color:#fff' : ''"
+                @click="openFolder(f.id)"
+                :title="'مسیر: ' + f.path">
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ '\u00A0'.repeat(f.path.split('/').length - 1) + f.name }}</span>
+                <span class="muted" style="font-size:11px">{{ f.file_count }}</span>
+              </div>
+              <div v-if="!foldersFlat.length" class="muted" style="font-size:12px;padding:4px 6px">پوشه‌ای نیست</div>
+            </div>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div class="muted" style="font-size:12px;margin-bottom:8px;display:flex;align-items:center;gap:8px">
+              <span dir="ltr">{{ currentFolderId === null ? '/' : (currentFolderPath || '/') }}</span>
+              <input v-model="filesFolderDraft" dir="ltr" placeholder="پوشه برای آپلود (مثل projects/2026)" style="font-size:12px;padding:3px 8px;width:230px">
+            </div>
         <p v-if="uploadProgress" class="muted">
           {{ uploadProgress }} — {{ uploadPct }}%
           <span v-if="uploadSpeed > 0" class="muted" style="margin-left:12px">~{{ uploadSpeed }} MB/s</span>
@@ -243,6 +277,7 @@
                 <td class="muted">{{ fmtTime(f.created_at) }}</td>
                 <td>
                   <button @click="fileLink(f)">لینک</button>
+                  <button @click="fileMoveDlg(f)">پوشه</button>
                   <button v-if="f.deleted_at" @click="fileRestore(f)">بازیابی</button>
                   <button class="danger" @click="fileDelete(f)">حذف</button>
                 </td>
@@ -250,6 +285,8 @@
               <tr v-if="!files.length"><td colspan="8" class="muted">فایلی نیست</td></tr>
             </tbody>
           </table>
+        </div>
+          </div>
         </div>
       </section>
 
@@ -356,6 +393,28 @@
                 <option value="telegram">تلگرام</option>
                 <option value="eitaa">ایتا</option>
               </select>
+              <select v-else-if="it.type === 'int' && optionedSettings.includes(it.key)" v-model="settingsDraft[it.key]"
+                :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''"
+                @change="onSettingInput(it)">
+                <template v-if="it.key === 'fake_tg'">
+                  <option value="0">غیرفعال — اتصال واقعی به تلگرام</option>
+                  <option value="1">فعال — تلگرام آزمایشی (بدون شبکه، برای تست)</option>
+                </template>
+                <template v-else-if="it.key === 'eitaa_mode'">
+                  <option value="0">تلگرام (پیش‌فرض)</option>
+                  <option value="1">ایتا</option>
+                </template>
+              </select>
+              <input v-else-if="it.key === 'tg_api_hash'" v-model="settingsDraft[it.key]" type="password"
+                dir="ltr" autocomplete="off" placeholder="32 کاراکتر هگز از my.telegram.org"
+                :class="{ invalid: settingsErrors[it.key] }"
+                :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''"
+                @input="onSettingInput(it)">
+              <input v-else-if="it.key === 'tg_storage_chat'" v-model="settingsDraft[it.key]"
+                dir="ltr" autocomplete="off" placeholder="@username یا -100… (خالی = Saved Messages هر اکانت)"
+                :class="{ invalid: settingsErrors[it.key] }"
+                :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''"
+                @input="onSettingInput(it)">
               <select v-else-if="it.key === 'proxy_strategy'" v-model="settingsDraft[it.key]"
                 :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''">
                 <option value="speed">سریع‌ترین (بر اساس تست سرعت)</option>
@@ -370,6 +429,30 @@
                 :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''"
                 @input="onSettingInput(it)">
               <p class="err" v-if="settingsErrors[it.key]" style="margin:4px 0 0;font-size:12px">{{ settingsErrors[it.key] }}</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card wide" style="margin-bottom:14px">
+          <h3 style="font-size:15px;margin:0 0 10px">کانال‌های ذخیره‌سازی</h3>
+          <p class="muted" style="font-size:12px;margin:0 0 10px">هر کلید می‌تواند کانال اختصاصی داشته باشد؛ فایل‌های کلید بدون کانال در کانال پیش‌فرض سیستم ذخیره می‌شوند.</p>
+          <button class="ghost" style="padding:4px 10px;font-size:12px" :disabled="storageChannelsBusy" @click="loadStorageChannels">{{ storageChannelsBusy ? '...' : 'بارگذاری/به‌روزرسانی' }}</button>
+          <div v-if="storageChannelsLoaded" style="margin-top:10px">
+            <div v-for="c in storageChannels" :key="c.chat || '(default)'" style="border:1px solid var(--border,#2a2f3a);border-radius:8px;padding:10px 12px;margin-bottom:10px">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <b dir="ltr" style="font-size:13px">{{ c.chat || '(بدون کانال)' }}</b>
+                <span v-if="c.is_system_default" class="tag" style="background:var(--ok,#22C55E);color:#08120b">پیش‌فرض سیستم</span>
+                <span class="tag" style="font-size:11px">{{ c.kind === 'default' ? 'مقصد کلیدهای بدون کانال' : 'اختصاصی' }}</span>
+                <span class="muted" style="font-size:12px">{{ c.files }} فایل • {{ fmtBytes(c.bytes) }}</span>
+              </div>
+              <div class="muted" style="font-size:12px;margin-top:4px" v-if="c.keys.length">
+                کلیدها:
+                <code v-for="k in c.keys" :key="k.id" style="margin-inline-end:6px">{{ k.name }}{{ k.revoked ? ' (لغوشده)' : '' }}</code>
+              </div>
+              <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+                <span v-for="t in c.by_type" :key="t.key" class="tag" style="font-size:11px">{{ t.label }}: {{ t.count }} ({{ fmtBytes(t.bytes) }})</span>
+              </div>
+              <div class="muted" style="font-size:12px;margin-top:6px" v-if="!c.by_type.length">هنوز فایل آماده‌ای ندارد</div>
             </div>
           </div>
         </div>
@@ -434,6 +517,25 @@
       <button class="ghost" style="width:100%" @click="eitDlg.open = false">انصراف</button>
     </dialog>
 
+    <dialog :open="folderDlg.open" @close="folderDlg.open = false">
+      <h3>پوشه جدید</h3>
+      <div class="field"><label>مسیر (برای تو در تو از / استفاده کن، مثل projects/2026)</label>
+        <input v-model="folderDlg.path" dir="ltr" placeholder="projects/2026/reports"></div>
+      <button class="primary" style="width:100%" @click="folderCreate">ایجاد</button>
+      <p class="err">{{ folderDlg.msg }}</p>
+      <button class="ghost" style="width:100%" @click="folderDlg.open = false">انصراف</button>
+    </dialog>
+
+    <dialog :open="moveDlg.open" @close="moveDlg.open = false">
+      <h3>انتقال فایل به پوشه</h3>
+      <p class="muted" style="font-size:12px">{{ moveDlg.fileName }}</p>
+      <div class="field"><label>مسیر پوشه مقصد (خالی = بدون پوشه)</label>
+        <input v-model="moveDlg.path" dir="ltr" placeholder="projects/2026"></div>
+      <button class="primary" style="width:100%" @click="moveFileDo">انتقال</button>
+      <p class="err">{{ moveDlg.msg }}</p>
+      <button class="ghost" style="width:100%" @click="moveDlg.open = false">انصراف</button>
+    </dialog>
+
     <dialog :open="keyDlg.open" @close="keyDlg.open = false">
       <h3>ایجاد کلید API</h3>
       <div class="field"><label>نام</label><input v-model="keyDlg.name" type="text"></div>
@@ -448,6 +550,12 @@
           <option value="">پیش‌فرض (تلگرام)</option>
           <option value="eitaa">ایتا</option>
         </select>
+      </div>
+      <div class="field" v-if="keyDlg.backend !== 'eitaa'">
+        <label>کانال ذخیره‌سازی اختصاصی <span class="muted" style="font-size:11px">(اختیاری)</span></label>
+        <input v-model="keyDlg.storageChat" dir="ltr" autocomplete="off"
+          placeholder="@username یا -100… (خالی = کانال پیش‌فرض سیستم)">
+        <p class="muted" style="font-size:11px;margin:4px 0 0">فایل‌های آپلودشده با این کلید به این کانال می‌روند؛ خالی = کانال ذخیره‌سازی پیش‌فرض سیستم.</p>
       </div>
       <button class="primary" style="width:100%" @click="keySave">ایجاد</button>
       <div v-if="keyDlg.result" style="background:var(--panel2);padding:12px;border-radius:8px">
@@ -538,6 +646,12 @@
               <option value="eitaa">ایتا</option>
             </select>
           </div>
+          <div class="field" v-if="setupDlg.backend === 'telegram'">
+            <label>کانال ذخیره‌سازی تلگرام <span class="muted" style="font-size:11px">(اختیاری — خالی = Saved Messages)</span></label>
+            <input v-model="setupDlg.storageChat" dir="ltr" autocomplete="off"
+              placeholder="@username یا -100… (شناسه عددی کانال)">
+            <p class="muted" style="font-size:11px;margin:4px 0 0">فایل‌های آپلودی به این کانال فرستاده می‌شوند؛ اکانت تلگرام باید دسترسی ارسال داشته باشد.</p>
+          </div>
           <div class="field">
             <label>دیتابیس</label>
             <select v-model="setupDlg.dbEngine">
@@ -620,6 +734,16 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
     const queueStats = ref({});
     const overview = ref(null);
     const nodesList = ref([]);
+    const storageChannels = ref([]);
+    const storageChannelsLoaded = ref(false);
+    const storageChannelsBusy = ref(false);
+    /* ---------- folders ---------- */
+    const foldersFlat = ref([]);
+    const currentFolderId = ref(null); // null = all files (root)
+    const currentFolderPath = ref("");
+    const filesFolderDraft = ref(""); // X-Folder for panel uploads
+    const folderDlg = reactive({ open: false, path: "", msg: "" });
+    const moveDlg = reactive({ open: false, fileId: "", fileName: "", path: "", msg: "" });
     const proxiesList = ref([]);
     const proxiesBusy = ref(false);
     const proxiesTesting = ref(false);
@@ -635,7 +759,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
     const accDlg = reactive({ open: false, step: 1, phone: "", label: "", code: "", pass: "", msg: "", loginId: "" });
     const botDlg = reactive({ open: false, token: "", label: "", msg: "" });
     const eitDlg = reactive({ open: false, token: "", chat: "", label: "", msg: "" });
-    const keyDlg = reactive({ open: false, name: "", scopes: "upload,download", rpm: 120, quota: 0, backend: "", result: "" });
+    const keyDlg = reactive({ open: false, name: "", scopes: "upload,download", rpm: 120, quota: 0, backend: "", storageChat: "", result: "" });
     const qrDlg = reactive({ open: false, url: "", slug: "" });
 
     /* ---------- api helper (with refresh) ---------- */
@@ -751,9 +875,66 @@ const doLogin = submitLogin;
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
     loaders.files = async () => {
-      try { const d = await api("/api/v1/files"); files.value = d.items || []; }
+      try {
+        const [d, fo] = await Promise.all([api("/api/v1/files"), api("/api/v1/folders")]);
+        files.value = d.items || [];
+        foldersFlat.value = fo.items || [];
+      }
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
+    async function openFolder(id) {
+      currentFolderId.value = id;
+      if (id === null) {
+        currentFolderPath.value = "";
+        filesFolderDraft.value = "";
+        await loaders.files();
+        return;
+      }
+      try {
+        const d = await api(`/api/v1/folders/${id}/all`);
+        files.value = d.items || [];
+        currentFolderPath.value = "/" + (d.folder?.path || "");
+        filesFolderDraft.value = d.folder?.path || "";
+      } catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    }
+    async function folderCreate() {
+      folderDlg.msg = "";
+      try {
+        const body = folderDlg.path.includes("/")
+          ? { path: folderDlg.path }
+          : { name: folderDlg.path };
+        await api("/api/v1/folders", { method: "POST", json: body });
+        showToast("پوشه ساخته شد");
+        folderDlg.open = false; folderDlg.path = "";
+        await loaders.files();
+      } catch (e) { folderDlg.msg = e.message; }
+    }
+    function fileMoveDlg(f) {
+      Object.assign(moveDlg, { open: true, fileId: f.id, fileName: f.name, path: "", msg: "" });
+    }
+    async function moveFileDo() {
+      moveDlg.msg = "";
+      try {
+        const path = moveDlg.path.trim().replace(/^\/+/,"");
+        if (!path) {
+          // detach from any folder
+          const f = files.value.find((x) => x.id === moveDlg.fileId);
+          if (f?.folder_id) await api(`/api/v1/folders/${f.folder_id}/files/${moveDlg.fileId}`, { method: "DELETE" });
+        } else {
+          const r = await api("/api/v1/folders/resolve?path=" + encodeURIComponent(path));
+          let fid = r.id;
+          if (!fid) {
+            const c = await api("/api/v1/folders", { method: "POST", json: { path } });
+            fid = c.id;
+          }
+          await api(`/api/v1/folders/${fid}/files/${moveDlg.fileId}`, { method: "POST" });
+        }
+        showToast("انتقال انجام شد");
+        moveDlg.open = false;
+        await loaders.files();
+        if (currentFolderId.value !== null) await openFolder(currentFolderId.value);
+      } catch (e) { moveDlg.msg = e.message; }
+    }
     loaders.queue = async () => {
       try {
         const [s, j] = await Promise.all([api("/api/v1/queue/stats"), api("/api/v1/queue/jobs")]);
@@ -854,6 +1035,7 @@ const doLogin = submitLogin;
     const settingsBusy = ref(false);
     const settingsErrors = reactive({}); // key → error message
 
+    const optionedSettings = ["fake_tg", "eitaa_mode"]; // int settings rendered as selects
     function validateSetting(it, value) {
       if (it.type === "int") {
         if (value === "" || value === null || value === undefined || Number.isNaN(Number(value)))
@@ -868,6 +1050,11 @@ const doLogin = submitLogin;
         if (!["speed", "rr"].includes(value)) return "speed یا rr";
       } else if (it.key === "proxy_enabled") {
         if (![0, 1, "0", "1"].includes(value)) return "فقط ۰ یا ۱";
+      } else if (it.key === "tg_api_hash") {
+        const h = String(value).trim();
+        // unchanged placeholder-ish env values are allowed; only newly typed
+        // values must look like a real 32-char hex hash
+        if (h && h !== String(it.current).trim() && !/^[0-9a-fA-F]{32}$/.test(h)) return "هش باید ۳۲ کاراکتر هگز باشد";
       } else if (it.key === "proxy_monitor_interval") {
         const n = Number(value);
         if (!(n === 0 || (n >= 2 && n <= 1440))) return "۰=خاموش یا ۲ تا ۱۴۴۰ دقیقه";
@@ -878,7 +1065,10 @@ const doLogin = submitLogin;
       const updates = {};
       for (const it of settingsItems.value) {
         const v = settingsDraft[it.key];
-        if (v !== "" && v != null && String(v) !== String(it.current)) updates[it.key] = v;
+        if (v === "" || v == null) continue;
+        // ints compare numerically so env bools (false) vs draft "0" don't count as dirty
+        const changed = it.type === "int" ? Number(v) !== Number(it.current) : String(v) !== String(it.current);
+        if (changed) updates[it.key] = v;
       }
       return updates;
     }
@@ -897,12 +1087,17 @@ const doLogin = submitLogin;
       max_concurrent_downloads: "دانلود همزمان هر اکانت",
       max_concurrent_uploads: "آپلود همزمان",
       default_backend: "بک‌اند پیش‌فرض",
+      eitaa_mode: "مقصد ایتا (۰=تلگرام، ۱=ایتا)",
+      fake_tg: "حالت تست (تلگرام آزمایشی درون‌حافظه‌ای)",
+      tg_api_id: "API ID تلگرام (my.telegram.org)",
+      tg_api_hash: "API Hash تلگرام (my.telegram.org)",
+      tg_storage_chat: "کانال ذخیره‌سازی (فایل‌ها اینجا ذخیره می‌شوند)",
       proxy_enabled: "استفاده از پراکسی (۰=خیر، ۱=بله)",
       proxy_strategy: "استراتژی انتخاب پراکسی",
       proxy_monitor_interval: "بازه تست دوره‌ای پراکسی‌ها (دقیقه؛ ۰=خاموش)",
     };
     const settingsGroups = computed(() => {
-      const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", backend: "بک‌اند", proxy: "پراکسی تلگرام" };
+      const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", backend: "بک‌اند", telegram_api: "تلگرام و ایتا — حالت تست و API", proxy: "پراکسی تلگرام" };
       const out = [];
       for (const [gid, title] of Object.entries(g)) {
         out.push({ id: gid, title, items: settingsItems.value.filter((x) => x.group === gid) });
@@ -913,11 +1108,24 @@ const doLogin = submitLogin;
       try {
         const [s, n] = await Promise.all([api("/api/v1/admin/settings"), api("/api/v1/admin/nodes")]);
         settingsItems.value = s.items || [];
-        for (const it of settingsItems.value) settingsDraft[it.key] = it.current;
+        // normalize: ints to numeric strings so option selects match their values
+        for (const it of settingsItems.value)
+          settingsDraft[it.key] = it.type === "int" ? String(Number(it.current) || 0) : (it.current ?? "");
         for (const k of Object.keys(settingsErrors)) delete settingsErrors[k];
         nodesList.value = n.items || [];
       } catch (e) { showToast("خطا: " + e.message, 4000, true); }
+      await loadStorageChannels();
     };
+    /* ---------- storage channels report ---------- */
+    async function loadStorageChannels() {
+      storageChannelsBusy.value = true;
+      try {
+        const d = await api("/api/v1/admin/storage-channels");
+        storageChannels.value = d.items || [];
+        storageChannelsLoaded.value = true;
+      } catch (e) { showToast("خطا: " + e.message, 4000, true); }
+      storageChannelsBusy.value = false;
+    }
     async function saveSettings() {
       // validate every touched field first
       for (const it of settingsItems.value) {
@@ -931,7 +1139,13 @@ const doLogin = submitLogin;
       if (!Object.keys(updates).length) { showToast("تغییری برای ذخیره نیست"); return; }
       settingsBusy.value = true;
       try {
-        await api("/api/v1/admin/settings", { method: "PUT", json: updates });
+        const res = await api("/api/v1/admin/settings", { method: "PUT", json: updates });
+        if (res.applied?.includes("fake_tg")) {
+          showToast("حالت تست تغییر کرد و اتصال‌ها بازسازی شدند — وضعیت را در تب اکانت‌ها/ایتا چک کنید", 6000, true);
+          await loaders.dash();
+        } else if (res.applied?.includes("tg_api_id") || res.applied?.includes("tg_api_hash")) {
+          showToast("اعتبارنامه‌ی API ذخیره و اتصال‌ها بازسازی شد", 5000, true);
+        }
         showToast("تنظیمات ذخیره و اعمال شد");
         await loaders.settings();
       } catch (e) { showToast("خطا: " + e.message, 4500, true); }
@@ -944,7 +1158,8 @@ const doLogin = submitLogin;
       await loaders.settings();
     }
     function discardSettings() {
-      for (const it of settingsItems.value) settingsDraft[it.key] = it.current;
+      for (const it of settingsItems.value)
+        settingsDraft[it.key] = it.type === "int" ? String(Number(it.current) || 0) : (it.current ?? "");
       for (const k of Object.keys(settingsErrors)) delete settingsErrors[k];
       showToast("تغییرات ذخیره‌نشده لغو شد");
     }
@@ -964,6 +1179,7 @@ const doLogin = submitLogin;
 
     /* ---------- setup wizard (starter) ---------- */
     const setupDlg = reactive({ open: false, step: 0, pass: "", pass2: "", backend: "telegram", dbEngine: "", dbInfo: null, msg: "",
+      storageChat: "",
       envItems: [], envFileExists: false, envSaving: false, envGenerated: "" });
     const setupNeeded = ref(false);
     async function loadSetupEnv() {
@@ -975,11 +1191,16 @@ const doLogin = submitLogin;
     }
     async function checkSetup() {
       try {
-        const d = await api("/api/v1/admin/setup/status");
+        const [d, st] = await Promise.all([
+          api("/api/v1/admin/setup/status"),
+          api("/api/v1/admin/settings").catch(() => ({ items: [] })),
+        ]);
         setupNeeded.value = !d.initialized;
         if (!d.initialized) {
+          const stMap = Object.fromEntries((st.items || []).map((i) => [i.key, i.current]));
           Object.assign(setupDlg, {
             open: true, step: 0, pass: "", pass2: "", backend: "telegram", msg: "", envGenerated: "",
+            storageChat: String(stMap.tg_storage_chat ?? ""),
             dbEngine: d.database?.engine === "postgres" ? "postgres" : (d.database?.pg_configured ? "" : "sqlite"),
             dbInfo: d.database || null,
           });
@@ -1024,6 +1245,7 @@ const doLogin = submitLogin;
           await api("/api/v1/admin/setup/complete", { method: "POST", json: {
             new_password: setupDlg.pass || "",
             default_backend: setupDlg.backend,
+            storage_chat: (setupDlg.backend === "telegram" ? (setupDlg.storageChat || "").trim() : ""),
             db_engine: setupDlg.dbEngine || "",
           } });
           setupDlg.open = false; setupNeeded.value = false;
@@ -1087,10 +1309,22 @@ const doLogin = submitLogin;
     async function eitDelete(e) { if (confirm("حذف توکن ایتا؟")) { await api(`/api/v1/eitaa/${e.id}`, { method: "DELETE" }); loaders.eitaa(); } }
 
     /* ---------- keys ---------- */
-    function keyOpen() { Object.assign(keyDlg, { open: true, name: "", scopes: "upload,download", rpm: 120, quota: 0, backend: "", result: "" }); }
+    function keyOpen() { Object.assign(keyDlg, { open: true, name: "", scopes: "upload,download", rpm: 120, quota: 0, backend: "", storageChat: "", result: "" }); }
+    async function keyEditChat(k) {
+      const v = prompt(
+        "کانال ذخیره‌سازی اختصاصی این کلید (@username یا -100… / خالی = پیش‌فرض سیستم):",
+        k.storage_chat || ""
+      );
+      if (v === null) return;
+      try {
+        await api(`/api/v1/keys/${k.id}`, { method: "PATCH", json: { storage_chat: v.trim() } });
+        showToast(v.trim() ? "کانال ذخیره‌سازی کلید ذخیره شد" : "کلید به کانال پیش‌فرض برگشت");
+        loaders.keys();
+      } catch (e) { showToast("خطا: " + e.message, 4500, true); }
+    }
     async function keySave() {
       try {
-        const d = await api("/api/v1/keys", { method: "POST", json: { name: keyDlg.name, scopes: keyDlg.scopes, rpm: keyDlg.rpm || 120, daily_quota_gb: keyDlg.quota || 0, backend: keyDlg.backend || undefined } });
+        const d = await api("/api/v1/keys", { method: "POST", json: { name: keyDlg.name, scopes: keyDlg.scopes, rpm: keyDlg.rpm || 120, daily_quota_gb: keyDlg.quota || 0, backend: keyDlg.backend || undefined, storage_chat: (keyDlg.backend === 'eitaa' ? undefined : (keyDlg.storageChat || "").trim() || undefined) } });
         keyDlg.result = d.key;
         loaders.keys();
       } catch (e) { showToast(e.message, 4000, true); }
@@ -1104,7 +1338,7 @@ const doLogin = submitLogin;
       // Create upload session
       const r = await fetch("/api/v1/files/upload/session", {
         method: "POST",
-        headers: { "Authorization": "Bearer " + token.value, "Content-Type": "application/json" },
+        headers: { "Authorization": "Bearer " + token.value, "Content-Type": "application/json", ...(filesFolderDraft.value.trim() ? { "X-Folder": filesFolderDraft.value.trim() } : {}) },
         body: JSON.stringify({ name: file.name, size: file.size, mime: file.type || "application/octet-stream" })
       });
       if (!r.ok) { const d = await r.json(); throw new Error(d.detail || "session create failed"); }
