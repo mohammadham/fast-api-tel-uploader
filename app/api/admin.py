@@ -107,6 +107,62 @@ async def audit(limit: int = 200, _: str = Depends(get_current_admin), db=Depend
     return {"items": await AuditRepo(db).list(min(limit, 1000))}
 
 
+@router.get("/blocked-files-report")
+async def blocked_files_report(limit: int = 100, _: str = Depends(get_current_admin), db=Depends(get_db)):
+    """Report of blocked files with dates and uploaders from audit logs."""
+    from ..core.models import AuditRepo, FileRepo
+
+    # Get all audit log entries for block/unblock actions
+    audit_items = await AuditRepo(db).list(min(limit * 5, 500))
+    # Filter for file block/unblock actions
+    block_actions = [a for a in audit_items if a.get("action") in ("file.block", "file.unblock")]
+
+    # Get file details for each action
+    file_ids = set()
+    for a in block_actions:
+        target = a.get("target", "")
+        if target:
+            file_ids.add(target)
+
+    files: Dict[str, Any] = {}
+    if file_ids:
+        for fid in file_ids:
+            frec = await FileRepo(db).get(fid)
+            if frec:
+                files[fid] = {
+                    "name": frec.get("name", ""),
+                    "size": frec.get("size", 0),
+                    "mime": frec.get("mime", ""),
+                    "uploader": frec.get("uploader", ""),
+                    "backend": frec.get("backend", ""),
+                    "created_at": frec.get("created_at", 0),
+                }
+
+    # Build report sorted by audit timestamp (newest first)
+    report = []
+    for a in block_actions:
+        target = a.get("target", "")
+        file_info = files.get(target, {})
+        report.append({
+            "timestamp": a.get("ts", 0),
+            "action": a.get("action", ""),
+            "actor": a.get("actor", ""),
+            "target": target,
+            "file_name": file_info.get("name", "UNKNOWN"),
+            "file_size": file_info.get("size", 0),
+            "uploader": file_info.get("uploader", ""),
+            "ip": a.get("ip", ""),
+            "details": a.get("details", ""),
+        })
+
+    report.sort(key=lambda x: x["timestamp"], reverse=True)
+
+    return {
+        "items": report[:limit],
+        "total": len(report),
+    }
+
+
 @router.get("/metrics", response_class=PlainTextResponse)
 async def prometheus(_: str = Depends(get_current_admin)):
     # gauge refresh from live state

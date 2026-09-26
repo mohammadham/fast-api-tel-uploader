@@ -238,9 +238,60 @@
           <span v-if="channelFilterIsDefault" class="tag" style="font-size:11px">پیش‌فرض سیستم (فایل‌های بدون کانال هم اینجا هستند)</span>
           <button class="ghost" style="padding:2px 10px;font-size:11px" @click="clearChannelFilter">حذف فیلتر ×</button>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <div v-if="channelFilter" class="card wide" style="margin-bottom:14px;border-color:var(--border,#2a2f3a)">
+          <h3 style="font-size:15px;margin:0 0 10px">آمار کانال {{ channelFilter }}</h3>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px">
+            <div class="stat" style="background:var(--panel2)">
+              <div class="lbl" style="font-size:12px">تعداد فایل</div>
+              <div class="num" style="font-size:24px">{{ filesInChannelTotal }}</div>
+            </div>
+            <div class="stat" style="background:var(--panel2)">
+              <div class="lbl" style="font-size:12px">حجم کلی</div>
+              <div class="num" style="font-size:18px">{{ fmtBytes(filesInChannelBytes) }}</div>
+            </div>
+            <div v-if="filesInChannelByType && filesInChannelByType.length > 0" class="stat" style="background:var(--panel2)">
+              <div class="lbl" style="font-size:12px">نوع主要</div>
+              <div class="muted" style="font-size:11px">{{ filesInChannelByType[0].key }}: {{ filesInChannelByType[0].count }} فایل</div>
+            </div>
+          </div>
+        </div>
+        <div v-if="bulkMode" style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
+          <input type="checkbox" id="select-all-files" v-model="selectAllFiles" @change="toggleSelectAll" class="checkbox" dir="ltr">
+          <label for="select-all-files" class="muted" style="font-size:12px;cursor:pointer">انتخاب همه {{ files.length }}</label>
+          <span v-if="selectedFiles.value.size > 0" class="muted" style="font-size:12px;color:var(--ok)">{{ selectedFiles.value.size }} فایل انتخاب شده</span>
+        </div>
+        <div v-else style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
           <input v-model="filesQuery" dir="auto" placeholder="جستجوی نام فایل..." style="max-width:220px;padding:5px 10px;font-size:13px" @input="filesSearch">
           <select v-model="filesMime" style="padding:5px 8px;font-size:13px" @change="loaders.files()">
+            <option value="">همه انواع</option>
+            <option value="image/">تصویر</option>
+            <option value="video/">ویدیو</option>
+            <option value="audio/">صوت</option>
+            <option value="text/">متن/کد</option>
+            <option value="application/pdf">PDF</option>
+            <option value="application/zip">آرشیو</option>
+          </select>
+          <select v-model="filesOrder" style="padding:5px 8px;font-size:13px" @change="loaders.files()">
+            <option value="date">جدیدترین</option>
+            <option value="name">نام</option>
+            <option value="size">حجم</option>
+            <option value="downloads">بیشترین دانلود</option>
+          </select>
+          <button class="ghost" :style="filesBlockedOnly ? 'border-color:var(--err);color:var(--err)' : ''" style="padding:5px 10px;font-size:12px" @click="filesBlockedOnly = !filesBlockedOnly; loaders.files()">فقط بن‌شده‌ها</button>
+          <span class="muted" style="font-size:12px">{{ filesTotal }} فایل</span>
+        </div>
+        <div v-if="!bulkMode" style="margin-bottom:10px;display:flex;gap:8px;align-items:center">
+          <button class="primary" :disabled="uploadBusy" @click="$refs.fileInput.click()">
+            {{ uploadBusy ? "در حال آپلود..." : "آپلود جدید" }}
+          </button>
+          <input ref="fileInput" type="file" style="display:none" @change="upload">
+        </div>
+        <div v-if="bulkMode" style="margin-bottom:10px;display:flex;gap:8px;align-items:center">
+          <button class="ghost" @click="bulkMode = false; selectedFiles.value.clear(); selectAllFiles.value = false" style="padding:5px 10px;font-size:12px">انصراف از حالت گروهی</button>
+          <button class="danger" @click="bulkDeleteSelected" style="padding:5px 10px;font-size:12px;background:var(--err);color:#fff">حذف گروهی ({{ selectedFiles.value.size }})</button>
+          <button class="ghost" @click="bulkBlockSelected" style="padding:5px 10px;font-size:12px">بن گروهی ({{ selectedFiles.value.size }})</button>
+          <button class="ghost" @click="bulkMoveSelectedDlg.open = true" style="padding:5px 10px;font-size:12px">انتصال گروهی به پوشه...</button>
+        </div>
             <option value="">همه انواع</option>
             <option value="image/">تصویر</option>
             <option value="video/">ویدیو</option>
@@ -282,6 +333,11 @@
               <span dir="ltr">{{ currentFolderId === null ? '/' : (currentFolderPath || '/') }}</span>
               <input v-model="filesFolderDraft" dir="ltr" placeholder="پوشه برای آپلود (مثل projects/2026)" style="font-size:12px;padding:3px 8px;width:230px">
             </div>
+            <div v-if="currentFolderId.value !== null" class="muted" style="font-size:11px; margin-top:4px">
+              <span dir="ltr">جستجو: </span>
+              <input v-model="folderQuery" dir="ltr" placeholder="بحث" style="font-size:11px;padding:2px 6px;">
+            </div>
+        </div>
         <p v-if="uploadProgress" class="muted">
           {{ uploadProgress }} — {{ uploadPct }}%
           <span v-if="uploadSpeed > 0" class="muted" style="margin-left:12px">~{{ uploadSpeed }} MB/s</span>
@@ -296,15 +352,16 @@
             <thead><tr><th>شناسه</th><th>نام</th><th>حجم</th><th>وضعیت</th><th>ذخیره</th><th>کانال</th><th>دانلود</th><th>تاریخ</th><th>عملیات</th></tr></thead>
             <tbody>
               <tr v-for="f in files" :key="f.id">
-                <td dir="ltr"><code>{{ f.id }}</code></td>
-                <td><a href="#" style="color:inherit;text-decoration:underline dotted" @click.prevent="filePreview(f)" :title="f.mime">{{ f.name }}</a><span v-if="f.blocked" class="tag" style="background:var(--err);color:#fff;font-size:10px;margin-inline-start:6px">بن</span></td>
+                <td><input type="checkbox" :checked="selectedFiles.value.has(f.id)" @change="toggleSelectFile(f.id)" class="checkbox" dir="ltr" v-if="!bulkMode"></td>
+                <td v-if="!bulkMode"><dir dir="ltr"><code>{{ f.id }}</code></dir><td v-else><dir dir="ltr"><code style="color:var(--muted)">{{ f.id }}</code></dir></td>
+                <td v-if="!bulkMode"><a href="#" style="color:inherit;text-decoration:underline dotted" @click.prevent="filePreview(f)" :title="f.mime">{{ f.name }}</a><span v-if="f.blocked" class="tag" style="background:var(--err);color:#fff;font-size:10px;margin-inline-start:6px">بن</span><td v-else><span class="muted">{{ f.name }}</span></td>
                 <td>{{ fmtBytes(f.size) }}</td>
                 <td><span class="badge" :class="f.status">{{ f.status }}</span></td>
                 <td>{{ f.backend || "tg" }}</td>
                 <td dir="ltr"><code style="font-size:11px">{{ f.storage_chat || 'default' }}</code></td>
                 <td>{{ f.downloads }}</td>
                 <td class="muted">{{ fmtTime(f.created_at) }}</td>
-                <td>
+                <td v-if="!bulkMode">
                   <button @click="filePreview(f)">پیش‌نمایش</button>
                   <button @click="fileLink(f)">لینک</button>
                   <button @click="fileLinksDlg(f)">لینک‌ها</button>
@@ -314,6 +371,7 @@
                   <button v-if="f.deleted_at" @click="fileRestore(f)">بازیابی</button>
                   <button class="danger" @click="fileDelete(f)">حذف</button>
                 </td>
+                <td v-if="bulkMode"><input type="checkbox" :checked="selectedFiles.value.has(f.id)" @change="toggleSelectFile(f.id)" class="checkbox" dir="ltr"></td>
               </tr>
               <tr v-if="!files.length"><td colspan="9" class="muted">فایلی نیست</td></tr>
             </tbody>
@@ -368,6 +426,25 @@
                 <td>{{ a.action }}</td><td dir="ltr">{{ a.target }}</td><td dir="ltr">{{ a.ip }}</td>
               </tr>
               <tr v-if="!audit.length"><td colspan="5" class="muted">لاگی نیست</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+        </div>
+        <div v-if="blockedFilesTotal.value > 0" class="card wide" style="margin-bottom:14px">
+          <h3 style="font-size:15px;margin:0 0 10px">گزارش فایل‌های بن‌شده</h3>
+          <p class="muted" style="font-size:12px;margin:0 0 8px">کل {{ blockedFilesTotal.value }} فایل</p>
+          <table>
+            <thead><tr><th>زمان</th><th>فایل</th><th>عملateur</th><th>عملیات</th><th>IP</th></tr></thead>
+            <tbody>
+              <tr v-for="(f, i) in blockedFilesReport" :key="i">
+                <td class="muted">{{ fmtTime(f.timestamp) }}</td>
+                <td dir="ltr">{{ f.file_name || 'UNKNOWN' }}</td>
+                <td>{{ f.uploader || '—' }}</td>
+                <td>{{ f.action }}</td>
+                <td dir="ltr">{{ f.ip }}</td>
+              </tr>
+              <tr v-if="!blockedFilesReport.length"><td colspan="5" class="muted">هیچ فایل‌های بن‌شده‌ای نمی‌باشد</td></tr>
             </tbody>
           </table>
         </div>
@@ -813,6 +890,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
     const currentFolderId = ref(null); // null = all files (root)
     const currentFolderPath = ref("");
     const filesFolderDraft = ref(""); // X-Folder for panel uploads
+    const folderQuery = ref(""); // search query for folder files
     const channelFilter = ref(""); // files tab: filter by storage channel
     const channelFilterIsDefault = ref(false);
     /* ---------- file manager: search/filter/pagination/preview/block/links ---------- */
@@ -823,10 +901,26 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
     const filesTotal = ref(0);
     const filesLimit = ref(50);
     const filesOffset = ref(0);
+    const channelFilter = ref("");
+    const channelFilterIsDefault = ref(false);
+    const filesInChannelTotal = ref(0);
+    const filesInChannelBytes = ref(0);
+    const filesInChannelByType = ref([]);
     const previewDlg = reactive({ open: false, id: "", name: "", mime: "", size: 0, kind: "", url: "", text: "" });
     const linksDlg = reactive({ open: false, fileId: "", name: "", items: [] });
     let searchTimer = null;
+    const blockedFilesReport = ref([]);
+    const blockedFilesTotal = ref(0);
+    const selectedFiles = ref(new Set<string>());
+    const selectAllFiles = ref(false);
+    const bulkMode = ref(false);
+    const linksDlg = reactive({ open: false, fileId: "", name: "", items: [] });
+    let searchTimer = null;
     function filesSearch() {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => { filesOffset.value = 0; loaders.files(); }, 300);
+    }
+    function folderSearch() {
       clearTimeout(searchTimer);
       searchTimer = setTimeout(() => { filesOffset.value = 0; loaders.files(); }, 300);
     }
@@ -869,22 +963,54 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
       showToast(blocked ? "فایل بن شد" : "بن برداشته شد");
       loaders.files();
     }
-    async function fileLinksDlg(f) {
-      Object.assign(linksDlg, { open: true, fileId: f.id, name: f.name, items: [] });
-      try { const d = await api(`/api/v1/files/${f.id}/links`); linksDlg.items = d.items || []; }
-      catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    async function toggleSelectFile(fileId) {
+      if (selectedFiles.value.has(fileId)) {
+        selectedFiles.value.delete(fileId);
+      } else {
+        selectedFiles.value.add(fileId);
+      }
+      updateSelectAll();
     }
-    function linkCopy(l) { navigator.clipboard.writeText(location.origin + "/" + l.slug); showToast("کپی شد"); }
-    async function linkToggle(l) {
-      await api(`/api/v1/files/${linksDlg.fileId}/links/${l.id}`, { method: "PATCH", json: { disabled: !l.disabled } });
-      l.disabled = !l.disabled;
-      showToast(l.disabled ? "لینک غیرفعال شد" : "لینک فعال شد");
+    function updateSelectAll() {
+      const allSelected = files.value.length > 0 && selectedFiles.value.size === files.value.length;
+      selectAllFiles.value = allSelected;
     }
-    async function linkDelete(l) {
-      if (!confirm("این لینک حذف شود؟")) return;
-      await api(`/api/v1/files/${linksDlg.fileId}/links/${l.id}`, { method: "DELETE" });
-      linksDlg.items = linksDlg.items.filter((x) => x.id !== l.id);
-      showToast("لینک حذف شد");
+    async function toggleSelectAll() {
+      if (selectAllFiles.value) {
+        selectedFiles.value = new Set(files.value.map((f) => f.id));
+      } else {
+        selectedFiles.value.clear();
+      }
+      updateSelectAll();
+    }
+    async function bulkDeleteSelected() {
+      if (selectedFiles.value.size === 0) return;
+      if (!confirm(`م確定 حذف ${selectedFiles.value.size} فایل انتخاب شده؟`)) return;
+      for (const fileId of selectedFiles.value) {
+        await api(`/api/v1/files/${fileId}`, { method: "DELETE" });
+      }
+      selectedFiles.value.clear();
+      selectAllFiles.value = false;
+      showToast("فایل‌های انتخابی حذف شدند");
+      loaders.files();
+    }
+    async function bulkBlockSelected() {
+      if (selectedFiles.value.size === 0) return;
+      if (!confirm(`م確定 بن ${selectedFiles.value.size} فایل انتخاب شده؟`)) return;
+      for (const fileId of selectedFiles.value) {
+        await api(`/api/v1/files/${fileId}/block`, { method: "PATCH", json: { blocked: true } });
+      }
+      showToast("فایل‌های انتخابی بن شدند");
+      loaders.files();
+    }
+    async function bulkMoveSelectedDlgOpen() {
+      const file = files.value.find((f) => selectedFiles.value.has(f.id));
+      if (file) {
+        moveDlg.fileId = file.id;
+        moveDlg.fileName = file.name;
+        moveDlg.path = "";
+        moveDlg.open = true;
+      }
     }
     const folderDlg = reactive({ open: false, path: "", msg: "" });
     const moveDlg = reactive({ open: false, fileId: "", fileName: "", path: "", msg: "" });
@@ -1023,7 +1149,7 @@ const doLogin = submitLogin;
         const p = new URLSearchParams();
         p.set("limit", String(filesLimit.value));
         p.set("offset", String(filesOffset.value));
-        if (filesQuery.value.trim()) p.set("q", filesQuery.value.trim());
+        const searchQuery = currentFolderId.value !== null ? folderQuery.value : filesQuery.value; if (searchQuery.trim()) p.set("q", searchQuery.trim());
         if (filesMime.value) p.set("mime", filesMime.value);
         if (filesOrder.value !== "date") p.set("order", filesOrder.value);
         if (filesBlockedOnly.value) p.set("blocked", "1");
@@ -1035,6 +1161,52 @@ const doLogin = submitLogin;
         files.value = d.items || [];
         filesTotal.value = d.total || 0;
         foldersFlat.value = fo.items || [];
+        // Fetch channel stats if a channel filter is active
+        if (channelFilter.value) {
+          if (channelFilterIsDefault.value) {
+            const defaultChat = await api("/api/v1/admin/settings", { params: { key: "tg_storage_chat" } });
+            const defChat = defaultChat.tg_storage_chat || "";
+            const stats = await api("/api/v1/files", {
+              params: { storage_chat: defChat, default_channel: "1" }
+            });
+            filesInChannelTotal.value = stats.total || 0;
+            filesInChannelBytes.value = 0;
+            // Calculate bytes from items
+            if (stats.items) {
+              filesInChannelBytes.value = stats.items.reduce((sum, f) => sum + (f.size || 0), 0);
+            }
+            // Get type distribution
+            const typeMap = {};
+            stats.items?.forEach(f => {
+              const mime = f.mime || "";
+              const base = mime.split("/")[0] || "other";
+              typeMap[base] = (typeMap[base] || 0) + 1;
+            });
+            filesInChannelByType.value = Object.entries(typeMap)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 3)
+              .map(([key, count]) => ({ key, count }));
+          } else {
+            const stats = await api("/api/v1/files", {
+              params: { storage_chat: channelFilter.value }
+            });
+            filesInChannelTotal.value = stats.total || 0;
+            filesInChannelBytes.value = 0;
+            if (stats.items) {
+              filesInChannelBytes.value = stats.items.reduce((sum, f) => sum + (f.size || 0), 0);
+            }
+            const typeMap = {};
+            stats.items?.forEach(f => {
+              const mime = f.mime || "";
+              const base = mime.split("/")[0] || "other";
+              typeMap[base] = (typeMap[base] || 0) + 1;
+            });
+            filesInChannelByType.value = Object.entries(typeMap)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 3)
+              .map(([key, count]) => ({ key, count }));
+          }
+        }
       }
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
@@ -1114,6 +1286,10 @@ const doLogin = submitLogin;
     };
     loaders.audit = async () => {
       try { const d = await api("/api/v1/admin/audit"); audit.value = d.items || []; }
+      catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    };
+    loaders.blockedFilesReport = async () => {
+      try { const d = await api("/api/v1/admin/blocked-files-report?limit=200"); blockedFilesReport.value = d.items || []; blockedFilesTotal.value = d.total || 0; }
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
     loaders.ops = async () => {

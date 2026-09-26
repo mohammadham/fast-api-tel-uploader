@@ -208,19 +208,28 @@ async def _list_folder_files(
     include_subfolders: bool,
     limit: int,
     offset: int,
-    principal: dict,
+    q: str = "",
+    principal: dict = None,
 ) -> dict:
     repo = FolderRepo(db)
     row = await _folder_or_404(repo, folder_id)
+    conds = ["deleted_at IS NULL"]
+    if q:
+        conds.append("name LIKE ?")
+        params = [f"%{q}%"]
+    else:
+        params = []
     files = await FileRepo(db).list(
         limit=min(max(limit, 1), 500), offset=max(offset, 0),
         folder_id=folder_id, include_subfolders=include_subfolders,
+        q=q,
     )
     return {
         "folder": {"id": row["id"], "name": row["name"], "parent_id": row["parent_id"], "path": await repo.path_of(folder_id)},
         "include_subfolders": include_subfolders,
         "count": len(files),
         "items": files,
+        "q": q,
     }
 
 
@@ -229,11 +238,12 @@ async def folder_files(
     folder_id: int,
     limit: int = 50,
     offset: int = 0,
+    q: str = "",
     principal=Depends(get_admin_or_key),
     db: Database = Depends(get_db),
 ):
     # get_admin_or_key already enforced read scope for API keys
-    return await _list_folder_files(db, folder_id, False, limit, offset, principal)
+    return await _list_folder_files(db, folder_id, False, limit, offset, q, principal)
 
 
 @router.get("/{folder_id}/all")
@@ -241,16 +251,18 @@ async def folder_files_recursive(
     folder_id: int,
     limit: int = 50,
     offset: int = 0,
+    q: str = "",
     principal=Depends(get_admin_or_key),
     db: Database = Depends(get_db),
 ):
     """Files in this folder and every nested subfolder (recursive CTE)."""
     # get_admin_or_key already enforced read scope for API keys
-    return await _list_folder_files(db, folder_id, True, limit, offset, principal)
+    return await _list_folder_files(db, folder_id, True, limit, offset, q, principal)
 
 
 class FileMoveIn(BaseModel):
-    file_ids: List[str] = []  # optional batch move support via POST /{id}/files
+    file_ids: List[str] = []  # batch move support via POST /{id}/files
+    target_folder_id: Optional[int] = None
 
 
 @router.post("/{folder_id}/files/{file_id}")
@@ -270,6 +282,42 @@ async def move_file_into_folder(
     await frepo.set_folder(file_id, folder_id)
     await db.audit(_actor(principal), "folder.file_move", target=file_id, details=f"folder={folder_id}")
     return {"ok": True, "file_id": file_id, "folder_id": folder_id}
+
+
+@router.post("{folder_id}/files", status_code=200)
+async def batch_move_files(
+    folder_id: int,
+    body: FileMoveIn,
+    principal=Depends(get_admin_or_key),
+    db: Database = Depends(get_db),
+):
+    _write_guard(principal)
+    repo = FolderRepo(db)
+    await _folder_or_404(repo, int(folder_id))
+    if not body.file_ids:
+        raise HTTPException(status_code=400, detail="file_ids required")
+    if body.target_folder_id is not None:
+        await _folder_or_404(repo, int(body.target_folder_id))
+    moved: list = []
+    failed: list = []
+    for file_id in body.file_ids:
+        frepo = FileRepo(db)
+        rec = await frepo.get(file_id)
+        if not rec:
+            failed.append({"file_id": file_id, "reason": "not found"})
+            continue
+        if body.target_folder_id is not None:
+            if rec["folder_id"] == int(body.target_folder_id):
+                failed.append({"file_id": file_id, "reason": "already in target folder"})
+                continue
+            if _would_cycle(repo, await repo.list(), int(folder_id), int(body.target_folder_id)):
+                failed.append({"file_id": file_id, "reason": "would create cycle"})
+                continue
+        target = int(folder_id) if body.target_folder_id is None else int(body.target_folder_id)
+        await frepo.set_folder(file_id, target)
+        await db.audit(_actor(principal), "folder.file_move", target=file_id, details=f"from={rec.get('folder_id')} to={target}")
+        moved.append(file_id)
+    return {"ok": True, "moved": moved, "failed": failed}
 
 
 @router.delete("/{folder_id}/files/{file_id}")
