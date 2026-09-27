@@ -124,6 +124,11 @@ def decrypt_str(cipher: str) -> str:
 
 
 # ---------- presigned download links ----------
+def sign_str(msg: str) -> str:
+    s = get_settings()
+    return hmac.new(s.secret.encode(), msg.encode(), hashlib.sha256).hexdigest()[:32]
+
+
 def sign_download(file_id: str, expires_at: int, one_time: bool = False) -> str:
     s = get_settings()
     msg = f"{file_id}:{expires_at}:{1 if one_time else 0}"
@@ -137,6 +142,32 @@ def verify_download(file_id: str, expires_at: str, one_time: str, sig: str) -> b
         if exp < int(time.time()):
             return False
         expect = sign_download(file_id, exp, one_time == "1")
+        return hmac.compare_digest(expect, sig)
+    except Exception:
+        return False
+
+
+# ---------- short-lived preview tokens (ptk) ----------
+def make_preview_token(file_id: str, ttl: int = 600) -> str:
+    """``ptk_<file_id>:<exp>:<sig>`` — lets a browser <img>/<video>/<iframe>
+    load one file's preview without carrying the long-lived panel JWT in the
+    URL. Short default TTL (10 min) keeps a leaked token almost useless."""
+    exp = int(time.time()) + max(10, min(int(ttl), 600))
+    msg = f"ptk:{file_id}:{exp}"
+    sig = sign_str(msg)
+    return f"ptk_{file_id}:{exp}:{sig}"
+
+
+def verify_preview_token(file_id: str, token: str) -> bool:
+    """Constant-time check bound to one file id; any mismatch or expiry fails."""
+    try:
+        if not token.startswith("ptk_"):
+            return False
+        body = token[4:]
+        tok_file, exp_s, sig = body.split(":", 2)
+        if tok_file != file_id or int(exp_s) < int(time.time()):
+            return False
+        expect = sign_str(f"ptk:{file_id}:{int(exp_s)}")
         return hmac.compare_digest(expect, sig)
     except Exception:
         return False

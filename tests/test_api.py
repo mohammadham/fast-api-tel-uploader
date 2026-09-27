@@ -260,3 +260,68 @@ async def test_blocked_files_report(client, api_key, token):
 
     for fid in ids:
         await client.delete(f"/api/v1/files/{fid}?purge=true", headers=H)
+
+
+async def test_preview_token_flow(client, api_key):
+    """A8: POST /files/{id}/preview-token issues a file-bound HMAC token (≤10 min)
+    that authorizes ONLY that file's preview endpoint via ?ptk=."""
+    H = {"Authorization": f"Bearer {api_key}"}
+    r = await client.post(
+        "/api/v1/files/upload",
+        headers=H,
+        files={"file": ("ptk.jpg", io.BytesIO(b"fake-image"), "image/jpeg")},
+    )
+    fid = r.json()["file_id"]
+    status = "queued"
+    for _ in range(100):
+        r = await client.get(f"/api/v1/files/{fid}", headers=H)
+        status = r.json()["status"]
+        if status == "ready":
+            break
+        await asyncio.sleep(0.05)
+    assert status == "ready"
+
+    r = await client.post(f"/api/v1/files/{fid}/preview-token", json={"ttl": 600}, headers=H)
+    assert r.status_code == 200, r.text
+    d = r.json()
+    tok = d["token"]
+    assert tok.startswith(f"ptk_{fid}:")
+    import time as _t
+    assert 10 <= d["expires_at"] - int(_t.time()) <= 600
+    assert d["url"].endswith(f"ptk={tok}")
+
+    # preview works with ptk and no Authorization header
+    r = await client.get(f"/api/v1/files/{fid}/preview?ptk={tok}")
+    assert r.status_code == 200, r.text
+
+    # ptk must NOT authorize other endpoints or other files
+    r = await client.get(f"/api/v1/files/{fid}?ptk={tok}")
+    assert r.status_code == 401, "ptk must not authorize file info"
+    r = await client.get(f"/api/v1/files/{fid}/content?ptk={tok}")
+    assert r.status_code == 401, "ptk must not authorize content download"
+    r = await client.get("/api/v1/files?ptk=" + tok, headers={})
+    assert r.status_code == 401, "ptk must not authorize listing"
+
+    # tampered token → 401
+    r = await client.get(f"/api/v1/files/{fid}/preview?ptk={tok[:-4]}beef")
+    assert r.status_code == 401
+
+    # ptk for a blocked file is refused at issuance
+    await client.patch(f"/api/v1/files/{fid}/block", json={"blocked": True}, headers=H)
+    r = await client.post(f"/api/v1/files/{fid}/preview-token", json={}, headers=H)
+    assert r.status_code == 403
+
+    # ttl clamp: asking for an hour yields at most 600s
+    await client.patch(f"/api/v1/files/{fid}/block", json={"blocked": False}, headers=H)
+    r = await client.post(f"/api/v1/files/{fid}/preview-token", json={"ttl": 3600}, headers=H)
+    tok2 = r.json()["token"]
+    exp2 = int(tok2.split(":")[1])
+    assert exp2 - int(_t.time()) <= 600
+
+    # ttl below floor (10s) is raised to it
+    r = await client.post(f"/api/v1/files/{fid}/preview-token", json={"ttl": 1}, headers=H)
+    tok3 = r.json()["token"]
+    exp3 = int(tok3.split(":")[1])
+    assert exp3 - int(_t.time()) >= 9  # small timing slack
+
+    await client.delete(f"/api/v1/files/{fid}?purge=true", headers=H)

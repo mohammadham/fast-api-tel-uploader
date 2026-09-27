@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from ..core.config import get_settings
 from ..core.models import FileRepo, FolderRepo, UploadSessionRepo, new_id, now
 from ..core.rate_limit import quota
+from ..core.security import make_preview_token
 from ..core.settings_service import get_runtime
 from ..core.state import get_db, state
 from ..services.presign import make_link
@@ -228,6 +229,30 @@ async def block_file(file_id: str, body: FileBlockIn, db=Depends(get_db), key=De
     await repo.set_blocked(file_id, body.blocked)
     await db.audit(f"key:{key['id']}", "file.block" if body.blocked else "file.unblock", target=file_id)
     return {"ok": True, "file_id": file_id, "blocked": body.blocked}
+
+
+class PreviewTokenIn(BaseModel):
+    ttl: Optional[int] = None  # seconds; clamped to 10..600
+
+
+@router.post("/{file_id}/preview-token")
+async def create_preview_token(file_id: str, body: PreviewTokenIn = None, db=Depends(get_db), key=Depends(get_api_key)):
+    """Issue a short-lived HMAC preview token (max 10 minutes).
+
+    Unlike the panel JWT fallback (?token=) this token is bound to a single
+    file's preview path, carries no scopes beyond preview-read, and expires
+    quickly — safe to embed in <img>/<video>/<iframe> URLs and logs.
+    """
+    require_scope(key, "read")
+    rec = await FileRepo(db).get(file_id)
+    if not rec or rec["status"] != "ready" or rec.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="file not found or not ready")
+    if rec.get("blocked"):
+        raise HTTPException(status_code=403, detail="file is blocked")
+    ttl = int(body.ttl) if (body and body.ttl) else 600
+    tok = make_preview_token(file_id, ttl)
+    exp_s = tok.split(":")[1]
+    return {"token": tok, "expires_at": int(exp_s), "url": f"/api/v1/files/{file_id}/preview?ptk={tok}"}
 
 
 @router.get("/{file_id}/preview")

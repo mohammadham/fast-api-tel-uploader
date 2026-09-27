@@ -930,9 +930,13 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
           previewDlg.text = (await r.text()).slice(0, 20000);
         } catch (e) { showToast("خطا در پیش‌نمایش: " + e.message, 4000, true); previewDlg.open = false; }
       } else {
-        // <img>/<video>/<iframe> cannot send Authorization headers → pass the
-        // panel JWT as a query param (get_api_key accepts it)
-        previewDlg.url = url + "?token=" + encodeURIComponent(token.value);
+        // <img>/<video>/<iframe> cannot send Authorization headers → mint a
+        // short-lived preview token bound to this one file (never expose the
+        // long-lived panel JWT in element URLs)
+        try {
+          const d = await api(`/api/v1/files/${f.id}/preview-token`, { method: "POST", json: {} });
+          previewDlg.url = d.url;
+        } catch (e) { showToast("خطا در پیش‌نمایش: " + e.message, 4000, true); previewDlg.open = false; }
       }
     }
     function fileDownload(f) {

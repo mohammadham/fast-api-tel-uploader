@@ -37,7 +37,25 @@ async def get_api_key(
     ``?token=`` is accepted as a last resort so browser media tags
     (<img>/<video>/<iframe>) — which cannot set Authorization headers — can
     load panel-authenticated streams (preview).
+
+    A short-lived HMAC preview token (``?ptk=``) is accepted ONLY on the
+    preview path of its own file: it never grants listing, download or write
+    access, and it expires within 10 minutes of issuance.
     """
+    from ..core.security import verify_preview_token
+
+    ptk = request.query_params.get("ptk", "")
+    if ptk and request.url.path.rstrip("/").endswith("/preview"):
+        file_id = request.url.path.rstrip("/").rsplit("/", 2)[-2]
+        if verify_preview_token(file_id, ptk):
+            return {
+                "id": "ptk:preview",
+                "rpm": 600,
+                "daily_quota_bytes": 0,
+                "scopes": "read",
+                "backend": "",
+            }
+
     raw = None
     if authorization and authorization.lower().startswith("bearer "):
         raw = authorization.split(" ", 1)[1].strip()
