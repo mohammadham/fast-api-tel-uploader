@@ -308,6 +308,11 @@
                 :title="'مسیر: ' + f.path">
                 <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ '\u00A0'.repeat(f.path.split('/').length - 1) + f.name }}</span>
                 <span class="muted" style="font-size:11px">{{ f.file_count }}</span>
+                <span style="display:flex;gap:2px">
+                  <a href="#" style="font-size:10px;text-decoration:none" title="تغییر نام" @click.prevent.stop="folderRename(f)">✏️</a>
+                  <a href="#" style="font-size:10px;text-decoration:none" title="انتقال" @click.prevent.stop="folderMoveDlg(f)">📁</a>
+                  <a href="#" style="font-size:10px;text-decoration:none" title="حذف" @click.prevent.stop="folderDelete(f)">🗑</a>
+                </span>
               </div>
               <div v-if="!foldersFlat.length" class="muted" style="font-size:12px;padding:4px 6px">پوشه‌ای نیست</div>
             </div>
@@ -382,14 +387,15 @@
         </div>
         <div class="card wide">
           <table>
-            <thead><tr><th>شناسه</th><th>نوع</th><th>اولویت</th><th>وضعیت</th><th>تلاش</th><th>خطا</th></tr></thead>
+            <thead><tr><th>شناسه</th><th>نوع</th><th>اولویت</th><th>وضعیت</th><th>تلاش</th><th>خطا</th><th>عملیات</th></tr></thead>
             <tbody>
               <tr v-for="j in jobs" :key="j.id">
                 <td dir="ltr"><code>{{ j.id }}</code></td><td>{{ j.kind }}</td><td>{{ j.priority }}</td>
                 <td><span class="badge" :class="j.status">{{ j.status }}</span></td>
                 <td>{{ j.attempts }}</td><td class="muted">{{ j.error }}</td>
+                <td><button v-if="j.status === 'failed'" @click="qRetry(j)">تلاش مجدد</button></td>
               </tr>
-              <tr v-if="!jobs.length"><td colspan="6" class="muted">جابی نیست</td></tr>
+              <tr v-if="!jobs.length"><td colspan="7" class="muted">جابی نیست</td></tr>
             </tbody>
           </table>
         </div>
@@ -991,6 +997,49 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
       }
       showToast("فایل‌های انتخابی بن شدند");
       loaders.files();
+    }
+    async function qRetry(j) {
+      try { await api(`/api/v1/queue/retry/${j.id}`, { method: "POST" }); showToast("جاب دوباره صف شد"); loaders.queue(); }
+      catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    }
+    async function folderRename(f) {
+      const v = prompt("نام جدید پوشه:", f.name);
+      if (!v || v.trim() === f.name) return;
+      try { await api(`/api/v1/folders/${f.id}`, { method: "PATCH", json: { name: v.trim() } }); showToast("نام پوشه تغییر کرد"); loaders.files(); }
+      catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    }
+    async function folderMoveDlg(f) {
+      const v = prompt("مسیر والد جدید (خالی = ریشه):", f.path.split("/").slice(0, -1).join("/"));
+      if (v === null) return;
+      try {
+        let parent_id = null;
+        const p = v.trim().replace(/^\/+/, "");
+        if (p) parent_id = (await api("/api/v1/folders/resolve?path=" + encodeURIComponent(p))).id || (await api("/api/v1/folders", { method: "POST", json: { path: p } })).id;
+        await api(`/api/v1/folders/${f.id}`, { method: "PATCH", json: { parent_id } });
+        showToast("پوشه منتقل شد"); loaders.files();
+      } catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    }
+    async function folderDelete(f) {
+      if (!confirm(`پوشه «${f.path}» حذف شود؟ پوشه‌های تو در تو هم حذف می‌شوند (فایل‌ها سالم می‌مانند).`)) return;
+      try { await api(`/api/v1/folders/${f.id}`, { method: "DELETE" }); showToast("پوشه حذف شد"); if (currentFolderId.value === f.id) openFolder(null); else loaders.files(); }
+      catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    }
+    async function fileLinksDlg(f) {
+      Object.assign(linksDlg, { open: true, fileId: f.id, name: f.name, items: [] });
+      try { const d = await api(`/api/v1/files/${f.id}/links`); linksDlg.items = d.items || []; }
+      catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    }
+    function linkCopy(l) { navigator.clipboard.writeText(location.origin + "/d/" + l.slug + "/dl"); showToast("کپی شد"); }
+    async function linkToggle(l) {
+      await api(`/api/v1/files/${linksDlg.fileId}/links/${l.id}`, { method: "PATCH", json: { disabled: !l.disabled } });
+      l.disabled = !l.disabled;
+      showToast(l.disabled ? "لینک غیرفعال شد" : "لینک فعال شد");
+    }
+    async function linkDelete(l) {
+      if (!confirm("این لینک حذف شود؟")) return;
+      await api(`/api/v1/files/${linksDlg.fileId}/links/${l.id}`, { method: "DELETE" });
+      linksDlg.items = linksDlg.items.filter((x) => x.id !== l.id);
+      showToast("لینک حذف شد");
     }
     const bulkMoveSelectedDlg = reactive({ open: false, path: "", msg: "", busy: false });
     async function bulkMoveSelectedDo() {
