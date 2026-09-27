@@ -507,6 +507,89 @@ test.describe.serial("panel smoke", () => {
       if (k.name?.startsWith("e2e-chat-key")) await proxyCall(page, `/api/v1/keys/${k.id}`, { method: "DELETE" });
     }
   });
+
+  test("trash view: soft-delete hides file, restore brings it back", async ({ page }) => {
+    await login(page);
+
+    // self-heal leftovers from crashed runs (live or trashed)
+    { const { items } = await proxyCall(page, "/api/v1/files?limit=200");
+      for (const f of items.filter((x) => x.name === "e2e-trash.txt")) {
+        await proxyCall(page, `/api/v1/files/${f.id}?purge=true`, { method: "DELETE", allowMissing: true });
+      } }
+
+    await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+    const section = page.locator("main section:visible");
+
+    // upload a dedicated file via API, wait for its row
+    const seeded = await page.evaluate(async () => {
+      const token = localStorage.getItem("td_token");
+      const s = await fetch("/api/v1/files/upload/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: "e2e-trash.txt", size: 5 }),
+      }).then((r) => r.json());
+      await fetch(`/api/v1/files/upload/session/${s.session_id}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "X-Offset": "0", "Content-Type": "application/octet-stream" },
+        body: "hello",
+      });
+      return s;
+    });
+    await section.getByText("همه فایل‌ها").click();
+    await expect(section.locator("tbody tr", { hasText: "e2e-trash.txt" }).first()).toBeVisible();
+
+    // soft-delete via API (the row's own delete button chains two confirms;
+    // the soft-delete behavior itself is covered by pytest)
+    const fid = (await proxyCall(page, "/api/v1/files?limit=200")).items.find((x) => x.name === "e2e-trash.txt").id;
+    await proxyCall(page, `/api/v1/files/${fid}`, { method: "DELETE" });
+    await section.getByText("همه فایل‌ها").click(); // reload the table
+    await expect(section.locator("tbody tr", { hasText: "e2e-trash.txt" })).toHaveCount(0);
+
+    // trash toggle shows it with a restore button
+    await section.getByRole("button", { name: "زباله‌دان" }).click();
+    const trashedRow = section.locator("tbody tr", { hasText: "e2e-trash.txt" }).first();
+    await expect(trashedRow).toBeVisible();
+
+    // restore → back in the main list
+    await trashedRow.getByRole("button", { name: "بازیابی" }).click();
+    await section.getByRole("button", { name: "زباله‌دان" }).click(); // toggle off
+    await expect(section.locator("tbody tr", { hasText: "e2e-trash.txt" }).first()).toBeVisible();
+
+    // cleanup
+    const { items: all } = await proxyCall(page, "/api/v1/files?limit=200");
+    for (const f of all.filter((x) => x.name === "e2e-trash.txt")) {
+      await proxyCall(page, `/api/v1/files/${f.id}?purge=true`, { method: "DELETE", allowMissing: true });
+    }
+  });
+
+  test("account storage-channel edit updates the row", async ({ page }) => {
+    await login(page);
+
+    // seed a fresh account (fake-TG auto-completes login)
+    const { items: prev } = await proxyCall(page, "/api/v1/accounts");
+    for (const a of prev) {
+      if (a.label === "e2e-chan-acc") await proxyCall(page, `/api/v1/accounts/${a.id}`, { method: "DELETE" });
+    }
+    await proxyCall(page, "/api/v1/accounts/login/start", { method: "POST", body: { phone: "+989120000004", label: "e2e-chan-acc" } });
+
+    await page.locator("#tabs button", { hasText: "اکانت‌ها" }).click();
+    const section = page.locator("main section:visible");
+    const row = section.locator("tbody tr", { hasText: "e2e-chan-acc" }).first();
+    await expect(row).toBeVisible();
+
+    // open the channel prompt and set a dedicated channel
+    page.once("dialog", (d) => d.accept("@e2e-acc-chan"));
+    await row.getByRole("button", { name: "کانال", exact: true }).click();
+    await expect(row).toContainText("@e2e-acc-chan");
+
+    // backend round-trip confirms persistence
+    const { items } = await proxyCall(page, "/api/v1/accounts");
+    const acc = items.find((a) => a.label === "e2e-chan-acc");
+    expect(acc.storage_chat_id).toBe("@e2e-acc-chan");
+
+    // cleanup
+    await proxyCall(page, `/api/v1/accounts/${acc.id}`, { method: "DELETE" });
+  });
 });
 
 async function login(page) {
