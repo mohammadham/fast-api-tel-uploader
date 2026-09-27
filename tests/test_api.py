@@ -394,3 +394,44 @@ async def test_queue_retry_failed_job(client, api_key, token):
     await q.jobs.update_fields(job_id, status="failed", error="cleanup")
     await q.jobs.update_fields(live_id, status="failed", error="cleanup")
     await client.post("/api/v1/queue/purge", headers=A)
+
+
+async def test_key_scope_validation(client, token):
+    """Invalid scopes are rejected at creation, not 403 on every later call."""
+    A = {"Authorization": f"Bearer {token}"}
+    r = await client.post("/api/v1/keys", json={"name": "bad-scope", "scopes": "upload,download"}, headers=A)
+    assert r.status_code == 400, r.text
+    assert "invalid scope" in r.json()["detail"]
+
+    r = await client.post("/api/v1/keys", json={"name": "empty-scope", "scopes": " , "}, headers=A)
+    assert r.status_code == 400
+
+    # valid: stored canonical (lowercase, no spaces)
+    r = await client.post("/api/v1/keys", json={"name": "ok-scope", "scopes": " READ , write "}, headers=A)
+    assert r.status_code == 200, r.text
+    assert r.json()["scopes"] == "read,write"
+    kid = (await client.get("/api/v1/keys", headers=A)).json()["items"][-1]["id"]
+    await client.delete(f"/api/v1/keys/{kid}", headers=A)
+
+
+async def test_rate_limit_retry_after_header(client):
+    """429 responses carry Retry-After so clients know when to come back."""
+    H = {"Authorization": "Bearer " + await _mk_low_rpm_key(client)}
+    for _ in range(5):
+        await client.get("/api/v1/files", headers=H)
+    r = await client.get("/api/v1/files", headers=H)
+    assert r.status_code == 429, r.status_code
+    assert int(r.headers["retry-after"]) >= 1
+
+
+async def _mk_low_rpm_key(client) -> str:
+    r = await client.post(
+        "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
+    )
+    tok = r.json()["access_token"]
+    r = await client.post(
+        "/api/v1/keys",
+        json={"name": "rl-key", "scopes": "read", "rpm": 2},
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    return r.json()["key"]

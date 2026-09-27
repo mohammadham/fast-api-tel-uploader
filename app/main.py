@@ -140,7 +140,7 @@ async def _audit_http_exc(request: StarletteRequest, exc: HTTPException):
             pass
     from fastapi.responses import JSONResponse
 
-    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

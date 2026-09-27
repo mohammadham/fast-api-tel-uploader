@@ -13,6 +13,7 @@ class TokenBucket:
     tokens: float = field(init=False)
     updated: float = field(init=False, default_factory=time.monotonic)
     last_seen: float = field(init=False, default_factory=time.monotonic)
+    retry_after: int = field(init=False, default=0)  # seconds until a rejected request could succeed
 
     def __post_init__(self) -> None:
         self.tokens = self.capacity
@@ -24,7 +25,9 @@ class TokenBucket:
         self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_per_sec)
         if self.tokens >= amount:
             self.tokens -= amount
+            self.retry_after = 0.0
             return True
+        self.retry_after = max(1, round((amount - self.tokens) / self.refill_per_sec)) if self.refill_per_sec > 0 else 1
         return False
 
 

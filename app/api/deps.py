@@ -87,12 +87,12 @@ async def get_api_key(
     settings = get_settings()
     # rate limit (token bucket per key; burst = one minute's worth)
     if not await limiter.allow(f"key:{row['id']}", capacity=max(1, row["rpm"]), per_minute=row["rpm"]):
-        raise HTTPException(status_code=429, detail="rate limit exceeded")
+        bucket = limiter._buckets.get(f"key:{row['id']}")
+        raise HTTPException(status_code=429, detail="rate limit exceeded", headers={"Retry-After": str(getattr(bucket, "retry_after", 60) or 60)})
     # daily quota (bytes are added by transfer endpoints after completion)
     quota.reset_if_new_day(f"key:{row['id']}")
     if row["daily_quota_bytes"] and quota.used(f"key:{row['id']}") > row["daily_quota_bytes"]:
-        raise HTTPException(status_code=429, detail="daily quota exceeded")
-
+        raise HTTPException(status_code=429, detail="daily quota exceeded", headers={"Retry-After": "3600"})
     await repo.touch(row["id"])
     return row
 
@@ -156,7 +156,8 @@ async def get_admin_or_key(
             require_scope(row, "read")
             settings = get_settings()
             if not await limiter.allow(f"key:{row['id']}", capacity=max(1, row["rpm"]), per_minute=row["rpm"]):
-                raise HTTPException(status_code=429, detail="rate limit exceeded")
+                bucket = limiter._buckets.get(f"key:{row['id']}")
+                raise HTTPException(status_code=429, detail="rate limit exceeded", headers={"Retry-After": str(getattr(bucket, "retry_after", 60) or 60)})
             await ApiKeyRepo(db).touch(row["id"])
             return {"type": "key", "row": row}
     raise HTTPException(status_code=401, detail="missing or invalid credentials")

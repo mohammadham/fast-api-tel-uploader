@@ -17,6 +17,21 @@ from .deps import get_current_admin
 router = APIRouter(prefix="/api/v1/keys", tags=["keys"])
 
 
+VALID_SCOPES = {"read", "write", "admin"}
+
+
+def _validate_scopes(raw: str) -> str:
+    """Whitelist-check a comma-separated scope list; store canonical form.
+    Without this, a typo'd scope (e.g. 'upload') silently 403s every call later."""
+    parts = [s.strip().lower() for s in (raw or "").split(",") if s.strip()]
+    if not parts:
+        raise HTTPException(status_code=400, detail="scopes required (read, write, admin)")
+    bad = sorted(set(parts) - VALID_SCOPES)
+    if bad:
+        raise HTTPException(status_code=400, detail=f"invalid scope(s): {', '.join(bad)} — valid: read, write, admin")
+    return ",".join(parts)
+
+
 class KeyIn(BaseModel):
     name: str
     scopes: str = "read,write"
@@ -70,7 +85,7 @@ async def create_key(body: KeyIn, admin: str = Depends(get_current_admin), db=De
     info = await ApiKeyRepo(db).create(
         name=body.name.strip() or "unnamed",
         raw_key=raw,
-        scopes=body.scopes,
+        scopes=_validate_scopes(body.scopes),
         rpm=body.rpm or dflt_rpm,
         daily_quota_bytes=int((body.daily_quota_gb or 0) * (1024**3)) or dflt_quota,
         expires_at=expires_at,
@@ -109,7 +124,7 @@ async def update_key(key_id: int, body: KeyPatch, admin: str = Depends(get_curre
         key_id,
         rpm=body.rpm,
         daily_quota_bytes=int(body.daily_quota_gb * (1024**3)) if body.daily_quota_gb is not None else None,
-        scopes=body.scopes,
+        scopes=_validate_scopes(body.scopes) if body.scopes is not None else None,
         backend=backend,
         storage_chat=_validate_storage_chat(db, body.storage_chat) if body.storage_chat is not None else None,
     )
