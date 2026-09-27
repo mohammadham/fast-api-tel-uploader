@@ -260,8 +260,9 @@
           <label for="select-all-files" class="muted" style="font-size:12px;cursor:pointer">انتخاب همه {{ files.length }}</label>
           <span v-if="selectedFiles.size > 0" class="muted" style="font-size:12px;color:var(--ok)">{{ selectedFiles.size }} فایل انتخاب شده</span>
         </div>
-        <div v-else style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
-          <input v-model="filesQuery" dir="auto" placeholder="جستجوی نام فایل..." style="max-width:220px;padding:5px 10px;font-size:13px" @input="filesSearch">
+        <div v-else style="margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <input v-if="currentFolderId !== null" v-model="folderQuery" dir="auto" placeholder="جستجو در این پوشه..." style="max-width:220px;padding:5px 10px;font-size:13px" @input="folderSearch">
+          <input v-else v-model="filesQuery" dir="auto" placeholder="جستجوی نام فایل..." style="max-width:220px;padding:5px 10px;font-size:13px" @input="filesSearch">
           <select v-model="filesMime" style="padding:5px 8px;font-size:13px" @change="loaders.files()">
             <option value="">همه انواع</option>
             <option value="image/">تصویر</option>
@@ -287,30 +288,10 @@
           <input ref="fileInput" type="file" style="display:none" @change="upload">
         </div>
         <div v-if="bulkMode" style="margin-bottom:10px;display:flex;gap:8px;align-items:center">
-          <button class="ghost" @click="bulkMode = false; selectedFiles.clear(); selectAllFiles.value = false" style="padding:5px 10px;font-size:12px">انصراف از حالت گروهی</button>
+          <button class="ghost" @click="bulkMode = false; selectedFiles.value.clear(); selectAllFiles = false" style="padding:5px 10px;font-size:12px">انصراف از حالت گروهی</button>
           <button class="danger" @click="bulkDeleteSelected" style="padding:5px 10px;font-size:12px;background:var(--err);color:#fff">حذف گروهی ({{ selectedFiles.size }})</button>
           <button class="ghost" @click="bulkBlockSelected" style="padding:5px 10px;font-size:12px">بن گروهی ({{ selectedFiles.size }})</button>
           <button class="ghost" @click="bulkMoveSelectedDlg.open = true" style="padding:5px 10px;font-size:12px">انتصال گروهی به پوشه...</button>
-        </div>
-        <div v-else style="margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <input v-model="filesQuery" dir="auto" placeholder="جستجوی نام فایل..." style="max-width:220px;padding:5px 10px;font-size:13px" @input="filesSearch">
-          <select v-model="filesMime" style="padding:5px 8px;font-size:13px" @change="loaders.files()">
-            <option value="">همه انواع</option>
-            <option value="image/">تصویر</option>
-            <option value="video/">ویدیو</option>
-            <option value="audio/">صوت</option>
-            <option value="text/">متن/کد</option>
-            <option value="application/pdf">PDF</option>
-            <option value="application/zip">آرشیو</option>
-          </select>
-          <select v-model="filesOrder" style="padding:5px 8px;font-size:13px" @change="loaders.files()">
-            <option value="date">جدیدترین</option>
-            <option value="name">نام</option>
-            <option value="size">حجم</option>
-            <option value="downloads">بیشترین دانلود</option>
-          </select>
-          <button class="ghost" :style="filesBlockedOnly ? 'border-color:var(--err);color:var(--err)' : ''" style="padding:5px 10px;font-size:12px" @click="filesBlockedOnly = !filesBlockedOnly; loaders.files()">فقط بن‌شده‌ها</button>
-          <span class="muted" style="font-size:12px">{{ filesTotal }} فایل</span>
         </div>
         <div style="display:flex;gap:14px;align-items:flex-start">
           <div class="card" style="width:230px;flex-shrink:0;padding:10px 12px">
@@ -336,11 +317,6 @@
               <span dir="ltr">{{ currentFolderId === null ? '/' : (currentFolderPath || '/') }}</span>
               <input v-model="filesFolderDraft" dir="ltr" placeholder="پوشه برای آپلود (مثل projects/2026)" style="font-size:12px;padding:3px 8px;width:230px">
             </div>
-            <div v-if="currentFolderId.value !== null" class="muted" style="font-size:11px; margin-top:4px">
-              <span dir="ltr">جستجو: </span>
-              <input v-model="folderQuery" dir="ltr" placeholder="بحث" style="font-size:11px;padding:2px 6px;">
-            </div>
-        </div>
         <p v-if="uploadProgress" class="muted">
           {{ uploadProgress }} — {{ uploadPct }}%
           <span v-if="uploadSpeed > 0" class="muted" style="margin-left:12px">~{{ uploadSpeed }} MB/s</span>
@@ -434,13 +410,11 @@
             </tbody>
           </table>
         </div>
-      </div>
-        </div>
-        <div v-if="blockedFilesTotal.value > 0" class="card wide" style="margin-bottom:14px">
+        <div v-if="blockedFilesTotal > 0" class="card wide" style="margin-bottom:14px">
           <h3 style="font-size:15px;margin:0 0 10px">گزارش فایل‌های بن‌شده</h3>
-          <p class="muted" style="font-size:12px;margin:0 0 8px">کل {{ blockedFilesTotal.value }} فایل</p>
+          <p class="muted" style="font-size:12px;margin:0 0 8px">کل {{ blockedFilesTotal }} فایل</p>
           <table>
-            <thead><tr><th>زمان</th><th>فایل</th><th>عملateur</th><th>عملیات</th><th>IP</th></tr></thead>
+            <thead><tr><th>زمان</th><th>فایل</th><th>آپلودکننده</th><th>عملیات</th><th>IP</th></tr></thead>
             <tbody>
               <tr v-for="(f, i) in blockedFilesReport" :key="i">
                 <td class="muted">{{ fmtTime(f.timestamp) }}</td>
@@ -689,6 +663,16 @@
       <button class="ghost" style="width:100%" @click="moveDlg.open = false">انصراف</button>
     </dialog>
 
+    <dialog :open="bulkMoveSelectedDlg.open" @close="bulkMoveSelectedDlg.open = false">
+      <h3>انتقال گروهی به پوشه</h3>
+      <p class="muted" style="font-size:12px">{{ selectedFiles.size }} فایل انتخاب شده</p>
+      <div class="field"><label>مسیر پوشه مقصد (خالی = بدون پوشه)</label>
+        <input v-model="bulkMoveSelectedDlg.path" dir="ltr" placeholder="projects/2026"></div>
+      <button class="primary" style="width:100%" :disabled="bulkMoveSelectedDlg.busy" @click="bulkMoveSelectedDo">انتقال گروهی</button>
+      <p class="err">{{ bulkMoveSelectedDlg.msg }}</p>
+      <button class="ghost" style="width:100%" @click="bulkMoveSelectedDlg.open = false">انصراف</button>
+    </dialog>
+
     <dialog :open="keyDlg.open" @close="keyDlg.open = false">
       <h3>ایجاد کلید API</h3>
       <div class="field"><label>نام</label><input v-model="keyDlg.name" type="text"></div>
@@ -906,8 +890,6 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
     const filesTotal = ref(0);
     const filesLimit = ref(50);
     const filesOffset = ref(0);
-    const channelFilter = ref("");
-    const channelFilterIsDefault = ref(false);
     const filesInChannelTotal = ref(0);
     const filesInChannelBytes = ref(0);
     const filesInChannelByType = ref([]);
@@ -916,11 +898,9 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
     let searchTimer = null;
     const blockedFilesReport = ref([]);
     const blockedFilesTotal = ref(0);
-    const selectedFiles = ref(new Set<string>());
+    const selectedFiles = ref(new Set());
     const selectAllFiles = ref(false);
     const bulkMode = ref(false);
-    const linksDlg = reactive({ open: false, fileId: "", name: "", items: [] });
-    let searchTimer = null;
     function filesSearch() {
       clearTimeout(searchTimer);
       searchTimer = setTimeout(() => { filesOffset.value = 0; loaders.files(); }, 300);
@@ -969,7 +949,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
       loaders.files();
     }
     async function toggleSelectFile(fileId) {
-      if (selectedFiles.has(fileId)) {
+      if (selectedFiles.value.has(fileId)) {
         selectedFiles.value.delete(fileId);
       } else {
         selectedFiles.value.add(fileId);
@@ -977,45 +957,56 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
       updateSelectAll();
     }
     function updateSelectAll() {
-      const allSelected = files.value.length > 0 && selectedFiles.size === files.value.length;
+      const allSelected = files.value.length > 0 && selectedFiles.value.size === files.value.length;
       selectAllFiles.value = allSelected;
     }
     async function toggleSelectAll() {
       if (selectAllFiles.value) {
         selectedFiles.value = new Set(files.value.map((f) => f.id));
       } else {
-        selectedFiles.clear();
+        selectedFiles.value.clear();
       }
       updateSelectAll();
     }
     async function bulkDeleteSelected() {
-      if (selectedFiles.size === 0) return;
-      if (!confirm(`تایید حذف ${selectedFiles.size} فایل انتخاب شده؟`)) return;
+      if (selectedFiles.value.size === 0) return;
+      if (!confirm(`تایید حذف ${selectedFiles.value.size} فایل انتخاب شده؟`)) return;
       for (const fileId of selectedFiles.value) {
         await api(`/api/v1/files/${fileId}`, { method: "DELETE" });
       }
-      selectedFiles.clear();
+      selectedFiles.value.clear();
       selectAllFiles.value = false;
       showToast("فایل‌های انتخابی حذف شدند");
       loaders.files();
     }
     async function bulkBlockSelected() {
-      if (selectedFiles.size === 0) return;
-      if (!confirm(`تایید بن ${selectedFiles.size} فایل انتخاب شده؟`)) return;
+      if (selectedFiles.value.size === 0) return;
+      if (!confirm(`تایید بن ${selectedFiles.value.size} فایل انتخاب شده؟`)) return;
       for (const fileId of selectedFiles.value) {
         await api(`/api/v1/files/${fileId}/block`, { method: "PATCH", json: { blocked: true } });
       }
       showToast("فایل‌های انتخابی بن شدند");
       loaders.files();
     }
-    async function bulkMoveSelectedDlgOpen() {
-      const file = files.value.find((f) => selectedFiles.has(f.id));
-      if (file) {
-        moveDlg.fileId = file.id;
-        moveDlg.fileName = file.name;
-        moveDlg.path = "";
-        moveDlg.open = true;
-      }
+    const bulkMoveSelectedDlg = reactive({ open: false, path: "", msg: "", busy: false });
+    async function bulkMoveSelectedDo() {
+      bulkMoveSelectedDlg.msg = "";
+      if (selectedFiles.value.size === 0) { bulkMoveSelectedDlg.open = false; return; }
+      bulkMoveSelectedDlg.busy = true;
+      try {
+        const path = bulkMoveSelectedDlg.path.trim().replace(/^\/+/, "");
+        let target = null;
+        if (path) {
+          const r = await api("/api/v1/folders/resolve?path=" + encodeURIComponent(path));
+          target = r.id || (await api("/api/v1/folders", { method: "POST", json: { path } })).id;
+        }
+        const r = await api(`/api/v1/folders/${target ?? "0"}/files`, { method: "POST", json: { file_ids: [...selectedFiles.value], target_folder_id: target } });
+        showToast(`${r.moved?.length ?? 0} فایل منتقل شد` + (r.failed?.length ? `، ${r.failed.length} ناموفق` : ""), 4000, !!r.failed?.length);
+        bulkMoveSelectedDlg.open = false; bulkMoveSelectedDlg.path = "";
+        selectedFiles.value.clear(); selectAllFiles.value = false;
+        loaders.files();
+      } catch (e) { bulkMoveSelectedDlg.msg = e.message; }
+      finally { bulkMoveSelectedDlg.busy = false; }
     }
     const folderDlg = reactive({ open: false, path: "", msg: "" });
     const moveDlg = reactive({ open: false, fileId: "", fileName: "", path: "", msg: "" });

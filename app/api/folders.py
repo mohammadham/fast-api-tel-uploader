@@ -206,9 +206,10 @@ async def _list_folder_files(
     db: Database,
     folder_id: int,
     include_subfolders: bool,
-    limit: int,
-    offset: int,
+    limit: int, offset: int,
     q: str = "",
+    mime_prefix: str = "",
+    order: str = "date",
     principal: dict = None,
 ) -> dict:
     repo = FolderRepo(db)
@@ -219,15 +220,21 @@ async def _list_folder_files(
         params = [f"%{q}%"]
     else:
         params = []
+    kw = dict(q=q, mime_prefix=mime_prefix, order=order if order in ("date", "size", "downloads", "name") else "date")
     files = await FileRepo(db).list(
         limit=min(max(limit, 1), 500), offset=max(offset, 0),
         folder_id=folder_id, include_subfolders=include_subfolders,
-        q=q,
+        **kw,
+    )
+    total = await FileRepo(db).count(
+        folder_id=folder_id, include_subfolders=include_subfolders,
+        q=q, mime_prefix=mime_prefix,
     )
     return {
         "folder": {"id": row["id"], "name": row["name"], "parent_id": row["parent_id"], "path": await repo.path_of(folder_id)},
         "include_subfolders": include_subfolders,
         "count": len(files),
+        "total": total,
         "items": files,
         "q": q,
     }
@@ -239,11 +246,13 @@ async def folder_files(
     limit: int = 50,
     offset: int = 0,
     q: str = "",
+    mime: str = "",
+    order: str = "date",
     principal=Depends(get_admin_or_key),
     db: Database = Depends(get_db),
 ):
     # get_admin_or_key already enforced read scope for API keys
-    return await _list_folder_files(db, folder_id, False, limit, offset, q, principal)
+    return await _list_folder_files(db, folder_id, False, limit, offset, q=q, mime_prefix=mime, order=order, principal=principal)
 
 
 @router.get("/{folder_id}/all")
@@ -252,12 +261,14 @@ async def folder_files_recursive(
     limit: int = 50,
     offset: int = 0,
     q: str = "",
+    mime: str = "",
+    order: str = "date",
     principal=Depends(get_admin_or_key),
     db: Database = Depends(get_db),
 ):
     """Files in this folder and every nested subfolder (recursive CTE)."""
     # get_admin_or_key already enforced read scope for API keys
-    return await _list_folder_files(db, folder_id, True, limit, offset, q, principal)
+    return await _list_folder_files(db, folder_id, True, limit, offset, q=q, mime_prefix=mime, order=order, principal=principal)
 
 
 class FileMoveIn(BaseModel):
@@ -284,20 +295,28 @@ async def move_file_into_folder(
     return {"ok": True, "file_id": file_id, "folder_id": folder_id}
 
 
-@router.post("{folder_id}/files", status_code=200)
+@router.post("/{folder_id}/files", status_code=200)
 async def batch_move_files(
     folder_id: int,
     body: FileMoveIn,
     principal=Depends(get_admin_or_key),
     db: Database = Depends(get_db),
 ):
+    """Batch move files. folder_id=0 means root (detach from any folder)
+    unless an explicit target_folder_id is given."""
     _write_guard(principal)
     repo = FolderRepo(db)
-    await _folder_or_404(repo, int(folder_id))
+    if folder_id != 0:
+        await _folder_or_404(repo, int(folder_id))
+    if body.target_folder_id is not None and int(body.target_folder_id) != 0:
+        await _folder_or_404(repo, int(body.target_folder_id))
     if not body.file_ids:
         raise HTTPException(status_code=400, detail="file_ids required")
+    # resolve destination: explicit target wins, else the path folder (0 = root/None)
     if body.target_folder_id is not None:
-        await _folder_or_404(repo, int(body.target_folder_id))
+        target: Optional[int] = None if int(body.target_folder_id) == 0 else int(body.target_folder_id)
+    else:
+        target = None if folder_id == 0 else folder_id
     moved: list = []
     failed: list = []
     for file_id in body.file_ids:
@@ -306,14 +325,9 @@ async def batch_move_files(
         if not rec:
             failed.append({"file_id": file_id, "reason": "not found"})
             continue
-        if body.target_folder_id is not None:
-            if rec["folder_id"] == int(body.target_folder_id):
-                failed.append({"file_id": file_id, "reason": "already in target folder"})
-                continue
-            if _would_cycle(repo, await repo.list(), int(folder_id), int(body.target_folder_id)):
-                failed.append({"file_id": file_id, "reason": "would create cycle"})
-                continue
-        target = int(folder_id) if body.target_folder_id is None else int(body.target_folder_id)
+        if target is not None and rec["folder_id"] == target:
+            failed.append({"file_id": file_id, "reason": "already in target folder"})
+            continue
         await frepo.set_folder(file_id, target)
         await db.audit(_actor(principal), "folder.file_move", target=file_id, details=f"from={rec.get('folder_id')} to={target}")
         moved.append(file_id)

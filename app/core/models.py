@@ -506,7 +506,6 @@ class FileRepo:
         else:
             order_sql = " ORDER BY created_at DESC"
         if folder_id is not None:
-            params.append(folder_id)
             if include_subfolders:
                 # recursive CTE keeps this single-query and index friendly
                 prefix = (
@@ -515,7 +514,13 @@ class FileRepo:
                     " UNION ALL SELECT f.id FROM folders f JOIN folder_tree t ON f.parent_id=t.id) "
                 )
                 conds.append("folder_id IN (SELECT id FROM folder_tree)")
+                # the CTE's ? appears in the SQL prefix, BEFORE every WHERE
+                # placeholder — folder_id must be the first bound param, not
+                # appended after q/mime (parameter-order bug: with q or mime
+                # set the recursive listing silently matched the wrong rows)
+                params.insert(0, folder_id)
             else:
+                params.append(folder_id)
                 conds.append("folder_id=?")
         if storage_chat is not None:
             params.append(storage_chat)
@@ -553,7 +558,6 @@ class FileRepo:
         if blocked_only:
             conds.append("blocked=1")
         if folder_id is not None:
-            params.append(folder_id)
             if include_subfolders:
                 prefix = (
                     "WITH folder_tree(id) AS ("
@@ -561,7 +565,9 @@ class FileRepo:
                     " UNION ALL SELECT f.id FROM folders f JOIN folder_tree t ON f.parent_id=t.id) "
                 )
                 conds.append("folder_id IN (SELECT id FROM folder_tree)")
+                params.insert(0, folder_id)
             else:
+                params.append(folder_id)
                 conds.append("folder_id=?")
         if storage_chat is not None:
             params.append(storage_chat)

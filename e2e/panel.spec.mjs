@@ -138,6 +138,15 @@ test.describe.serial("panel smoke", () => {
 
     // real progress bar element exists with aria
     await expect(page.locator(".progress-track")).toHaveCount(0); // hidden after finish
+
+    // leave no residue for the storage-channels assertions later in the suite
+    await page.evaluate(async () => {
+      const token = localStorage.getItem("td_token");
+      const { items } = await fetch("/api/v1/files?limit=200", { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
+      for (const f of items.filter((x) => x.name === "e2e-smoke.txt")) {
+        await fetch(`/api/v1/files/${f.id}?purge=true`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+      }
+    });
   });
 
   test("storage channels card lists dedicated channel with per-type stats", async ({ page }) => {
@@ -150,9 +159,12 @@ test.describe.serial("panel smoke", () => {
         await proxyCall(page, `/api/v1/keys/${k.id}`, { method: "DELETE" });
       }
     }
-    const { items: existingFiles } = await proxyCall(page, "/api/v1/files");
+    const { items: existingFiles } = await proxyCall(page, "/api/v1/files", { });
     for (const f of existingFiles) {
-      if (f.name === "e2e-chan.png") await proxyCall(page, `/api/v1/files/${f.id}?purge=true`, { method: "DELETE" });
+      // purge our leftovers (incl. files a crashed per-key test left behind)
+      if (["e2e-chan.png", "e2e-channel-file.txt", "e2e-smoke.txt"].includes(f.name)) {
+        await proxyCall(page, `/api/v1/files/${f.id}?purge=true`, { method: "DELETE", allowMissing: true });
+      }
     }
     const { items: existingAccs } = await proxyCall(page, "/api/v1/accounts");
     for (const a of existingAccs) {
@@ -244,6 +256,28 @@ test.describe.serial("panel smoke", () => {
     expect(paths).toContain("e2e-nested");
     expect(paths).toContain("e2e-nested/child");
 
+    // seed a file to move (this test must not rely on leftovers from earlier tests)
+    const seeded = await page.evaluate(async () => {
+      const token = localStorage.getItem("td_token");
+      const s = await fetch("/api/v1/files/upload/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: "e2e-folder-move.txt", size: 5 }),
+      }).then((r) => r.json());
+      const done = await fetch(`/api/v1/files/upload/session/${s.session_id}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "X-Offset": "0", "Content-Type": "application/octet-stream" },
+        body: "hello",
+      }).then((r) => r.json());
+      return done;
+    });
+    expect(seeded.completed).toBeTruthy();
+
+    // refresh the files table so the seeded row is visible in the UI
+    await section.getByText("همه فایل‌ها").click();
+    const seededRow = section.locator("tbody tr", { hasText: "e2e-folder-move.txt" }).first();
+    await expect(seededRow).toBeVisible();
+
     // move the first listed file into the folder via its row button
     const firstRow = section.locator("tbody tr").first();
     await firstRow.getByRole("button", { name: "پوشه" }).click();
@@ -261,7 +295,8 @@ test.describe.serial("panel smoke", () => {
     await section.getByText("e2e-nested").click();
     await expect(section.locator("span", { hasText: "/e2e-nested" })).toBeVisible();
 
-    // cleanup (detach files first so folder delete is clean)
+    // cleanup (purge the seeded file, detach leftovers, delete folders)
+    await proxyCall(page, `/api/v1/files/${seeded.file_id}?purge=true`, { method: "DELETE", allowMissing: true });
     const childId = (await proxyCall(page, "/api/v1/folders/resolve?path=e2e-nested/child")).id;
     const { items: insideFiles } = await proxyCall(page, `/api/v1/folders/${childId}/all`);
     for (const f of insideFiles || []) {
@@ -464,6 +499,13 @@ test.describe.serial("panel smoke", () => {
     const channelCard = page.locator(".card", { hasText: "کانال‌های ذخیره‌سازی" });
     await expect(channelCard).toBeVisible();
     await expect(channelCard).toContainText("@e2e-channel-store");
+
+    // leave no residue: the dedicated-channel file must not leak into later runs
+    await proxyCall(page, `/api/v1/files/${upload.file_id}?purge=true`, { method: "DELETE", allowMissing: true });
+    const { items: keysNow } = await proxyCall(page, "/api/v1/keys");
+    for (const k of keysNow) {
+      if (k.name?.startsWith("e2e-chat-key")) await proxyCall(page, `/api/v1/keys/${k.id}`, { method: "DELETE" });
+    }
   });
 });
 

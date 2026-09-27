@@ -259,3 +259,86 @@ async def test_folder_caption_reaches_telegram_backend(client, admin_headers):
         assert FakeBackend.CAPTIONS[res["message_id"]] == caption
     finally:
         os.unlink(p)
+
+
+async def test_folder_recursive_search_and_total(client, admin_headers):
+    """Regression (A2): recursive folder listing with q/mime must bind the CTE
+    folder id correctly (parameter-order bug made q+mime listings match wrong
+    rows) and report a page-independent total for pagination."""
+    from app.core.state import get_db as gdb
+
+    db = await gdb()
+    r = await client.post("/api/v1/folders", json={"path": "regress/parent"}, headers=admin_headers)
+    parent = r.json()["id"]
+    r = await client.post("/api/v1/folders", json={"path": "regress/parent/child"}, headers=admin_headers)
+    child = r.json()["id"]
+
+    for fid, fname, folder in (
+        ("rg-1", "alpha-report.txt", parent),
+        ("rg-2", "alpha-notes.txt", child),
+        ("rg-3", "beta.bin", child),
+        ("rg-4", "outside.txt", None),
+    ):
+        await db.execute(
+            "INSERT INTO files(id, name, size, mime, uploader, source, backend, status, folder_id, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (fid, fname, 10, "text/plain" if fname.endswith("txt") else "application/octet-stream", "t", "api", "telegram", "ready", folder, 1.0),
+        )
+
+    # recursive + q: only subtree rows whose name matches
+    d = (await client.get(f"/api/v1/folders/{parent}/all", params={"q": "alpha"}, headers=admin_headers)).json()
+    assert {i["id"] for i in d["items"]} == {"rg-1", "rg-2"}, d
+    assert d["total"] == 2 and d["count"] == 2
+
+    # recursive + mime: same parameter-order safety on another filter
+    d = (await client.get(f"/api/v1/folders/{parent}/all", params={"mime": "text/"}, headers=admin_headers)).json()
+    assert {i["id"] for i in d["items"]} == {"rg-1", "rg-2"}
+    assert d["total"] == 2
+
+    # recursive without filters: total covers the whole subtree, not just the page
+    d = (await client.get(f"/api/v1/folders/{parent}/all", params={"limit": 1}, headers=admin_headers)).json()
+    assert len(d["items"]) == 1 and d["total"] == 3
+
+    # plain (non-recursive) listing with q still works
+    d = (await client.get(f"/api/v1/folders/{child}/files", params={"q": "beta"}, headers=admin_headers)).json()
+    assert [i["id"] for i in d["items"]] == ["rg-3"] and d["total"] == 1
+
+    await db.execute("DELETE FROM files WHERE id LIKE 'rg-%'")
+
+
+async def test_batch_move_files_endpoint(client, admin_headers):
+    """POST /folders/{id}/files batch-moves files; folder_id=0 detaches to root."""
+    from app.core.state import get_db as gdb
+
+    db = await gdb()
+    r = await client.post("/api/v1/folders", json={"path": "batch/target"}, headers=admin_headers)
+    target = r.json()["id"]
+
+    for fid in ("bm-1", "bm-2"):
+        await db.execute(
+            "INSERT INTO files(id, name, size, mime, uploader, source, backend, status, folder_id, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (fid, f"{fid}.bin", 5, "application/octet-stream", "t", "api", "telegram", "ready", None, 1.0),
+        )
+
+    # move two files into target in one call; missing ids are reported, not fatal
+    r = await client.post(f"/api/v1/folders/{target}/files", json={"file_ids": ["bm-1", "bm-2", "missing"]}, headers=admin_headers)
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert sorted(d["moved"]) == ["bm-1", "bm-2"]
+    assert d["failed"] == [{"file_id": "missing", "reason": "not found"}]
+
+    d = (await client.get(f"/api/v1/folders/{target}/all", headers=admin_headers)).json()
+    assert {i["id"] for i in d["items"]} == {"bm-1", "bm-2"}
+
+    # explicit target_folder_id=0 (or path folder 0) detaches back to root
+    r = await client.post("/api/v1/folders/0/files", json={"file_ids": ["bm-1"], "target_folder_id": 0}, headers=admin_headers)
+    assert r.status_code == 200 and r.json()["moved"] == ["bm-1"]
+    rec = await db.fetch_one("SELECT folder_id FROM files WHERE id='bm-1'")
+    assert rec["folder_id"] is None
+
+    # empty file_ids → 400
+    r = await client.post(f"/api/v1/folders/{target}/files", json={"file_ids": []}, headers=admin_headers)
+    assert r.status_code == 400
+
+    await db.execute("DELETE FROM files WHERE id LIKE 'bm-%'")
