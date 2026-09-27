@@ -283,12 +283,6 @@
           <button class="ghost" :style="filesTrashed ? 'border-color:var(--warn);color:var(--warn)' : ''" style="padding:5px 10px;font-size:12px" @click="filesTrashed = !filesTrashed; filesOffset = 0; loaders.files()">🗑 زباله‌دان</button>
           <span class="muted" style="font-size:12px">{{ filesTotal }} فایل</span>
         </div>
-        <div v-if="!bulkMode" style="margin-bottom:10px;display:flex;gap:8px;align-items:center">
-          <button class="primary" :disabled="uploadBusy" @click="$refs.fileInput.click()">
-            {{ uploadBusy ? "در حال آپلود..." : "آپلود جدید" }}
-          </button>
-          <input ref="fileInput" type="file" style="display:none" @change="upload">
-        </div>
         <div v-if="bulkMode" style="margin-bottom:10px;display:flex;gap:8px;align-items:center">
           <button class="ghost" @click="bulkMode = false; selectedFiles.value.clear(); selectAllFiles = false" style="padding:5px 10px;font-size:12px">انصراف از حالت گروهی</button>
           <button class="danger" @click="bulkDeleteSelected" style="padding:5px 10px;font-size:12px;background:var(--err);color:#fff">حذف گروهی ({{ selectedFiles.size }})</button>

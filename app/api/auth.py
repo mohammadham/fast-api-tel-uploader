@@ -28,7 +28,8 @@ async def login(body: LoginIn, request: Request, db=Depends(get_db)):
     ip = await get_client_ip(request)
     # brute-force guard: 10 login attempts / minute / ip
     if not await limiter.allow(f"login:{ip}", capacity=10, per_minute=10):
-        raise HTTPException(status_code=429, detail="too many login attempts")
+        bucket = limiter._buckets.get(f"login:{ip}")
+        raise HTTPException(status_code=429, detail="too many login attempts", headers={"Retry-After": str(getattr(bucket, "retry_after", 60) or 60)})
     row = await UserRepo(db).get(body.username.strip())
     if not row or not verify_password(body.password, row["password_hash"]):
         await db.audit(
