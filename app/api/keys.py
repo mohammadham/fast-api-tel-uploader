@@ -65,6 +65,8 @@ async def create_key(body: KeyIn, admin: str = Depends(get_current_admin), db=De
     if backend not in ("", "telegram", "eitaa"):
         raise HTTPException(status_code=400, detail="backend must be '', 'telegram' or 'eitaa'")
     storage_chat = _validate_storage_chat(db, body.storage_chat)
+    from .admin import _invalidate_storage_channels_cache
+    _invalidate_storage_channels_cache()
     info = await ApiKeyRepo(db).create(
         name=body.name.strip() or "unnamed",
         raw_key=raw,
@@ -84,6 +86,8 @@ async def revoke_key(key_id: int, admin: str = Depends(get_current_admin), db=De
     n = await ApiKeyRepo(db).revoke(key_id)
     if not n:
         raise HTTPException(status_code=404, detail="key not found")
+    from .admin import _invalidate_storage_channels_cache
+    _invalidate_storage_channels_cache()
     await db.audit(admin, "apikey.revoke", target=str(key_id))
     return {"ok": True}
 
@@ -109,4 +113,6 @@ async def update_key(key_id: int, body: KeyPatch, admin: str = Depends(get_curre
         backend=backend,
         storage_chat=_validate_storage_chat(db, body.storage_chat) if body.storage_chat is not None else None,
     )
+    from .admin import _invalidate_storage_channels_cache
+    _invalidate_storage_channels_cache()
     return {"ok": True}

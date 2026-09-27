@@ -1,4 +1,4 @@
-// Smoke: login -> dashboard -> tabs -> upload via UI -> queue可见.
+// Smoke: login -> dashboard -> tabs -> upload via UI -> queue видит.
 // Runs against the real FastAPI backend in fake-TG mode (see playwright.config.mjs).
 import { test, expect } from "@playwright/test";
 
@@ -159,7 +159,7 @@ test.describe.serial("panel smoke", () => {
       if (a.label === "e2e-acc") await proxyCall(page, `/api/v1/accounts/${a.id}`, { method: "DELETE" });
     }
 
-    // fake-TG mode auto-completes the login → a ready backend for the queue
+    // fake-TG mode auto-completes the login -> a ready backend for the queue
     await proxyCall(page, "/api/v1/accounts/login/start", {
       method: "POST",
       body: { phone: "+989120000001", label: "e2e-acc" },
@@ -257,7 +257,7 @@ test.describe.serial("panel smoke", () => {
     const child = flat2.find((f) => f.path === "e2e-nested/child");
     expect(child.file_count).toBeGreaterThanOrEqual(1);
 
-    // click the folder → its path shows in the breadcrumb
+    // click the folder -> its path shows in the breadcrumb
     await section.getByText("e2e-nested").click();
     await expect(section.locator("span", { hasText: "/e2e-nested" })).toBeVisible();
 
@@ -311,7 +311,7 @@ test.describe.serial("panel smoke", () => {
     expect(row?.status).toBe("ready");
 
     try {
-      // channels card → click the channel name → files tab opens filtered
+      // channels card -> click the channel name -> files tab opens filtered
       await page.locator("#tabs button", { hasText: "تنظیمات" }).click();
       await page.locator("button", { hasText: "بارگذاری/به‌روزرسانی" }).click();
       const card = page.locator(".card", { hasText: "کانال‌های ذخیره‌سازی" });
@@ -377,7 +377,7 @@ test.describe.serial("panel smoke", () => {
       const dlg = page.locator("dialog:visible");
       await expect(dlg.locator("img")).toBeVisible();
       await dlg.getByRole("button", { name: "بستن" }).click();
-      // block → badge appears + unblock clears it (auto-accept the confirm)
+      // block -> badge appears + unblock clears it (auto-accept the confirm)
       page.on("dialog", (d) => d.accept());
       await section.getByRole("button", { name: "بن", exact: true }).first().click();
       await expect(section.locator(".tag", { hasText: "بن" }).first()).toBeVisible();
@@ -401,6 +401,69 @@ test.describe.serial("panel smoke", () => {
     await page.getByRole("button", { name: "خروج" }).click();
     await expect(page.locator("#lg-user")).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem("td_token"))).toBeNull();
+  });
+
+  test("per-key storage chat: create key with channel, upload file, verify channel display", async ({ page }) => {
+    await login(page);
+
+    // 0. Seed a fresh fake account so the queue has a backend in this test too
+    const { items: prevAccs } = await proxyCall(page, "/api/v1/accounts");
+    for (const a of prevAccs) {
+      if (a.label === "e2e-chat-acc") await proxyCall(page, `/api/v1/accounts/${a.id}`, { method: "DELETE" });
+    }
+    await proxyCall(page, "/api/v1/accounts/login/start", { method: "POST", body: { phone: "+989120000003", label: "e2e-chat-acc" } });
+
+    // 1. Create a new API key with a storage channel via API
+    const { items: existingKeys } = await proxyCall(page, "/api/v1/keys");
+    for (const k of existingKeys) {
+      if (k.name?.startsWith("e2e-chat-key")) await proxyCall(page, `/api/v1/keys/${k.id}`, { method: "DELETE" });
+    }
+
+    const newKey = await proxyCall(page, "/api/v1/keys", {
+      method: "POST",
+      body: { name: "e2e-chat-key", scopes: "read,write", storage_chat: "@e2e-channel-store" },
+    });
+
+    // 2. Upload a file using this key with the storage channel
+    const upload = await page.evaluate(async (raw) => {
+      const s = await fetch("/api/v1/files/upload/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": raw },
+        body: JSON.stringify({ name: "e2e-channel-file.txt", size: 5 }),
+      }).then((r) => r.json());
+      const done = await fetch(`/api/v1/files/upload/session/${s.session_id}`, {
+        method: "PATCH",
+        headers: { "X-API-Key": raw, "X-Offset": "0", "Content-Type": "application/octet-stream" },
+        body: "hello",
+      }).then((r) => r.json());
+      return done;
+    }, newKey.key);
+    expect(upload.completed).toBeTruthy();
+
+    // Wait for the file to become ready (fake-TG queue drains fast, but poll generously)
+    let fileRow = null;
+    for (let i = 0; i < 80; i++) {
+      const { items } = await proxyCall(page, "/api/v1/files?limit=200");
+      fileRow = items.find((f) => f.id === upload.file_id);
+      if (fileRow && fileRow.status === "ready") break;
+      await page.waitForTimeout(500);
+    }
+    expect(fileRow?.status).toBe("ready");
+
+    // 3. Navigate to files tab and verify the file row shows the dedicated channel
+    await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+    const section = page.locator("main section:visible");
+    const row = section.locator("tbody tr", { hasText: "e2e-channel-file.txt" }).first();
+    await expect(row).toBeVisible();
+    // storage_chat is stored as '@e2e-channel-store'; the table cell renders it verbatim
+    await expect(row).toContainText("@e2e-channel-store");
+
+    // 4. The settings tab storage-channels card lists the dedicated channel
+    await page.locator("#tabs button", { hasText: "تنظیمات" }).click();
+    await page.locator("button", { hasText: "بارگذاری/به‌روزرسانی" }).click();
+    const channelCard = page.locator(".card", { hasText: "کانال‌های ذخیره‌سازی" });
+    await expect(channelCard).toBeVisible();
+    await expect(channelCard).toContainText("@e2e-channel-store");
   });
 });
 
@@ -459,5 +522,3 @@ async function seedProxies(page) {
   }
   return [ok.id, down.id];
 }
-
-test(\"per-key storage chat: create key with channel, upload file, verify channel display\", async ({ page }) => {\n  await login(page);\n\n  // 1. Create a new API key with a storage channel\n  const keyName = `test-key-chat-${Date.now()}`;\n  await page.fill(\"#key-name\", keyName);\n  await page.fill(\"#key-scopes\", \"upload,download\");\n  await page.fill(\"#key-rpm\", \"120\");\n  await page.fill(\"#key-quota\", \"10\");\n  await page.selectOption(\"#key-backend\", \"\");\n  \n  // Add storage channel\n  await page.fill(\"#key-storage-chat\", \"#test-channel\");\n  await page.click(\"#key-save\");\n\n  // Extract the new key from the result dialog\n  const keyResult = await page.locator(\"text=keli\").first(); // will catch \"کلید\" text\n  // Actually look for the key display\n  await page.waitForSelector(\"code\", { state: \"visible\" });\n  const keyText = await page.locator(\"code\").innerText();\n  const keyMatch = keyText.match(/[a-zA-Z0-9]{20,}/);\n  assert(keyMatch, \"Key should be displayed after creation\");\n  const newKey = keyMatch[0];\n\n  // 2. Upload a file using this key with the storage channel\n  const fileContent = `test-file-for-channel-${Date.now()}.txt`;\n  const fileBlob = new Blob([\"test content for channel verification\"], { type: \"text/plain\" });\n  \n  // Upload file with the new key\n  const fileInput = page.locator(\"input[type='file']\");\n  await fileInput.setInputFiles(fileBlob);\n  \n  // Wait for upload to complete and file to become ready\n  await page.waitForSelector(\"text=جاهز\", { timeout: 15000 });\n  \n  // 3. Verify the file appears in the files table with the channel displayed\n  // Navigate to files tab\n  await page.click(\"#tabs button\", { label: \"فایل‌ها\" });\n  await page.waitForSelector(\"table tbody tr\", { timeout: 10000 });\n  \n  // Check that the file appears in the list\n  const fileRow = page.locator(\"table tbody tr\").filter({ hasText: fileContent });\n  await expect(fileRow).toBeVisible();\n  \n  // 4. Verify the storage channel is displayed in the channel column\n  const channelCell = fileRow.locator(\"td\").last(); // channel is typically the last data column\n  const channelText = await channelCell.innerText();\n  await expect(channelText).contain(\"#test-channel\");\n  \n  // 5. Check the storage channels card shows the dedicated channel\n  await page.click(\"#tabs button\", { label: \"تنظیمات\" });\n  await page.waitForSelector(\"text=کانال‌های ذخیره-storage\", { timeout: 5000 });\n  \n  // The channel card should show the dedicated channel\n  const channelCard = page.locator(\"text=#test-channel\");\n  await expect(channelCard).toBeVisible();\n  \n  // 6. Verify files in this key appear under the dedicated channel\n  await page.click(\"#tabs button\", { label: \"فایل‌ها\" });\n  await page.waitForSelector(\"table tbody tr\", { timeout: 5000 });\n  \n  // Filter by the channel if possible, or verify the file is there\n  const allFiles = page.locator(\"table tbody tr\");\n  const fileCount = await allFiles.count();\n  let found = false;\n  for (let i = 0; i < fileCount; i++) {\n    const row = allFiles.nth(i);\n    const rowText = await row.innerText();\n    if (rowText.includes(fileContent)) {\n      found = true;\n      break;\n    }\n  }\n  await expect(found).toBeTruthy(\"Uploaded file should appear in files list\");\n});\nEOF

@@ -405,33 +405,30 @@ async def setup_complete(
     return {"ok": True, "initialized": True}
 
 
-# ── storage channels report ──────────────────────────────────────
-MIME_GROUP_LABELS = {
-    "image": "تصویر",
-    "video": "ویدیو",
-    "audio": "صوت",
-    "text": "متن/کد",
-    "archive": "آرشیو",
-    "application": "فایل/برنامه",
-    "other": "سایر",
-}
+# ── TTL cache for storage-channels ───────────────────────────────────
+_storage_channels_cache: Optional[dict] = None
+_storage_channels_ts: float = 0.0
+_STORAGE_CHANNELS_TTL = 30  # seconds
 
 
-def _mime_group(mime: str) -> str:
-    m = (mime or "").lower()
-    if m.startswith("image/"):
-        return "image"
-    if m.startswith("video/"):
-        return "video"
-    if m.startswith("audio/"):
-        return "audio"
-    if m.startswith("text/"):
-        return "text"
-    if m.startswith("application/"):
-        if any(x in m for x in ("zip", "tar", "rar", "7z", "gzip", "compressed", "x-iso")):
-            return "archive"
-        return "application"
-    return "other"
+def _invalidate_storage_channels_cache() -> None:
+    global _storage_channels_cache, _storage_channels_ts
+    _storage_channels_cache = None
+    _storage_channels_ts = 0.0
+
+
+async def _get_storage_channels_cached(db) -> dict:
+    global _storage_channels_cache, _storage_channels_ts
+    now = time.time()
+    if _storage_channels_cache is not None and now - _storage_channels_ts < _STORAGE_CHANNELS_TTL:
+        metrics.inc("admin.storage_channels.cache_hit")
+        return _storage_channels_cache
+    metrics.inc("admin.storage_channels.cache_miss")
+    # Re-fetch and cache
+    result = await _storage_channels_list(db)
+    _storage_channels_cache = result
+    _storage_channels_ts = now
+    return result
 
 
 @router.get("/storage-channels")
@@ -442,6 +439,14 @@ async def storage_channels(_: str = Depends(get_current_admin), db=Depends(get_d
     system default channel when a key has none. Both surfaces are reported so
     the panel can show each channel with its owning keys and contents.
     """
+    result = await _get_storage_channels_cached(db)
+    return result
+
+
+async def _storage_channels_list(db) -> dict:
+    """Actual implementation of storage channels fetch."""
+    from ..core.settings_service import get_runtime
+
     key_rows = await db.fetch_all(
         "SELECT id, name, backend, revoked, storage_chat FROM api_keys ORDER BY id"
     )
@@ -458,8 +463,6 @@ async def storage_channels(_: str = Depends(get_current_admin), db=Depends(get_d
 
     default_chat = ""
     try:
-        from ..core.settings_service import get_runtime
-
         default_chat = str((await get_runtime(db, "tg_storage_chat")) or "").strip()
     except Exception:
         default_chat = ""
@@ -513,6 +516,37 @@ async def storage_channels(_: str = Depends(get_current_admin), db=Depends(get_d
             "by_type": by_type,
         })
     return {"items": items, "default_chat": default_chat}
+
+
+
+MIME_GROUP_LABELS = {
+    "image": "تصویر",
+    "video": "ویدیو",
+    "audio": "صوت",
+    "text": "متن/کد",
+    "archive": "آرشیو",
+    "application": "فایل/برنامه",
+    "other": "سایر",
+}
+
+
+def _mime_group(mime: str) -> str:
+    m = (mime or "").lower()
+    if m.startswith("image/"):
+        return "image"
+    if m.startswith("video/"):
+        return "video"
+    if m.startswith("audio/"):
+        return "audio"
+    if m.startswith("text/"):
+        return "text"
+    if m.startswith("application/"):
+        if any(x in m for x in ("zip", "tar", "rar", "7z", "gzip", "compressed", "x-iso")):
+            return "archive"
+        return "application"
+    return "other"
+
+
 @router.get("/nodes")
 async def nodes(_: str = Depends(get_current_admin), db=Depends(get_db)):
     return {

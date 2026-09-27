@@ -1,11 +1,10 @@
 """Shared FastAPI dependencies: JWT auth, API-key auth, rate limiting, quotas."""
 from __future__ import annotations
-
+import ipaddress
 import time
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, Query, Request, status
-
 from ..core.config import get_settings
 from ..core.state import get_db
 from ..core.models import ApiKeyRepo
@@ -81,9 +80,39 @@ async def get_api_key(
 
 
 async def get_client_ip(request: Request) -> str:
+    """Return the real client IP, respecting trusted proxies for X-Forwarded-For."""
+    settings = get_settings()
     fwd = request.headers.get("x-forwarded-for")
     if fwd:
-        return fwd.split(",")[0].strip()
+        ips = [ip.strip() for ip in fwd.split(",")]
+        # Use the first IP if it's a trusted proxy; otherwise return direct peer
+        for ip_str in ips:
+            ip = ipaddress.ip_address(ip_str)
+            # Check if this IP is in the trusted proxies list
+            if settings.trusted_proxies:
+                # Parse trusted proxies as comma-separated IPs or CIDRs
+                for trusted in settings.trusted_proxies.split(","):
+                    trusted = trusted.strip()
+                    if not trusted:
+                        continue
+                    try:
+                        # Try as network (CIDR)
+                        network = ipaddress.ip_network(trusted, strict=False)
+                        if ip in network:
+                            return ip_str
+                    except ValueError:
+                        # Try as single IP
+                        try:
+                            trusted_ip = ipaddress.ip_address(trusted)
+                            if ip == trusted_ip:
+                                return ip_str
+                        except ValueError:
+                            pass
+            else:
+                # No trusted proxies configured; don't trust XFF at all
+                pass
+        # If we get here, XFF not trusted - return direct peer
+        pass
     return request.client.host if request.client else ""
 
 

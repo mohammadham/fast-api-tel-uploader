@@ -45,6 +45,20 @@ def now() -> float:
     return time.time()
 
 
+async def _invalidate_storage_channels_cache_safely() -> None:
+    """Bust the admin storage-channels TTL cache after file data changes.
+
+    Imported lazily to avoid a circular import (app.api.admin pulls in core).
+    Never raises — cache invalidation is best-effort.
+    """
+    try:
+        from app.api.admin import _invalidate_storage_channels_cache
+
+        _invalidate_storage_channels_cache()
+    except Exception:
+        pass
+
+
 @dataclass
 class Job:
     id: str
@@ -568,6 +582,7 @@ class FileRepo:
         if status == "ready":
             extra = ", ready_at=?"
             params.append(now())
+            await _invalidate_storage_channels_cache_safely()
         params.append(file_id)
         await self.db.execute(f"UPDATE files SET status=?, error=?{extra} WHERE id=?", params)
 
@@ -598,11 +613,14 @@ class FileRepo:
         await self.db.execute("DELETE FROM file_parts WHERE file_id=?", (file_id,))
         await self.db.execute("DELETE FROM links WHERE file_id=?", (file_id,))
         await self.db.execute("DELETE FROM files WHERE id=?", (file_id,))
+        await _invalidate_storage_channels_cache_safely()
 
     async def soft_delete(self, file_id: str) -> int:
+        await _invalidate_storage_channels_cache_safely()
         return await self.db.execute("UPDATE files SET deleted_at=? WHERE id=? AND deleted_at IS NULL", (now(), file_id))
 
     async def restore(self, file_id: str) -> int:
+        await _invalidate_storage_channels_cache_safely()
         return await self.db.execute("UPDATE files SET deleted_at=NULL WHERE id=?", (file_id,))
 
     async def trashed(self, older_than: float) -> List[Dict[str, Any]]:

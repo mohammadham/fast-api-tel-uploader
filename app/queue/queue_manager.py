@@ -393,10 +393,16 @@ class QueueManager:
             for entry in deferred:
                 heapq.heappush(self._heap, entry)
             if chosen is not None:
-                await self.jobs.update_fields(
-                    chosen["id"], status="running", lease_owner=worker_kind[:2] + "?", lease_until=now() + 1800
+                # Atomic claim: UPDATE only if job is still pending/retry, then check rows affected
+                rows_affected = await self.db.execute(
+                    "UPDATE jobs SET status='running', lease_owner=?, lease_until=?, updated_at=? WHERE id=? AND status IN ('pending','retry')",
+                    (f"{self.node_id}/{chosen['kind'][:2]}?", now() + 1800, now(), chosen["id"]),
                 )
-                chosen["status"] = "running"
+                if rows_affected == 0:
+                    # Job was claimed by another worker; put it back at end of heap
+                    chosen = None
+                else:
+                    chosen["status"] = "running"
                 return chosen
             # nothing runnable now: wait for wake-up or retry timer
             try:

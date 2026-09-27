@@ -95,6 +95,9 @@ CREATE TABLE IF NOT EXISTS folders (
   created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);
+CREATE INDEX IF NOT EXISTS idx_files_storage_chat_created ON files(storage_chat, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_files_folder_created ON files(folder_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_files_created ON files(created_at DESC);
 CREATE TABLE IF NOT EXISTS file_parts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   file_id TEXT NOT NULL,
@@ -393,6 +396,10 @@ CREATE TABLE IF NOT EXISTS proxies (
 );
 CREATE INDEX IF NOT EXISTS idx_file_parts_file ON file_parts(file_id, idx);
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
+ CREATE INDEX IF NOT EXISTS idx_files_storage_chat_created ON files(storage_chat, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_files_folder_created ON files(folder_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_files_created ON files(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_status_nextrun ON jobs(status, next_run_at);
 """
 
 

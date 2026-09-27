@@ -126,14 +126,15 @@ class BotService:
         frm = msg.get("from", {})
         return int(frm.get("id", 0)) in allowed
 
-    async def _reply(self, token: str, chat_id: Any, text: str) -> None:
+    async def _reply(self, token: str, chat_id: Any, text: str, base: str = "") -> None:
+        url = f"{base}/bot{token}/sendMessage" if base else f"/bot{token}/sendMessage"
         try:
             await self._http.post(
-                f"/bot{token}/sendMessage",
+                url,
                 json={"chat_id": chat_id, "text": text[:4000], "parse_mode": "HTML"},
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("bot reply failed: %s", exc)
 
     async def _handle_update(self, bot_id: int, token: str, update: dict) -> None:
         msg = update.get("message") or {}
@@ -144,6 +145,7 @@ class BotService:
         doc = msg.get("document")
 
         if text.startswith("/start") or text.startswith("/help"):
+            base = get_settings().bot_api_base.rstrip("/")
             await self._reply(
                 token,
                 chat_id,
@@ -152,32 +154,38 @@ class BotService:
                 "/download file_id — get the file back\n"
                 "/status — queue status\n"
                 "/files — last files",
+                base=base,
             )
         elif text.startswith("/upload") and doc:
             file_id = doc.get("file_id", "")
             name = doc.get("file_name", f"tgfile_{doc.get('file_size', 0)}")
             size = int(doc.get("file_size", 0))
             if size > 50 * 1024 * 1024:
-                await self._reply(token, chat_id, "⚠️ Bot API supports files ≤50MB. Use accounts/API for bigger files.")
+                base = get_settings().bot_api_base.rstrip("/")
+                await self._reply(token, chat_id, "⚠️ Bot API supports files ≤50MB. Use accounts/API for bigger files.", base=base)
                 return
             await self._enqueue_bot_upload(bot_id, token, chat_id, file_id, name, size)
         elif text.startswith("/download"):
             parts = text.split(maxsplit=1)
             if len(parts) < 2:
-                await self._reply(token, chat_id, "Usage: /download file_id")
+                base = get_settings().bot_api_base.rstrip("/")
+                await self._reply(token, chat_id, "Usage: /download file_id", base=base)
                 return
             await self._handle_bot_download(bot_id, token, chat_id, parts[1].strip())
         elif text.startswith("/status"):
             stats = await self.queue.stats()
-            await self._reply(token, chat_id, f"📊 Queue: <code>{stats}</code>")
+            base = get_settings().bot_api_base.rstrip("/")
+            await self._reply(token, chat_id, f"📊 Queue: <code>{stats}</code>", base=base)
         elif text.startswith("/files"):
             rows = await self.db.fetch_all(
                 "SELECT id, name, size, status FROM files ORDER BY created_at DESC LIMIT 5"
             )
             lines = [f"<code>{r['id']}</code> — {r['name']} ({r['size']}B, {r['status']})" for r in rows]
-            await self._reply(token, chat_id, "\n".join(lines) or "no files yet")
+            base = get_settings().bot_api_base.rstrip("/")
+            await self._reply(token, chat_id, "\n".join(lines) or "no files yet", base=base)
         else:
-            await self._reply(token, chat_id, "Unknown command. /help")
+            base = get_settings().bot_api_base.rstrip("/")
+            await self._reply(token, chat_id, "Unknown command. /help", base=base)
 
     async def _enqueue_bot_upload(self, bot_id: int, token: str, chat_id: Any, tg_file_id: str, name: str, size: int) -> None:
         import uuid
@@ -188,25 +196,28 @@ class BotService:
         await FileRepo(self.db).create(file_id, name, size, "application/octet-stream", uploader=f"bot:{bot_id}", source="bot")
         payload = {"file_id": file_id, "tg_file_id": tg_file_id, "bot_token_ref": bot_id, "chat_id": chat_id, "size": size}
         await self.queue.enqueue(KIND_UPLOAD, payload, PRIO_UPLOAD)
-        await self._reply(token, chat_id, f"📥 Queued upload: <code>{file_id}</code>")
+        base = get_settings().bot_api_base.rstrip("/")
+        await self._reply(token, chat_id, f"📥 Queued upload: <code>{file_id}</code>", base=base)
 
     async def _handle_bot_download(self, bot_id: int, token: str, chat_id: Any, file_id: str) -> None:
         from ..core.models import FileRepo
 
         rec = await FileRepo(self.db).get(file_id)
         if not rec or rec["status"] != "ready":
-            await self._reply(token, chat_id, "❌ File not found or not ready.")
+            base = get_settings().bot_api_base.rstrip("/")
+            await self._reply(token, chat_id, "❌ File not found or not ready.", base=base)
             return
         if rec["size"] > 50 * 1024 * 1024:
             link = f"{get_settings().public_base_url}/d/{file_id}"
-            await self._reply(token, chat_id, f"📏 Too big for bot (≤50MB). Direct link: {link}")
+            await self._reply(token, chat_id, f"📏 Too big for bot (≤50MB). Direct link: {link}", base=base)
             return
         await self.queue.enqueue(
             KIND_DOWNLOAD,
             {"file_id": file_id, "deliver_to": {"bot": bot_id, "chat_id": chat_id}},
             PRIO_DOWNLOAD,
         )
-        await self._reply(token, chat_id, "⏳ Queued for delivery…")
+        base = get_settings().bot_api_base.rstrip("/")
+        await self._reply(token, chat_id, "⏳ Queued for delivery…", base=base)
 
     async def deliver_download(self, bot_id: int, chat_id: Any, local_path: str, name: str) -> None:
         from ..core.models import BotRepo

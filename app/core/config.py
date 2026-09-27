@@ -9,6 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TGDRIVE_", env_file=".env", extra="ignore")
 
+    # ── client IP trust ──
+    trusted_proxies: str = ""  # comma-separated IPs/CIDRs; empty = trust nobody
+
     # ── security ──
     secret: str = "dev-secret-change-me-please-32-chars!"
     jwt_ttl_minutes: int = 15
