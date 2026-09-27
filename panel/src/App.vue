@@ -1087,6 +1087,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
 
     /* ---------- api helper (with refresh) ---------- */
     async function api(path, opts = {}) {
+      if (opts.params) { path += (path.includes("?") ? "&" : "?") + new URLSearchParams(opts.params).toString(); delete opts.params; }
       opts.headers = { ...(opts.headers || {}), Authorization: "Bearer " + token.value };
       if (opts.json) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(opts.json); }
       const resp = await fetch(path, opts);
