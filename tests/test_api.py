@@ -325,3 +325,72 @@ async def test_preview_token_flow(client, api_key):
     assert exp3 - int(_t.time()) >= 9  # small timing slack
 
     await client.delete(f"/api/v1/files/{fid}?purge=true", headers=H)
+
+
+async def test_trash_flow_listing_and_restore(client, api_key):
+    """B3: ?trashed=1 lists only soft-deleted files; restore moves them back."""
+    H = {"Authorization": f"Bearer {api_key}"}
+    r = await client.post(
+        "/api/v1/files/upload",
+        headers=H,
+        files={"file": ("trash-me.txt", io.BytesIO(b"x"), "text/plain")},
+    )
+    fid = r.json()["file_id"]
+
+    # trashed view is empty before deletion
+    d = (await client.get("/api/v1/files", params={"trashed": 1}, headers=H)).json()
+    assert all(i["id"] != fid for i in d["items"])
+
+    # soft-delete → appears ONLY in the trashed view
+    r = await client.delete(f"/api/v1/files/{fid}", headers=H)
+    assert r.status_code == 200 and r.json()["trashed"] == fid
+    d = (await client.get("/api/v1/files", params={"trashed": 1}, headers=H)).json()
+    assert d["total"] == 1 and d["items"][0]["id"] == fid
+    d = (await client.get("/api/v1/files", headers=H)).json()
+    assert all(i["id"] != fid for i in d["items"])
+
+    # restore → back in the main list, gone from trash
+    r = await client.get(f"/api/v1/files/{fid}/restore", headers=H)
+    assert r.status_code == 200, r.text
+    d = (await client.get("/api/v1/files", headers=H)).json()
+    assert any(i["id"] == fid for i in d["items"])
+    d = (await client.get("/api/v1/files", params={"trashed": 1}, headers=H)).json()
+    assert d["total"] == 0
+
+    await client.delete(f"/api/v1/files/{fid}?purge=true", headers=H)
+
+
+async def test_queue_retry_failed_job(client, api_key, token):
+    """Retry endpoint re-queues a failed job and refuses live ones (409)."""
+    from app.core.state import state as st
+
+    A = {"Authorization": f"Bearer {token}"}
+    q = st.queue
+    from app.core.models import Job, now as _now
+
+    job_id = "j_test_retry"
+    await q.jobs.insert(Job(id=job_id, kind="upload", priority=10, seq=_now(), payload={"file_id": "nope"}))
+    # simulate a terminal failure
+    await q.jobs.update_fields(job_id, status="failed", error="boom")
+
+    # retrying a non-failed job is a conflict
+    live_id = "j_test_live"
+    await q.jobs.insert(Job(id=live_id, kind="upload", priority=10, seq=_now() + 1, payload={"file_id": "nope"}))
+    r = await client.post(f"/api/v1/queue/retry/{live_id}", headers=A)
+    assert r.status_code == 409
+
+    r = await client.post(f"/api/v1/queue/retry/{job_id}", headers=A)
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+
+    # the retried job row is pending again with cleared attempts
+    row = await q.jobs.fetch(job_id)
+    assert row["status"] == "pending" and row["attempts"] == 0
+
+    # unknown id → 404
+    r = await client.post("/api/v1/queue/retry/no-such-job", headers=A)
+    assert r.status_code == 404
+
+    # cleanup: drop test jobs so other tests see a clean queue
+    await q.jobs.update_fields(job_id, status="failed", error="cleanup")
+    await q.jobs.update_fields(live_id, status="failed", error="cleanup")
+    await client.post("/api/v1/queue/purge", headers=A)

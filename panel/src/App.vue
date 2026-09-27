@@ -130,11 +130,12 @@
                 <td>
                   <button @click="accToggle(a)">{{ a.enabled ? "غیرفعال" : "فعال" }}</button>
                   <button @click="accTest(a)">تست</button>
+                  <button @click="accChat(a)">کانال</button>
                   <button @click="accReset(a)">ریست</button>
                   <button class="danger" @click="accDelete(a)">حذف</button>
                 </td>
               </tr>
-              <tr v-if="!accounts.length"><td colspan="8" class="muted">اکانتی نیست</td></tr>
+              <tr v-if="!accounts.length"><td colspan="9" class="muted">اکانتی نیست</td></tr>
             </tbody>
           </table>
         </div>
@@ -279,6 +280,7 @@
             <option value="downloads">بیشترین دانلود</option>
           </select>
           <button class="ghost" :style="filesBlockedOnly ? 'border-color:var(--err);color:var(--err)' : ''" style="padding:5px 10px;font-size:12px" @click="filesBlockedOnly = !filesBlockedOnly; loaders.files()">فقط بن‌شده‌ها</button>
+          <button class="ghost" :style="filesTrashed ? 'border-color:var(--warn);color:var(--warn)' : ''" style="padding:5px 10px;font-size:12px" @click="filesTrashed = !filesTrashed; filesOffset = 0; loaders.files()">🗑 زباله‌دان</button>
           <span class="muted" style="font-size:12px">{{ filesTotal }} فایل</span>
         </div>
         <div v-if="!bulkMode" style="margin-bottom:10px;display:flex;gap:8px;align-items:center">
@@ -354,8 +356,9 @@
                   <button @click="fileMoveDlg(f)">پوشه</button>
                   <button v-if="f.blocked" @click="fileBlock(f, false)">رفع بن</button>
                   <button v-else class="danger" @click="fileBlock(f, true)">بن</button>
-                  <button v-if="f.deleted_at" @click="fileRestore(f)">بازیابی</button>
-                  <button class="danger" @click="fileDelete(f)">حذف</button>
+                  <button v-if="f.deleted_at || filesTrashed" @click="fileRestore(f)">بازیابی</button>
+                  <button v-if="filesTrashed" class="danger" @click="fileDelete(f)">حذف نهایی</button>
+                  <button v-else class="danger" @click="fileDelete(f)">حذف</button>
                 </td>
                 <td v-if="bulkMode"><input type="checkbox" :checked="selectedFiles.has(f.id)" @change="toggleSelectFile(f.id)" class="checkbox" dir="ltr"></td>
               </tr>
@@ -893,6 +896,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
     const filesMime = ref("");
     const filesOrder = ref("date");
     const filesBlockedOnly = ref(false);
+    const filesTrashed = ref(false);
     const filesTotal = ref(0);
     const filesLimit = ref(50);
     const filesOffset = ref(0);
@@ -1202,6 +1206,7 @@ const doLogin = submitLogin;
         if (filesMime.value) p.set("mime", filesMime.value);
         if (filesOrder.value !== "date") p.set("order", filesOrder.value);
         if (filesBlockedOnly.value) p.set("blocked", "1");
+        if (filesTrashed.value) p.set("trashed", "1");
         if (channelFilter.value) {
           if (channelFilterIsDefault.value) p.set("default_channel", "1");
           else p.set("storage_chat", channelFilter.value);
@@ -1676,6 +1681,15 @@ const doLogin = submitLogin;
     async function accToggle(a) { await api(`/api/v1/accounts/${a.id}/toggle`, { method: "POST" }); loaders.accounts(); }
     async function accTest(a) { const d = await api(`/api/v1/accounts/${a.id}/test`, { method: "POST" }); showToast(d.ok ? "اتصال سالم" : "خطا: " + d.error, 3000, !d.ok); }
     async function accReset(a) { await api(`/api/v1/accounts/${a.id}/reset`, { method: "POST" }); showToast("ریست شد"); loaders.accounts(); }
+    async function accChat(a) {
+      const v = prompt("کانال ذخیره‌سازی این اکانت (@username یا عددی / me = پیش‌فرض سیستم):", a.storage_chat_id || "me");
+      if (v === null) return;
+      try {
+        await api(`/api/v1/accounts/${a.id}`, { method: "PATCH", json: { storage_chat_id: v.trim() || "me" } });
+        showToast("کانال ذخیره‌سازی اکانت به‌روزرسانی شد");
+        loaders.accounts();
+      } catch (e) { showToast("خطا: " + e.message, 4500, true); }
+    }
     async function accDelete(a) { if (confirm("حذف اکانت؟")) { await api(`/api/v1/accounts/${a.id}`, { method: "DELETE" }); loaders.accounts(); } }
 
     /* ---------- bots ---------- */

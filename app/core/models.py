@@ -482,13 +482,14 @@ class FileRepo:
         mime_prefix: str = "",
         order: str = "date",
         blocked_only: bool = False,
+        trashed: bool = False,
     ) -> List[Dict[str, Any]]:
         cols = (
             "SELECT id, name, size, mime, status, parts, downloads, bytes_served, uploader, source,"
             " backend, storage_chat, folder_id, blocked, created_at, ready_at, error FROM files"
         )
         params: list = []
-        prefix, conds = "", ["deleted_at IS NULL"]
+        prefix, conds = "", ["deleted_at IS NOT NULL" if trashed else "deleted_at IS NULL"]
         if q:
             conds.append("name LIKE ?")
             params.append(f"%{q}%")
@@ -545,10 +546,11 @@ class FileRepo:
         q: str = "",
         mime_prefix: str = "",
         blocked_only: bool = False,
+        trashed: bool = False,
     ) -> int:
         """Same filter set as list() but returns the total row count."""
         params: list = []
-        prefix, conds = "", ["deleted_at IS NULL"]
+        prefix, conds = "", ["deleted_at IS NOT NULL" if trashed else "deleted_at IS NULL"]
         if q:
             conds.append("name LIKE ?")
             params.append(f"%{q}%")

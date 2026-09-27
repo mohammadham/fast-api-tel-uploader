@@ -188,6 +188,7 @@ async def list_files(
     mime: str = "",
     order: str = "date",
     blocked: int = 0,
+    trashed: int = 0,
     principal=Depends(get_admin_or_key),
     db=Depends(get_db),
 ):
@@ -195,7 +196,8 @@ async def list_files(
 
     ?storage_chat=@chan / ?default_channel=1 → channel drill-down,
     ?q=name → name search, ?mime=image/ → type filter, ?order=date|size|downloads|name,
-    ?blocked=1 → only blocked files. Response carries total for pagination.
+    ?blocked=1 → only blocked files, ?trashed=1 → only soft-deleted (trash view).
+    Response carries total for pagination.
     """
     kw = {}
     if storage_chat:
@@ -205,7 +207,7 @@ async def list_files(
 
         default_chat = str(await get_runtime(db, "tg_storage_chat") or "").strip()
         kw = {"storage_chat": default_chat, "storage_chat_is_default": True}
-    common = dict(q=q.strip(), mime_prefix=mime.strip().lower(), blocked_only=bool(blocked))
+    common = dict(q=q.strip(), mime_prefix=mime.strip().lower(), blocked_only=bool(blocked), trashed=bool(trashed))
     items = await FileRepo(db).list(
         limit=min(limit, 500), offset=offset, order=order if order in ("date", "size", "downloads", "name") else "date", **kw, **common
     )
