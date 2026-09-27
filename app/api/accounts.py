@@ -171,6 +171,8 @@ async def update_account(account_id: int, body: AccountOut, admin: str = Depends
         await db.execute(
             "UPDATE tg_accounts SET storage_chat_id=? WHERE id=?", (body.storage_chat_id, account_id)
         )
+        from .admin import _invalidate_storage_channels_cache
+        _invalidate_storage_channels_cache()
     if state.manager:
         await state.manager.drop("acc:", account_id)
         await state.manager.refresh_one_account(account_id)

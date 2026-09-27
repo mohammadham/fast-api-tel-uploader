@@ -88,5 +88,13 @@ class Janitor:
             if state.queue and state.manager:  # only when app context is live
                 await state.queue.enqueue(KIND_DELETE, {"file_id": f["id"]}, 10)
                 purged += 1
-        if removed or stale or deleted or purged:
-            log.info("janitor: %s tmp, %s sessions, %s jobs, %s trash-purged", removed, len(stale), deleted, purged)
+        # retention: revoked keys (>30d), audit log + dead refresh tokens (>90d)
+        cut30, cut90 = time.time() - 30 * 86400, time.time() - 90 * 86400
+        old_keys = await self.db.execute("DELETE FROM api_keys WHERE revoked=1 AND created_at < ?", (cut30,))
+        old_audit = await self.db.execute("DELETE FROM audit_log WHERE ts < ?", (cut90,))
+        old_tokens = await self.db.execute("DELETE FROM revoked_tokens WHERE expires_at < ?", (cut90,))
+        if removed or stale or deleted or purged or old_keys or old_audit or old_tokens:
+            log.info(
+                "janitor: %s tmp, %s sessions, %s jobs, %s trash-purged, %s revoked-keys, %s audit, %s tokens",
+                removed, len(stale), deleted, purged, old_keys, old_audit, old_tokens,
+            )
