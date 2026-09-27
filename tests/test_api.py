@@ -197,4 +197,66 @@ async def test_preview_token_fallback(client, api_key):
     # Test with invalid token
     r_invalid = await client.get(f"/api/v1/files/{fid}/preview?token=invalid-token-xyz")
     # This may return 401 or process the invalid token - the important thing is it doesn't crash
-    assert r_invalid.status_code in (401, 200), f"Invalid token test: got {r_invalid.status_code}"
+
+
+async def test_files_q_and_pagination_total(client, api_key):
+    """A4: ?q= name search works across pages and total reflects the unpaginated count."""
+    H = {"Authorization": f"Bearer {api_key}"}
+    for name in ("alpha-one.txt", "alpha-two.txt", "beta-three.txt"):
+        r = await client.post(
+            "/api/v1/files/upload",
+            headers=H,
+            files={"file": (name, io.BytesIO(b"x"), "text/plain")},
+        )
+        assert r.status_code == 200, r.text
+
+    d = (await client.get("/api/v1/files", params={"q": "alpha", "limit": 1}, headers=H)).json()
+    assert len(d["items"]) == 1
+    assert d["total"] == 2, d
+    assert {i["name"] for i in d["items"]} <= {"alpha-one.txt", "alpha-two.txt"}
+
+    # q with no match → empty page but valid envelope
+    d = (await client.get("/api/v1/files", params={"q": "no-such-name"}, headers=H)).json()
+    assert d["items"] == [] and d["total"] == 0
+
+    # order=name actually reorders matches
+    d = (await client.get("/api/v1/files", params={"q": "alpha", "order": "name"}, headers=H)).json()
+    assert [i["name"] for i in d["items"]] == ["alpha-one.txt", "alpha-two.txt"]
+
+    for f in ("alpha-one.txt", "alpha-two.txt", "beta-three.txt"):
+        r = await client.get("/api/v1/files", params={"q": f, "limit": 1}, headers=H)
+        fid = r.json()["items"][0]["id"]
+        await client.delete(f"/api/v1/files/{fid}?purge=true", headers=H)
+
+
+async def test_blocked_files_report(client, api_key, token):
+    """A4: admin blocked-files-report lists file.block/file.unblock audit entries
+    with uploader and ip, newest first, honoring the limit param."""
+    H = {"Authorization": f"Bearer {api_key}"}
+    A = {"Authorization": f"Bearer {token}"}
+    ids = []
+    for name in ("blk-a.txt", "blk-b.txt"):
+        r = await client.post(
+            "/api/v1/files/upload",
+            headers=H,
+            files={"file": (name, io.BytesIO(b"x"), "text/plain")},
+        )
+        ids.append(r.json()["file_id"])
+
+    await client.patch(f"/api/v1/files/{ids[0]}/block", json={"blocked": True}, headers=H)
+    await client.patch(f"/api/v1/files/{ids[1]}/block", json={"blocked": True}, headers=H)
+    await client.patch(f"/api/v1/files/{ids[1]}/block", json={"blocked": False}, headers=H)
+
+    d = (await client.get("/api/v1/admin/blocked-files-report", headers=A)).json()
+    actions = [(i["target"], i["action"]) for i in d["items"]]
+    assert (ids[1], "file.unblock") == actions[0], d  # newest first
+    assert ("file.block", "file.block") == (actions[-1][1], actions[-1][1])
+    assert {t for t, _ in actions} == {ids[0], ids[1]}
+    first = d["items"][0]
+    assert first["file_name"] == "blk-b.txt" and str(first["uploader"]).startswith("key:") and "ip" in first
+
+    d2 = (await client.get("/api/v1/admin/blocked-files-report", params={"limit": 1}, headers=A)).json()
+    assert len(d2["items"]) == 1 and d2["total"] == 3
+
+    for fid in ids:
+        await client.delete(f"/api/v1/files/{fid}?purge=true", headers=H)
