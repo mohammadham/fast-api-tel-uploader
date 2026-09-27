@@ -29,3 +29,10 @@ data-pxb/
 data-smoke/
 data-selfcheck/
 data-e2e/
+
+# secrets & live data (never commit)
+.env.bak.*
+*.env.bak
+data-live/
+data-livepanel/
+data-e2e/
