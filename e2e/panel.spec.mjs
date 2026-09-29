@@ -190,6 +190,57 @@ test.describe.serial("panel smoke", () => {
     });
   });
 
+  test("drop onto the upload tray inherits the last job's folder/chat and uploads without the dialog", async ({ page }) => {
+    await login(page);
+    await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+
+    // seed the tray with one job via the dialog — its folder/chat become the inherited settings
+    await page.locator("section:visible button", { hasText: "آپلود جدید" }).click();
+    await page.locator("dialog:visible input[type='file']").setInputFiles({
+      name: "e2e-traydrop-1.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("traydrop seed " + Date.now()),
+    });
+    // set an explicit folder so the inheritance is observable on the dropped job
+    await page.locator("dialog:visible input[placeholder='از پوشه‌های همین کانال استفاده می‌شود']").fill("e2e-traydrop-folder");
+    await page.locator("dialog:visible button", { hasText: "شروع آپلود" }).click();
+    const tray = page.locator("#upload-tray");
+    await expect(tray.getByText("e2e-traydrop-1.txt")).toBeVisible();
+    await expect(tray.getByText("صف شد")).toBeVisible({ timeout: 15000 });
+
+    // drop a file directly onto the tray — no dialog may open, job inherits settings
+    const payload = Buffer.from("traydrop second " + Date.now());
+    await tray.dispatchEvent("dragenter", { dataTransfer: await page.evaluateHandle(() => new DataTransfer()) });
+    await expect(tray.getByText("فایل‌ها را همین‌جا رها کنید")).toBeVisible();
+    await tray.dispatchEvent("drop", {
+      dataTransfer: await page.evaluateHandle((buf) => {
+        const dt = new DataTransfer();
+        dt.items.add(new File([buf], "e2e-traydrop-2.txt", { type: "text/plain" }));
+        return dt;
+      }, payload),
+    });
+    await expect(page.locator(".toast")).toContainText("فایل با تنظیمات آخرین جاب"); // enqueue confirmation
+    await expect(page.locator("dialog:visible")).toHaveCount(0); // dialog never opened
+    await expect(tray).toBeVisible();
+    await expect(tray.getByText("e2e-traydrop-2.txt")).toBeVisible();
+    await expect(tray.getByText("e2e-traydrop-folder").first()).toBeVisible(); // inherited folder tag
+    await expect(tray.getByText("صف شد")).toHaveCount(2, { timeout: 15000 }); // both done
+
+    // the dropped file landed in the inherited folder
+    await page.evaluate(async () => {
+      const token = localStorage.getItem("td_token");
+      const { items } = await fetch("/api/v1/files?limit=200", { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
+      const dropped = items.find((x) => x.name === "e2e-traydrop-2.txt");
+      if (!dropped) throw new Error("dropped file not found");
+      const { items: folders } = await fetch("/api/v1/folders", { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
+      const target = (folders || []).find((f) => (f.path || f.name || "").includes("e2e-traydrop-folder"));
+      if (!target || dropped.folder_id !== target.id) throw new Error("folder not inherited: file.folder_id=" + dropped.folder_id + " target.id=" + (target && target.id));
+      for (const f of items.filter((x) => x.name.startsWith("e2e-traydrop-"))) {
+        await fetch(`/api/v1/files/${f.id}?purge=true`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+      }
+    });
+  });
+
   test("upload tray keeps uploads running after the dialog closes and allows cancel", async ({ page }) => {
     await login(page);
     await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();

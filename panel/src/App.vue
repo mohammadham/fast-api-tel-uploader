@@ -1013,7 +1013,8 @@
     <div class="toast" :class="{error: toast.err}" v-show="toast.msg" role="status" aria-live="polite">{{ toast.msg }}</div>
 
     <!-- Persistent upload tray: lives OUTSIDE the dialog; uploads keep going when the dialog closes -->
-    <div v-if="uploadJobs.length" id="upload-tray" class="card" style="position:fixed;bottom:14px;left:14px;width:340px;max-width:calc(100vw - 28px);z-index:80;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.35)">
+    <div v-if="uploadJobs.length" id="upload-tray" class="card" :style="{ position:'fixed',bottom:'14px',left:'14px',width:'340px','max-width':'calc(100vw - 28px)','z-index':80,padding:'10px 12px','box-shadow':'0 8px 24px rgba(0,0,0,.35)', outline: trayDrag ? '2px dashed var(--accent,#3b82f6)' : 'none', 'outline-offset': '-4px', background: trayDrag ? 'rgba(59,130,246,.10)' : undefined }" @dragover.prevent="trayDrag = true" @dragenter.prevent="trayDrag = true" @dragleave.self="trayDrag = false" @drop.prevent="onTrayDrop">
+      <div v-if="trayDrag" class="muted" style="text-align:center;font-size:11px;padding:2px 0 4px">فایل‌ها را همین‌جا رها کنید — با پوشه/کانالِ آخرین آپلود بالا می‌رود</div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <b style="font-size:13px">آپلودها ({{ uploadJobs.filter(j => j.status === 'uploading').length }} فعال / {{ uploadJobs.length }})</b>
         <button class="ghost" style="padding:2px 8px;font-size:11px" @click="clearFinishedUploads" :disabled="!uploadJobs.some(j => j.status !== 'uploading')">پاک‌سازی تمام‌شده‌ها</button>
@@ -2202,6 +2203,24 @@ const doLogin = submitLogin;
     function onUploadFileChosen(ev) { uploadDlg.files = Array.from(ev.target.files || []); ev.target.value = ""; }
     /* drag & drop onto the files tab → same upload dialog (folder/channel preserved) */
     const filesDragDepth = ref(0);
+    /* drag & drop onto the tray itself → enqueue with the last job's folder/chat */
+    const trayDrag = ref(false);
+    function onTrayDrop(ev) {
+      trayDrag.value = false;
+      if (uploadDlg.busy) return;
+      const dropped = Array.from(ev.dataTransfer?.files || []);
+      if (!dropped.length) return;
+      const last = uploadJobs.value[uploadJobs.value.length - 1];
+      const folder = (last && last.folder) || "";
+      const chat = (last && last.chat) || "";
+      if (filesTrashed.value) filesTrashed.value = false;
+      for (const f of dropped) {
+        const job = { id: ++uploadJobSeq, name: f.name, folder, chat, pct: 0, speed: 0, status: "uploading", error: "", controller: new AbortController() };
+        uploadJobs.value.push(job);
+        runUploadJob(job, f);
+      }
+      showToast("آپلود " + dropped.length + " فایل با تنظیمات آخرین جاب");
+    }
     function onFilesDrop(ev) {
       filesDragDepth.value = 0;
       if (tab.value !== "files" || uploadDlg.busy) return;
