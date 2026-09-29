@@ -242,6 +242,69 @@ async def block_file(file_id: str, body: FileBlockIn, db=Depends(get_db), key=De
     return {"ok": True, "file_id": file_id, "blocked": body.blocked}
 
 
+class BulkTransferIn(BaseModel):
+    file_ids: list[str]
+    storage_chat: str  # '@username' or numeric -100… id; '' not allowed here
+    folder_id: Optional[int] = None  # optional: also re-home files into a folder
+
+
+def _validate_target_chat(raw: str) -> str:
+    v = (raw or "").strip()
+    if not (v.startswith("@") or v.lstrip("-").isdigit()):
+        raise HTTPException(status_code=400, detail="storage_chat must be @username or numeric chat id")
+    return v
+
+
+@router.post("/bulk-transfer")
+async def bulk_transfer(body: BulkTransferIn, db=Depends(get_db), key=Depends(get_api_key)):
+    """Move many ready files to a different storage channel (queue-based).
+
+    Each file becomes a 'transfer' job: parts are re-sent to the target chat
+    and the record's pointers rewritten on success. folder_id optionally
+    re-homes the files at the same time (panel folder picker)."""
+    require_scope(key, "write")
+    if not body.file_ids:
+        raise HTTPException(status_code=400, detail="file_ids required")
+    if len(body.file_ids) > 200:
+        raise HTTPException(status_code=400, detail="too many files per request (max 200)")
+    target = _validate_target_chat(body.storage_chat)
+    actor = f"key:{key['id']}"
+    if state.queue is None:
+        raise HTTPException(status_code=503, detail="queue not running")
+    repo = FileRepo(db)
+    enqueued: list = []
+    failed: list = []
+    seen: set = set()
+    for file_id in body.file_ids:
+        if file_id in seen:
+            failed.append({"file_id": file_id, "reason": "duplicate in request"})
+            continue
+        seen.add(file_id)
+        rec = await repo.get(file_id)
+        if not rec:
+            failed.append({"file_id": file_id, "reason": "not found"})
+            continue
+        if rec["status"] != "ready":
+            failed.append({"file_id": file_id, "reason": f"status={rec['status']}"})
+            continue
+        if rec["storage_chat"] and rec["storage_chat"] == target:
+            failed.append({"file_id": file_id, "reason": "already in target channel"})
+            continue
+        if not rec["parts"]:
+            failed.append({"file_id": file_id, "reason": "file has no stored parts"})
+            continue
+        if body.folder_id is not None:
+            await repo.set_folder(file_id, None if int(body.folder_id) == 0 else int(body.folder_id))
+        await state.queue.enqueue(
+            "transfer",
+            {"file_id": file_id, "target_chat": target, "folder_id": body.folder_id},
+            30,
+        )
+        enqueued.append(file_id)
+    await db.audit(actor, "file.bulk_transfer", target=target, details=f"{len(enqueued)} enqueued, {len(failed)} skipped")
+    return {"ok": True, "enqueued": enqueued, "failed": failed}
+
+
 class PreviewTokenIn(BaseModel):
     ttl: Optional[int] = None  # seconds; clamped to 10..600
 

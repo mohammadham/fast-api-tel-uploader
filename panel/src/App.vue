@@ -345,11 +345,12 @@
           </select>
           <span class="muted" style="font-size:12px">{{ filesTotal }} فایل</span>
         </div>
-        <div v-if="bulkMode" style="margin-bottom:10px;display:flex;gap:8px;align-items:center">
+        <div v-if="bulkMode" style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="ghost" @click="bulkMode = false; selectedFiles.value.clear(); selectAllFiles = false" style="padding:5px 10px;font-size:12px">انصراف از حالت گروهی</button>
           <button class="danger" @click="bulkDeleteSelected" style="padding:5px 10px;font-size:12px;background:var(--err);color:#fff">حذف گروهی ({{ selectedFiles.size }})</button>
           <button class="ghost" @click="bulkBlockSelected" style="padding:5px 10px;font-size:12px">بن گروهی ({{ selectedFiles.size }})</button>
           <button class="ghost" @click="bulkMoveSelectedDlg.open = true" style="padding:5px 10px;font-size:12px">انتصال گروهی به پوشه...</button>
+          <button class="primary" @click="bulkTransferOpen" style="padding:5px 10px;font-size:12px">انتقال گروهی به کانال… ({{ selectedFiles.size }})</button>
         </div>
         <div style="display:flex;gap:14px;align-items:flex-start">
           <div class="card" style="width:230px;flex-shrink:0;padding:10px 12px">
@@ -799,6 +800,31 @@
       <button class="ghost" style="width:100%" @click="bulkMoveSelectedDlg.open = false">انصراف</button>
     </dialog>
 
+    <dialog :open="bulkTransferDlg.open" @close="bulkTransferDlg.open = false">
+      <h3>انتقال گروهی به کانال</h3>
+      <p class="muted" style="font-size:12px">{{ selectedFiles.size }} فایل انتخاب شده — محتوا از کانال فعلی به مقصد منتقل می‌شود (در صف).</p>
+      <div class="field">
+        <label>کانال مقصد</label>
+        <select v-model="bulkTransferDlg.chat" style="width:100%">
+          <option v-for="o in bulkTransferChatOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>پوشه مقصد (اختیاری)</label>
+        <select v-model="bulkTransferDlg.folderId" style="width:100%">
+          <option value="">بدون تغییر</option>
+          <option value="0">بدون پوشه (ریشه)</option>
+          <option v-for="f in foldersFlat" :key="f.id" :value="String(f.id)">{{ f.path }}</option>
+        </select>
+      </div>
+      <p class="err">{{ bulkTransferDlg.msg }}</p>
+      <button class="primary" style="width:100%" :disabled="bulkTransferDlg.busy || !bulkTransferDlg.chat" @click="bulkTransferDo">
+        <span v-if="bulkTransferDlg.busy" class="spinner" aria-hidden="true"></span>
+        {{ bulkTransferDlg.busy ? "در حال ارسال به صف…" : "انتقال" }}
+      </button>
+      <button class="ghost" style="width:100%" :disabled="bulkTransferDlg.busy" @click="bulkTransferDlg.open = false">انصراف</button>
+    </dialog>
+
     <dialog :open="keyDlg.open" @close="keyDlg.open = false">
       <h3>ایجاد کلید API</h3>
       <div class="field"><label>نام</label><input v-model="keyDlg.name" type="text"></div>
@@ -1212,6 +1238,34 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
       showToast("لینک حذف شد");
     }
     const bulkMoveSelectedDlg = reactive({ open: false, path: "", msg: "", busy: false });
+    /* bulk transfer to another storage channel: queue-based re-send of parts */
+    const bulkTransferDlg = reactive({ open: false, chat: "", folderId: "", msg: "", busy: false });
+    const bulkTransferChatOptions = computed(() => {
+      const opts = [];
+      if (channelsDefaultChat.value) opts.push({ value: channelsDefaultChat.value, label: `کانال پیش‌فرض سیستم (${channelsDefaultChat.value})` });
+      for (const c of channels.value) if (!opts.some(o => o.value === c.chat)) opts.push({ value: c.chat, label: (c.label ? c.label + " — " : "") + c.chat });
+      return opts;
+    });
+    function bulkTransferOpen() {
+      if (selectedFiles.value.size === 0) return;
+      loaders.channels();
+      Object.assign(bulkTransferDlg, { open: true, chat: channelsDefaultChat.value || "", folderId: "", msg: "", busy: false });
+    }
+    async function bulkTransferDo() {
+      bulkTransferDlg.msg = "";
+      if (!bulkTransferDlg.chat) { bulkTransferDlg.msg = "کانال مقصد را انتخاب کنید"; return; }
+      bulkTransferDlg.busy = true;
+      try {
+        const body = { file_ids: [...selectedFiles.value], storage_chat: bulkTransferDlg.chat };
+        if (bulkTransferDlg.folderId !== "") body.folder_id = Number(bulkTransferDlg.folderId);
+        const r = await api("/api/v1/files/bulk-transfer", { method: "POST", json: body });
+        showToast(`${r.enqueued?.length ?? 0} فایل به صف انتقال رفت` + (r.failed?.length ? `، ${r.failed.length} نادیده گرفته شد` : ""), 4000, !!r.failed?.length);
+        bulkTransferDlg.open = false; bulkTransferDlg.chat = ""; bulkTransferDlg.folderId = "";
+        selectedFiles.value.clear(); selectAllFiles.value = false;
+        loaders.files();
+      } catch (e) { bulkTransferDlg.msg = e.message; }
+      finally { bulkTransferDlg.busy = false; }
+    }
     async function bulkMoveSelectedDo() {
       bulkMoveSelectedDlg.msg = "";
       if (selectedFiles.value.size === 0) { bulkMoveSelectedDlg.open = false; return; }

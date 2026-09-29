@@ -14,6 +14,7 @@ from .db import Database
 KIND_DOWNLOAD = "download"
 KIND_UPLOAD = "upload"
 KIND_DELETE = "delete"
+KIND_TRANSFER = "transfer"  # bulk channel move: re-send stored parts to a new chat
 
 # ── audit actions (grep-able constants; used by panel + API) ──
 AUDIT_LOGIN_OK = "auth.login.ok"
@@ -752,6 +753,14 @@ class FileRepo:
     async def set_folder(self, file_id: str, folder_id: Optional[int]) -> None:
         await self.db.execute("UPDATE files SET folder_id=? WHERE id=?", (folder_id, file_id))
 
+    async def set_parts(self, file_id: str, message_ids: List[int], storage_chat: str) -> None:
+        """Rewrite a ready file's part pointers after a channel transfer."""
+        await self.db.execute(
+            "UPDATE files SET storage_chat=?, message_ids=?, parts=? WHERE id=?",
+            (storage_chat, json.dumps(message_ids), len(message_ids), file_id),
+        )
+        await _invalidate_storage_channels_cache_safely()
+
 
 class JobRepo:
     def __init__(self, db: Database) -> None:
@@ -811,7 +820,7 @@ class JobRepo:
                 await self.db.scalar("SELECT COUNT(*) FROM jobs WHERE status=?", (status,)) or 0
             )
         out["by_kind"] = {}
-        for kind in (KIND_DOWNLOAD, KIND_UPLOAD, KIND_DELETE):
+        for kind in (KIND_DOWNLOAD, KIND_UPLOAD, KIND_DELETE, KIND_TRANSFER):
             out["by_kind"][kind] = {
                 s: int(
                     await self.db.scalar(

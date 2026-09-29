@@ -35,6 +35,7 @@ from ..core.models import (
     JobRepo,
     KIND_DELETE,
     KIND_DOWNLOAD,
+    KIND_TRANSFER,
     KIND_UPLOAD,
     PRIO_DELETE,
     PRIO_DOWNLOAD,
@@ -348,8 +349,10 @@ class QueueManager:
             ]
             params: List[Any] = [now(), now()]
             if worker_kind == "upload":
-                conds.append("kind = ?")
-                params.append(KIND_UPLOAD)
+                # uploads + transfers share the upload worker pool (same
+                # telegram pressure profile)
+                conds.append("kind IN (?, ?)")
+                params.extend([KIND_UPLOAD, KIND_TRANSFER])
             else:
                 conds.append("kind != ?")
                 params.append("__none__")
@@ -402,6 +405,11 @@ class QueueManager:
                     deferred.append(entry)
                     continue
                 if worker_kind == "upload" and row["kind"] == KIND_DOWNLOAD:
+                    deferred.append(entry)
+                    continue
+                # transfers share the upload pool (same pressure profile) but
+                # downloads-first starvation guard does not apply to them
+                if worker_kind == "download" and row["kind"] == KIND_TRANSFER:
                     deferred.append(entry)
                     continue
                 if worker_kind == "download" and row["kind"] == KIND_UPLOAD and self._downloads_waiting():
@@ -457,6 +465,8 @@ class QueueManager:
                     await self._handle_upload(payload, job_id)
                 elif kind == KIND_DELETE:
                     await self._handle_delete({**payload, "__job_id": job_id})
+                elif kind == KIND_TRANSFER:
+                    await self._handle_transfer({**payload, "__job_id": job_id})
                 else:
                     raise TransferError(f"unknown job kind {kind}")
             except FloodWait as exc:
@@ -751,6 +761,65 @@ class QueueManager:
         await self.files.delete(file_id)
         metrics.inc("queue.done.delete")
         slog_q.info("file deleted", file_id=file_id, parts=len(parts))
+
+    # ── transfer handler (bulk channel move) ──────────────────
+    async def _handle_transfer(self, payload: Dict[str, Any]) -> None:
+        """Move a ready file to a different storage chat.
+
+        Downloads each part from the old chat and re-sends it to the new one
+        (send_document), then rewrites the file's part pointers. The old
+        messages stay in the source chat as a safety net — janitor-style
+        cleanup can be added later; a failed re-send retries with backoff and
+        leaves the record untouched until success.
+        """
+        file_id = payload["file_id"]
+        target_chat = (payload.get("target_chat") or "").strip()
+        rec = await self.files.get(file_id)
+        if not rec:
+            return  # deleted meanwhile; nothing to move
+        if not target_chat:
+            raise TransferError("transfer job without target_chat")
+        if rec["status"] != "ready":
+            raise TransferError(f"file not ready (status={rec['status']})")
+        src_chat = rec["storage_chat"]
+        if src_chat and src_chat == target_chat:
+            return  # already there
+        parts = await self.files.parts(file_id)
+        if not parts:
+            raise TransferError("file has no parts to transfer")
+        folder_path = ""
+        try:
+            if rec.get("folder_id"):
+                folder_path = await FolderRepo(self.db).path_of(int(rec["folder_id"]))
+        except Exception:
+            folder_path = ""
+        tags = " ".join("#" + p.strip().replace(" ", "_") for p in folder_path.split("/") if p.strip())
+
+        borrowed = await self.manager.acquire("acc", backend=rec.get("backend") or "telegram")
+        new_ids: List[int] = []
+        async with borrowed as backend:
+            self._last_backend_by_job[payload.get("__job_id", "")] = borrowed.key
+            src = src_chat or getattr(backend, "storage_chat", "me")
+            for part in parts:
+                # one temp file per part; the whole source part is re-sent verbatim
+                tmp = f"{get_settings().final_tmp_dir()}/{file_id}.{part['idx']}.transfer"
+                try:
+                    with open(tmp, "wb") as fh:
+                        async for chunk in backend.iter_file(
+                            part["message_id"], src, start=0, end=None, size=part["size"]
+                        ):
+                            fh.write(chunk)
+                    name = rec["name"] if len(parts) == 1 else f"{rec['name']}.part{part['idx']:04d}"
+                    result = await backend.send_document(target_chat, tmp, name, rec["mime"], caption=tags)
+                    new_ids.append(int(result["message_id"]))
+                finally:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+        await self.files.set_parts(file_id, new_ids, target_chat)
+        metrics.inc("transfer.files")
+        slog_q.info("file transferred", file_id=file_id, from_chat=src_chat, to_chat=target_chat, parts=len(new_ids))
 
     # ── introspection ──────────────────────────────────────────
     async def stats(self) -> Dict[str, Any]:

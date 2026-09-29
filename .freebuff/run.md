@@ -68,3 +68,11 @@ powershell -NoProfile -Command '$env:TGDRIVE_FAKE_TG="1"; $env:TGDRIVE_DATA_DIR=
 - Gotcha: FakeBackend/BotBackend have no `.key` — use borrowed.key (caught by test_delete_queues_job).
 - Tests: tests/test_bots_ops.py (4 tests) → 151 pytest + 12 e2e; panel bundle index-Ct1ThFHn.js.
 - Live (8765): bot:2 test ok (probe 5557); upload → acc handled_24h=1; PUT settings max_concurrent_uploads 3→2 round-trip works.
+
+## Bulk multi-select transfer (2026-09-29, round 6)
+- **POST /api/v1/files/bulk-transfer** {file_ids, storage_chat, folder_id?}: validates target (@/numeric), dedupes, skips not-ready/already-there/no-parts (per-file reasons), optional folder re-home, enqueues kind='transfer' jobs (priority 30, max 200/request).
+- **Transfer job** (_handle_transfer): downloads each part from src chat → send_document verbatim (name/mime + folder hashtag caption) into target chat → set_parts() rewrites storage_chat/message_ids/parts. Old copies stay in the source chat (safety net); failures retry with backoff leaving the record untouched.
+- Queue routing: transfer shares the upload worker pool (PG claim kind IN (upload,transfer); sqlite _next_job defers it on download workers; downloads-first guard does not apply).
+- Panel: bulk mode gains «انتقال گروهی به کانال…» + dialog (channel select from registry/default + folder select untouched/root/any folder) → /files/bulk-transfer.
+- FileRepo.set_parts new; KIND_TRANSFER constant; job stats by_kind includes transfer.
+- Tests: tests/test_bulk_transfer.py (4) → 155 pytest + 12 e2e; bundle index-Cj5OLOCs.js. Live: upload 512B → bulk-transfer → ready in -1002296795477 with new message_id.
