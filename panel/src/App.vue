@@ -1024,7 +1024,7 @@
           <span class="muted" dir="ltr" style="font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="j.name">{{ j.name }}</span>
           <span v-if="j.folder" class="tag" style="font-size:10px" dir="ltr">{{ j.folder }}</span>
           <span v-if="j.chat" class="tag" style="font-size:10px" dir="ltr">{{ j.chat }}</span>
-          <span class="badge" :class="j.status" style="font-size:10px">{{ j.status === 'uploading' ? "در حال آپلود" : j.status === "done" ? "صف شد" : j.status === "canceled" ? "لغو شد" : "خطا" }}</span>
+          <span class="badge" :class="j.status" style="font-size:10px">{{ j.status === 'uploading' ? (j.cancelRequested ? "در حال لغو…" : "در حال آپلود") : j.status === "done" ? "صف شد" : j.status === "canceled" ? "لغو شد" : "خطا" }}</span>
           <button v-if="j.status === 'uploading'" class="ghost" style="padding:1px 7px;font-size:11px" @click="cancelUploadJob(j)">لغو</button>
           <button v-else class="ghost" style="padding:1px 7px;font-size:11px" @click="dismissUploadJob(j)">×</button>
         </div>
@@ -2195,9 +2195,15 @@ const doLogin = submitLogin;
     function clearFinishedUploads() { uploadJobs.value = uploadJobs.value.filter((j) => j.status === "uploading"); }
     function dismissUploadJob(j) { uploadJobs.value = uploadJobs.value.filter((x) => x.id !== j.id); }
     function cancelUploadJob(j) {
-      if (j.status !== "uploading") return;
+      if (j.status !== "uploading" || j.cancelRequested) return;
+      j.cancelRequested = true;
       j.status = "canceled";
       if (j.controller) { try { j.controller.abort(); } catch (e) { /* already done */ } }
+      // server-side too: tombstone the resumable session so racing chunk
+      // PATCHes fail and the tmp .part file gets deleted
+      if (j.sessionId) {
+        api(`/api/v1/files/upload/session/${j.sessionId}`, { method: "DELETE" }).catch(() => {});
+      }
     }
     function uploadPick() { loaders.channels(); switchTab("files"); uploadDlg.open = true; uploadDlg.files = []; }
     function onUploadFileChosen(ev) { uploadDlg.files = Array.from(ev.target.files || []); ev.target.value = ""; }
@@ -2277,6 +2283,14 @@ const doLogin = submitLogin;
       });
       if (!r.ok) { const d = await r.json(); throw new Error(d.detail || "session create failed"); }
       const { session_id, chunk_size, offset } = await r.json();
+      if (job) {
+        job.sessionId = session_id;
+        // cancel arrived before the session existed → close it server-side right away
+        if (job.status === "canceled") {
+          api(`/api/v1/files/upload/session/${session_id}`, { method: "DELETE" }).catch(() => {});
+          throw new DOMException("aborted", "AbortError");
+        }
+      }
       const t0 = Date.now();
       let completed = false;
       let currentOffset = offset;

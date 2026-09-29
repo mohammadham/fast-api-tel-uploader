@@ -859,10 +859,13 @@ class UploadSessionRepo:
     def __init__(self, db: Database) -> None:
         self.db = db
 
-    async def create(self, session_id: str, name: str, size: int, mime: str, folder_path: str = "", storage_chat: str = "") -> None:
+    async def create(
+        self, session_id: str, name: str, size: int, mime: str,
+        folder_path: str = "", storage_chat: str = "", uploader: str = "",
+    ) -> None:
         await self.db.execute(
-            "INSERT INTO upload_sessions(id, name, size, mime, offset, folder_path, storage_chat, created_at) VALUES(?,?,?,?,0,?,?,?)",
-            (session_id, name, size, mime, folder_path, storage_chat, now()),
+            "INSERT INTO upload_sessions(id, name, size, mime, offset, folder_path, storage_chat, uploader, created_at) VALUES(?,?,?,?,0,?,?,?,?)",
+            (session_id, name, size, mime, folder_path, storage_chat, uploader, now()),
         )
 
     async def get(self, session_id: str) -> Optional[Dict[str, Any]]:
@@ -873,6 +876,12 @@ class UploadSessionRepo:
 
     async def delete(self, session_id: str) -> None:
         await self.db.execute("DELETE FROM upload_sessions WHERE id=?", (session_id,))
+
+    async def mark_canceled(self, session_id: str) -> bool:
+        """Tombstone the session so in-flight PATCH chunks get rejected; True if it existed."""
+        return await self.db.execute(
+            "UPDATE upload_sessions SET offset=-1 WHERE id=? AND offset>=0", (session_id,)
+        ) > 0
 
     async def stale(self, ttl_seconds: float) -> List[Dict[str, Any]]:
         return await self.db.fetch_all("SELECT * FROM upload_sessions WHERE created_at < ?", (now() - ttl_seconds,))

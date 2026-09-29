@@ -190,6 +190,57 @@ test.describe.serial("panel smoke", () => {
     });
   });
 
+  test("tray cancel closes the upload session server-side (global cancel)", async ({ page }) => {
+    await login(page);
+    await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+
+    // slow the chunk PATCHes so the cancel click reliably lands mid-upload
+    await page.route("**/upload/session/*", async (route) => {
+      await new Promise((res) => setTimeout(res, 400));
+      await route.continue();
+    });
+    const sessionCreated = page.waitForResponse(
+      (r) => r.url().includes("/upload/session") && r.request().method() === "POST" && r.status() === 200,
+    );
+
+    await page.locator("section:visible button", { hasText: "آپلود جدید" }).click();
+    await page.locator("dialog:visible input[type='file']").setInputFiles({
+      name: "e2e-cancel.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.alloc(17 * 1024 * 1024, 7), // 3 chunks → time to cancel
+    });
+    await page.locator("dialog:visible button", { hasText: "شروع آپلود" }).click();
+    const sid = (await (await sessionCreated).json()).session_id;
+
+    const tray = page.locator("#upload-tray");
+    await expect(tray.getByText("e2e-cancel.txt")).toBeVisible();
+    await tray.getByRole("button", { name: "لغو" }).click();
+    await expect(tray.getByText("لغو شد")).toBeVisible({ timeout: 15000 });
+
+    // the cancel must have reached the server: the session is tombstoned →
+    // a manual DELETE now answers 410 (no longer active), not 404
+    const status = await page.evaluate(async (sid) => {
+      const token = localStorage.getItem("td_token");
+      return (await fetch("/api/v1/files/upload/session/" + sid, { method: "DELETE", headers: { Authorization: "Bearer " + token } })).status;
+    }, sid);
+    expect(status).toBe(410);
+
+    // and a racing chunk is rejected with 410 as well
+    const chunkStatus = await page.evaluate(async (sid) => {
+      const token = localStorage.getItem("td_token");
+      const r = await fetch("/api/v1/files/upload/session/" + sid, {
+        method: "PATCH",
+        headers: { Authorization: "Bearer " + token, "X-Offset": "0" },
+        body: "x",
+      });
+      return r.status;
+    }, sid);
+    expect(chunkStatus).toBe(410);
+
+    await tray.getByRole("button", { name: "×" }).click();
+    await expect(tray).toHaveCount(0);
+  });
+
   test("drop onto the upload tray inherits the last job's folder/chat and uploads without the dialog", async ({ page }) => {
     await login(page);
     await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
@@ -266,6 +317,15 @@ test.describe.serial("panel smoke", () => {
     // clear finished jobs cleans the tray
     await tray.getByRole("button", { name: "پاک‌سازی تمام‌شده‌ها" }).click();
     await expect(tray).toHaveCount(0);
+
+    // server-side cancel too: the session must be gone (DELETE → 410 on re-cancel)
+    await page.evaluate(async () => {
+      const token = localStorage.getItem("td_token");
+      const { items } = await fetch("/api/v1/files?limit=50", { headers: { Authorization: "Bearer " + token } }).then((r) => r.json());
+      for (const f of items.filter((x) => x.name === "e2e-tray.txt")) {
+        await fetch("/api/v1/files/" + f.id + "?purge=true", { method: "DELETE", headers: { Authorization: "Bearer " + token } });
+      }
+    });
   });
 
   test("storage channels card lists dedicated channel with per-type stats", async ({ page }) => {

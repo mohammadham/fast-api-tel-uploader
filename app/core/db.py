@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
   offset INTEGER NOT NULL DEFAULT 0,
   folder_path TEXT NOT NULL DEFAULT '',
   storage_chat TEXT NOT NULL DEFAULT '',
+  uploader TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS eitaa_accounts (
@@ -350,6 +351,7 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
   size INTEGER NOT NULL,
   mime TEXT NOT NULL DEFAULT 'application/octet-stream',
   offset INTEGER NOT NULL DEFAULT 0,
+  uploader TEXT NOT NULL DEFAULT '',
   created_at DOUBLE PRECISION NOT NULL
 );
 CREATE TABLE IF NOT EXISTS eitaa_accounts (
@@ -467,6 +469,7 @@ class Database:
             "ALTER TABLE files ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL",
             "ALTER TABLE upload_sessions ADD COLUMN folder_path TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE upload_sessions ADD COLUMN storage_chat TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE upload_sessions ADD COLUMN uploader TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE files ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN last_backup_message_id INTEGER",
             "ALTER TABLE channels ADD COLUMN last_backup_at REAL",

@@ -131,7 +131,7 @@ async def create_session(request: Request, body: SessionIn, key=Depends(get_api_
     session_id = new_id("us")
     await UploadSessionRepo(db).create(
         session_id, name, body.size, body.mime or mimetypes.guess_type(name)[0] or "application/octet-stream",
-        folder_path=folder_path, storage_chat=storage_chat,
+        folder_path=folder_path, storage_chat=storage_chat, uploader=f"key:{key['id']}",
     )
     os.makedirs(s.final_tmp_dir(), exist_ok=True)
     open(os.path.join(s.final_tmp_dir(), f"{session_id}.part"), "wb").close()
@@ -157,6 +157,8 @@ async def upload_chunk(
         raise HTTPException(status_code=400, detail="X-Offset must be an integer")
     offset = int(raw_offset)
     cur = int(sess["offset"])
+    if cur < 0:
+        return JSONResponse(status_code=410, content={"detail": "upload session canceled"})
     if offset != cur:
         return JSONResponse(status_code=409, content={"detail": "offset mismatch", "expected_offset": cur})
     body = await request.body()
@@ -185,6 +187,34 @@ async def upload_chunk(
         resp["file_id"] = file_id
         await repo.delete(session_id)
     return resp
+
+
+@router.delete("/upload/session/{session_id}")
+async def cancel_session(session_id: str, key=Depends(get_api_key), db=Depends(get_db)):
+    """Cancel an in-flight resumable upload: tombstone the session (so racing
+    PATCH chunks are rejected with 410) and delete the .part tmp file.
+
+    Only the key that created the session (or an admin) may cancel it.
+    """
+    require_scope(key, "write")
+    repo = UploadSessionRepo(db)
+    sess = await repo.get(session_id)
+    if not sess:
+        raise HTTPException(status_code=404, detail="session not found")
+    principal = str(key.get("id") or "")
+    uploader = str(sess.get("uploader") or "")
+    if uploader and uploader != f"key:{principal}":
+        raise HTTPException(status_code=403, detail="session belongs to another key")
+    removed = await repo.mark_canceled(session_id)
+    await db.audit(f"key:{principal}", "upload.cancel", target=session_id, details=f"name={sess.get('name', '')}")
+    if not removed:
+        # already finished (and deleted) or already canceled — nothing to clean
+        raise HTTPException(status_code=410, detail="session no longer active")
+    try:
+        os.unlink(os.path.join(get_settings().final_tmp_dir(), f"{session_id}.part"))
+    except OSError:
+        pass
+    return {"status": "canceled", "session_id": session_id}
 
 
 @router.get("")
