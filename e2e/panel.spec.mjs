@@ -138,8 +138,10 @@ test.describe.serial("panel smoke", () => {
     const newRow = page.locator("main section:visible table tbody tr", { hasText: "e2e-smoke.txt" }).first();
     await expect(newRow).toBeVisible();
 
-    // real progress bar element exists with aria
-    await expect(page.locator(".progress-track")).toHaveCount(0); // hidden after finish
+    // the old inline progress bar is gone (uploads live in the tray now);
+    // wait for the dialog flow's job to finish so only finished jobs remain
+    await expect(page.locator("#upload-tray .progress-track")).toHaveCount(1); // tray bar exists
+    await expect(page.locator("#upload-tray").getByText("صف شد")).toBeVisible();
 
     // leave no residue for the storage-channels assertions later in the suite
     await page.evaluate(async () => {
@@ -171,6 +173,9 @@ test.describe.serial("panel smoke", () => {
     await expect(page.locator("dialog:visible h3", { hasText: "آپلود فایل" })).toBeVisible();
     await expect(page.locator("dialog:visible p", { hasText: "e2e-dragdrop.txt" })).toBeVisible();
     await page.locator("dialog:visible button", { hasText: "شروع آپلود" }).click();
+    // persistent tray shows the job and it finishes even though we never kept the dialog open
+    const tray = page.locator("#upload-tray");
+    await expect(tray.getByText("e2e-dragdrop.txt")).toBeVisible();
     await expect(page.locator(".toast")).toContainText("صف شد: f_");
     const newRow = page.locator("main section:visible table tbody tr", { hasText: "e2e-dragdrop.txt" }).first();
     await expect(newRow).toBeVisible();
@@ -183,6 +188,33 @@ test.describe.serial("panel smoke", () => {
         await fetch(`/api/v1/files/${f.id}?purge=true`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
       }
     });
+  });
+
+  test("upload tray keeps uploads running after the dialog closes and allows cancel", async ({ page }) => {
+    await login(page);
+    await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+
+    // start an upload from the dialog
+    await page.locator("section:visible button", { hasText: "آپلود جدید" }).click();
+    await page.locator("dialog:visible input[type='file']").setInputFiles({
+      name: "e2e-tray.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("tray upload " + Date.now()),
+    });
+    await page.locator("dialog:visible button", { hasText: "شروع آپلود" }).click();
+
+    // tray appears immediately, outside any dialog, showing name + progress
+    const tray = page.locator("#upload-tray");
+    await expect(tray.getByText("e2e-tray.txt")).toBeVisible();
+    await expect(tray.locator(".progress-track")).toBeVisible();
+
+    // wait until done, then the badge flips to "صف شد" and a dismiss × appears
+    await expect(tray.getByText("صف شد")).toBeVisible({ timeout: 15000 });
+    await expect(tray.getByRole("button", { name: "×" })).toBeVisible();
+
+    // clear finished jobs cleans the tray
+    await tray.getByRole("button", { name: "پاک‌سازی تمام‌شده‌ها" }).click();
+    await expect(tray).toHaveCount(0);
   });
 
   test("storage channels card lists dedicated channel with per-type stats", async ({ page }) => {

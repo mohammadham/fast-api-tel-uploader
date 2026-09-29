@@ -86,3 +86,8 @@ powershell -NoProfile -Command '$env:TGDRIVE_FAKE_TG="1"; $env:TGDRIVE_DATA_DIR=
 - Dropping files on the files tab opens the SAME upload dialog (uploadDlg) prefilled: folder = filesFolderDraft (current folder), channel = active channel filter ('' when default-filter so the key/system default wins); multi-file drop → input now multiple, dialog lists count+total size; uploadStart queues first file (existing per-file flow).
 - dragenter/leave depth counter guards the overlay flicker; overlay hidden while dialog open; drop while trash view visible switches filesTrashed off (uploads never target trash); section got position:relative so the overlay covers only the section.
 - e2e: new test dispatches dragenter+drop with a DataTransfer (playwright dispatchEvent) asserting overlay → dialog → queued file. 13 e2e + 157 pytest; bundle index-BREDMSzH.js.
+
+## Persistent upload tray (2026-09-29, round 9)
+- uploadJobs reactive array + runUploadJob: «شروع آپلود» hands files to the tray and CLOSES the dialog immediately — uploads continue in background (one AbortController per job). doUpload(file, folder, chat, job) updates job.pct/job.speed (legacy uploadPct globals kept for the never-shown inline bar; startResumableUpload/cancelXHR legacy untouched).
+- #upload-tray fixed bottom-left: active/total counters, per-job name+folder/channel tags+badge (در حال آپلود/صف شد/لغو شد/خطا), per-job progress-track with % and MB/s, per-job cancel (لغو) for uploading, × dismiss for finished, «پاک‌سازی تمام‌شده‌ها» clears non-active.
+- e2e: tray test (visible outside dialog → done badge → dismiss → cleanup) + drag&drop now asserts the tray; updated old upload test's "no progress-track" assertion (inline bar replaced by tray). 14 e2e + 157 pytest; bundle index-D4foyWVf.js.

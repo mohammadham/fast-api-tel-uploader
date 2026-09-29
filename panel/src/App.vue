@@ -1011,6 +1011,31 @@
 
     <!-- Toast -->
     <div class="toast" :class="{error: toast.err}" v-show="toast.msg" role="status" aria-live="polite">{{ toast.msg }}</div>
+
+    <!-- Persistent upload tray: lives OUTSIDE the dialog; uploads keep going when the dialog closes -->
+    <div v-if="uploadJobs.length" id="upload-tray" class="card" style="position:fixed;bottom:14px;left:14px;width:340px;max-width:calc(100vw - 28px);z-index:80;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.35)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <b style="font-size:13px">آپلودها ({{ uploadJobs.filter(j => j.status === 'uploading').length }} فعال / {{ uploadJobs.length }})</b>
+        <button class="ghost" style="padding:2px 8px;font-size:11px" @click="clearFinishedUploads" :disabled="!uploadJobs.some(j => j.status !== 'uploading')">پاک‌سازی تمام‌شده‌ها</button>
+      </div>
+      <div v-for="j in uploadJobs" :key="j.id" style="padding:6px 0;border-top:1px solid var(--border,#2a2f3a)">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span class="muted" dir="ltr" style="font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="j.name">{{ j.name }}</span>
+          <span v-if="j.folder" class="tag" style="font-size:10px" dir="ltr">{{ j.folder }}</span>
+          <span v-if="j.chat" class="tag" style="font-size:10px" dir="ltr">{{ j.chat }}</span>
+          <span class="badge" :class="j.status" style="font-size:10px">{{ j.status === 'uploading' ? "در حال آپلود" : j.status === "done" ? "صف شد" : j.status === "canceled" ? "لغو شد" : "خطا" }}</span>
+          <button v-if="j.status === 'uploading'" class="ghost" style="padding:1px 7px;font-size:11px" @click="cancelUploadJob(j)">لغو</button>
+          <button v-else class="ghost" style="padding:1px 7px;font-size:11px" @click="dismissUploadJob(j)">×</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:3px">
+          <span class="progress-track" style="flex:1" role="progressbar" :aria-valuenow="j.pct" aria-valuemin="0" aria-valuemax="100">
+            <span class="progress-fill" :style="{ width: j.pct + '%', background: j.status === 'error' ? 'var(--err,#EF4444)' : j.status === 'canceled' ? 'var(--warn,#F59E0B)' : undefined }"></span>
+          </span>
+          <span class="muted" style="font-size:11px;min-width:64px;text-align:left">{{ j.pct }}%<span v-if="j.status === 'uploading' && j.speed > 0"> • {{ j.speed.toFixed(1) }} MB/s</span></span>
+        </div>
+        <p v-if="j.error" class="err" style="margin:2px 0 0;font-size:11px">{{ j.error }}</p>
+      </div>
+    </div>
   </template>
 </template>
 
@@ -2162,6 +2187,17 @@ const doLogin = submitLogin;
       for (const c of channels.value) if (!opts.some(o => o.value === c.chat)) opts.push({ value: c.chat, label: (c.label ? c.label + " — " : "") + c.chat });
       return opts;
     });
+    /* persistent upload tray state: each queued file becomes a job that runs
+       INDEPENDENT of the dialog — closing the dialog never aborts an upload */
+    const uploadJobs = ref([]);
+    let uploadJobSeq = 0;
+    function clearFinishedUploads() { uploadJobs.value = uploadJobs.value.filter((j) => j.status === "uploading"); }
+    function dismissUploadJob(j) { uploadJobs.value = uploadJobs.value.filter((x) => x.id !== j.id); }
+    function cancelUploadJob(j) {
+      if (j.status !== "uploading") return;
+      j.status = "canceled";
+      if (j.controller) { try { j.controller.abort(); } catch (e) { /* already done */ } }
+    }
     function uploadPick() { loaders.channels(); switchTab("files"); uploadDlg.open = true; uploadDlg.files = []; }
     function onUploadFileChosen(ev) { uploadDlg.files = Array.from(ev.target.files || []); ev.target.value = ""; }
     /* drag & drop onto the files tab → same upload dialog (folder/channel preserved) */
@@ -2182,22 +2218,41 @@ const doLogin = submitLogin;
     }
     async function uploadStart() {
       if (!uploadDlg.files.length) { uploadDlg.msg = "فایل را انتخاب کنید"; return; }
-      uploadDlg.busy = true; uploadDlg.msg = "";
-      try {
-        const fid = await doUpload(uploadDlg.files[0], uploadDlg.folder.trim(), uploadDlg.chat);
-        showToast("صف شد: " + fid);
-        uploadDlg.open = false;
-        uploadDlg.files = [];
-        filesFolderDraft.value = uploadDlg.folder.trim();
-        loaders.files();
-      } catch (e) { uploadDlg.msg = e.message; }
-      finally { uploadDlg.busy = false; }
+      const folder = uploadDlg.folder.trim();
+      const chat = uploadDlg.chat;
+      const dropped = uploadDlg.files;
+      // hand the files over to the persistent tray and close the dialog —
+      // the transfers continue in the background
+      for (const f of dropped) {
+        const job = { id: ++uploadJobSeq, name: f.name, folder, chat, pct: 0, speed: 0, status: "uploading", error: "", controller: new AbortController() };
+        uploadJobs.value.push(job);
+        runUploadJob(job, f);
+      }
+      uploadDlg.busy = false;
+      uploadDlg.files = [];
+      uploadDlg.open = false;
+      filesFolderDraft.value = folder;
     }
-    async function doUpload(file, folderPath, storageChat) {
+    async function runUploadJob(job, file) {
+      try {
+        const fid = await doUpload(file, job.folder, job.chat, job);
+        job.status = "done";
+        job.pct = 100;
+        showToast("صف شد: " + fid);
+        loaders.files();
+      } catch (e) {
+        if (job.status === "canceled") return; // user-initiated abort
+        job.status = "error";
+        job.error = e.message || "آپلود ناموفق";
+      }
+    }
+    async function doUpload(file, folderPath, storageChat, job = null) {
       // Create upload session (original filename is kept verbatim; the server
       // only strips unsafe chars — no renaming)
+      const ctrl = job ? job.controller : null;
       const r = await fetch("/api/v1/files/upload/session", {
         method: "POST",
+        signal: ctrl ? ctrl.signal : undefined,
         headers: { "Authorization": "Bearer " + token.value, "Content-Type": "application/json", ...(folderPath ? { "X-Folder": folderPath } : {}), ...(storageChat ? { "X-Storage-Chat": storageChat } : {}) },
         body: JSON.stringify({ name: file.name, size: file.size, mime: file.type || "application/octet-stream" })
       });
@@ -2210,9 +2265,11 @@ const doLogin = submitLogin;
       // Upload chunks; the completing chunk response carries the queued file_id
       let result = null;
       while (!completed) {
+        if (ctrl && ctrl.signal.aborted) throw new DOMException("aborted", "AbortError");
         const chunk = file.slice(currentOffset, Math.min(currentOffset + chunk_size, file.size));
         const r = await fetch("/api/v1/files/upload/session/" + session_id, {
           method: "PATCH",
+          signal: ctrl ? ctrl.signal : undefined,
           headers: { "Authorization": "Bearer " + token.value, "X-Offset": currentOffset },
           body: chunk
         });
@@ -2222,10 +2279,13 @@ const doLogin = submitLogin;
         result = await r.json();
         currentOffset = result.offset;
         completed = result.completed;
-        // live progress + speed from the actual session offset
-        uploadPct.value = file.size ? Math.min(100, Math.round((currentOffset / file.size) * 100)) : 100;
+        // live progress + speed from the actual session offset (per-job when
+        // running from the tray, legacy globals kept for the inline bar)
+        const pct = file.size ? Math.min(100, Math.round((currentOffset / file.size) * 100)) : 100;
         const secs = (Date.now() - t0) / 1000;
-        if (secs > 0.3) uploadSpeed.value = (currentOffset / 1048576 / secs);
+        const speed = secs > 0.3 ? (currentOffset / 1048576 / secs) : 0;
+        if (job) { job.pct = pct; job.speed = speed; }
+        else { uploadPct.value = pct; uploadSpeed.value = speed; }
       }
 
       // the completing chunk response carries the queued file_id
