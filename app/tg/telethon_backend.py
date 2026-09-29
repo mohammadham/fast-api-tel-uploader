@@ -46,9 +46,29 @@ class TelethonBackend(BackendClient):
     async def start(self) -> None:
         if self._started:
             return
-        await asyncio.to_thread(self._client.connect)
-        if not await asyncio.to_thread(self._client.is_user_authorized):
+        # Telethon's API is async — these MUST be awaited on the event loop.
+        # (asyncio.to_thread(self._client.connect) only CREATED the coroutine
+        # without ever running it: start() returned with the client still
+        # disconnected → every later request failed with "Cannot send
+        # requests while disconnected".)
+        await self._client.connect()
+        if not await self._client.is_user_authorized():
             raise TransferError("session not authorized")
+        # A fresh StringSession has an empty entity cache — numeric chat ids
+        # (e.g. the -100… storage channel) fail to resolve with "Cannot find
+        # any entity corresponding to …". One dialogs fetch populates the
+        # cache with access hashes for every chat the account is in; runs once
+        # per backend instance (_started guard below).
+        try:
+            # 500: dialogs are ordered by recency and a storage channel the
+            # account rarely posts to can sit deep in the list (200 was not
+            # enough in live testing → entity resolution still failed)
+            n = 0
+            async for _ in self._client.iter_dialogs(limit=500):
+                n += 1
+            log.info("dialog cache warmed for %s (%s dialogs)", self.id, n)
+        except Exception as exc:
+            log.warning("dialog cache warm-up failed for %s: %s", self.id, exc)
         self._started = True
 
     def _location(self, message):
@@ -57,11 +77,25 @@ class TelethonBackend(BackendClient):
             raise TransferError("message has no document")
         return doc
 
+    def _chat(self, chat: str):
+        """Normalize the chat arg for Telethon.
+
+        Numeric ids arrive as STRINGS from the DB/settings/queue ("-100…").
+        Telethon's get_peer treats a numeric *string* as a user PHONE number
+        ("Cannot find any entity corresponding to …") — it must be an int to
+        resolve as a channel/chat via the entity cache. "me"/usernames pass
+        through untouched. Bot API is unaffected (it wants strings).
+        """
+        chat = (chat or "").strip() or self.storage_chat
+        if chat.lstrip("-").isdigit():
+            return int(chat)
+        return chat
+
     async def send_document(self, chat: str, path: str, name: str, mime: str, caption: str = "") -> dict:
         try:
             await self.start()
             msg = await fast_transfer.send_file_message(
-                self._client, chat or self.storage_chat, path, caption=caption, file_name=name
+                self._client, self._chat(chat), path, caption=caption, file_name=name
             )
             doc = self._location(msg)
             return {"message_id": int(msg.id), "size": int(getattr(doc, "size", os.path.getsize(path)))}
@@ -82,7 +116,7 @@ class TelethonBackend(BackendClient):
         try:
             await self.start()
             msg = await self._client.get_messages(
-                chat or self.storage_chat, ids=message_id
+                self._chat(chat), ids=message_id
             )
             if msg is None or msg.document is None:
                 raise TransferError("message/document not found")
@@ -103,13 +137,13 @@ class TelethonBackend(BackendClient):
     async def delete_message(self, message_id: int, chat: str) -> None:
         try:
             await self.start()
-            await fast_transfer.delete_messages(self._client, chat or self.storage_chat, [message_id])
+            await fast_transfer.delete_messages(self._client, self._chat(chat), [message_id])
         except Exception as exc:
             raise _map_error(exc) from exc
 
     async def close(self) -> None:
         try:
-            await asyncio.to_thread(self._client.disconnect)
+            await self._client.disconnect()
         except Exception:
             pass
         self._started = False
@@ -141,12 +175,16 @@ class BotBackend(BackendClient):
             raise SendFailure(desc or f"bot api error {resp.status_code}")
         return data["result"]
 
-    async def send_document(self, chat: str, path: str, name: str, mime: str) -> dict:
+    async def send_document(self, chat: str, path: str, name: str, mime: str, caption: str = "") -> dict:
+        # caption kwarg keeps BotBackend compatible with the shared BackendClient
+        # contract (channel probe/backup pass captions; Bot API supports them)
         try:
             with open(path, "rb") as fh:
                 files = {"document": (name, fh, mime or "application/octet-stream")}
                 resp = await self._http.post(
-                    f"/bot{self._token}/sendDocument", data={"chat_id": chat}, files=files
+                    f"/bot{self._token}/sendDocument",
+                    data={"chat_id": chat, **({"caption": caption} if caption else {})},
+                    files=files,
                 )
             data = resp.json()
             if not data.get("ok"):

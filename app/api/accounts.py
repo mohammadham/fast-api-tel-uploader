@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..core.config import get_settings
+from ..core.config import Settings, get_settings
 from ..core.models import AccountRepo, new_id
 from ..core.state import get_db, state
 from .deps import get_client_ip, get_current_admin
@@ -53,10 +53,37 @@ async def list_accounts(_: str = Depends(get_current_admin), db=Depends(get_db))
     return {"items": out}
 
 
+def _effective_tg_settings() -> "Settings":
+    """Env settings overlaid with the panel's runtime DB overrides.
+
+    Mirrors TGManager._settings(): the panel saves tg_api_id/tg_api_hash/fake_tg
+    into the settings table, so "real mode" configured from the UI must be
+    honored here too — reading bare get_settings() made login_start think it
+    was still in fake-TG (or use empty credentials) after the user switched
+    modes from the panel, and the code request was never sent.
+    """
+    s = get_settings()
+    try:
+        from ..core.settings_service import runtime_settings
+
+        cache = runtime_settings()._cache
+        if cache:
+            if "fake_tg" in cache:
+                s.fake_tg = bool(int(cache["fake_tg"] or 0))
+            if cache.get("tg_api_id"):
+                s.tg_api_id = int(cache["tg_api_id"])
+            if cache.get("tg_api_hash"):
+                s.tg_api_hash = str(cache["tg_api_hash"])
+    except Exception:
+        pass
+    return s
+
+
 @router.post("/login/start")
 async def login_start(body: StartIn, admin: str = Depends(get_current_admin), db=Depends(get_db)):
-    s = get_settings()
+    s = _effective_tg_settings()
     login_id = new_id("login")
+    await gc_logins()  # drop stale pending logins + disconnect their clients
     if s.fake_tg:
         # auto-complete in fake mode
         session_enc = _fake_session(body.phone)
@@ -72,16 +99,32 @@ async def login_start(body: StartIn, admin: str = Depends(get_current_admin), db
         return {"login_id": "", "status": "ready", "account_id": acc_id}
 
     if not s.tg_api_id or not s.tg_api_hash:
-        raise HTTPException(status_code=400, detail="TGDRIVE_TG_API_ID / TGDRIVE_TG_API_HASH not configured")
+        raise HTTPException(status_code=400, detail="API ID / API Hash تلگرام تنظیم نشده — ابتدا در تب تنظیمات وارد کنید")
     try:
         from telethon import TelegramClient
         from telethon.sessions import StringSession
 
-        client = TelegramClient(StringSession(), s.tg_api_id, s.tg_api_hash)
-        await asyncio.to_thread(client.connect)
-        sent = await asyncio.to_thread(
-            client.send_code_request, body.phone.strip()
-        )
+        # honor the active proxy (same selector the backends use) — without it
+        # send_code_request silently times out in regions where telegram is
+        # blocked and the user just sees "no code arrived"
+        proxy = None
+        try:
+            from ..core.security import decrypt_str
+            from ..services.proxy_service import get_active_proxy, build_telethon_proxy
+
+            prow = await get_active_proxy(db)
+            if prow:
+                prow["_password_plain"] = decrypt_str(prow["password_enc"]) if prow.get("password_enc") else ""
+                proxy = build_telethon_proxy(prow)
+        except Exception:
+            proxy = None
+        client = TelegramClient(StringSession(), s.tg_api_id, s.tg_api_hash, proxy=proxy)
+        # Telethon's API is async — these MUST be awaited on the event loop.
+        # The old asyncio.to_thread(...) wrapping silently created the coroutine
+        # without ever running it: login_start returned "code_sent" instantly and
+        # no SMS/telegram code ever went out.
+        await client.connect()
+        sent = await client.send_code_request(body.phone.strip())
     except Exception as exc:
         if type(exc).__name__ == "PhoneNumberInvalidError":
             raise HTTPException(status_code=400, detail="invalid phone number format (use +countrycode...)")
@@ -90,8 +133,44 @@ async def login_start(body: StartIn, admin: str = Depends(get_current_admin), db
         if type(exc).__name__ == "FloodWaitError":
             raise HTTPException(status_code=429, detail=f"telegram flood: retry after {getattr(exc, 'seconds', 60)}s")
         raise HTTPException(status_code=400, detail=f"telegram error: {exc}")
-    _logins[login_id] = {"client": client, "phone": body.phone.strip(), "ts": time.time(), "label": body.label}
+    _logins[login_id] = {
+        "client": client,
+        "phone": body.phone.strip(),
+        "ts": time.time(),
+        "label": body.label,
+        "pw_attempts": 0,
+    }
     return {"login_id": login_id, "status": "code_sent"}
+
+
+class ResendIn(BaseModel):
+    login_id: str
+
+
+@router.post("/login/resend")
+async def login_resend(body: ResendIn, admin: str = Depends(get_current_admin)):
+    """Re-send the login code for a PENDING login (same client/session), capped.
+
+    The panel only offers this after its 2-minute cooldown; the server keeps its
+    own counter so the cap holds regardless of the client.
+    """
+    entry = _logins.get(body.login_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="login session not found")
+    if entry.get("code_resends", 0) >= MAX_CODE_RESENDS:
+        raise HTTPException(status_code=429, detail="حداکثر ۳ بار ارسال مجدد کد مجاز است — دوباره تلاش کنید بعداً")
+    client = entry["client"]
+    try:
+        if not client.is_connected():
+            await client.connect()
+        await client.send_code_request(entry["phone"])
+    except Exception as exc:
+        if type(exc).__name__ == "FloodWaitError":
+            raise HTTPException(status_code=429, detail=f"تلگرام محدودیت زمانی گذاشته — بعد از {getattr(exc, 'seconds', 60)} ثانیه تلاش کنید")
+        raise HTTPException(status_code=400, detail=f"telegram error: {exc}")
+    entry["code_resends"] = entry.get("code_resends", 0) + 1
+    entry["ts"] = time.time()
+    return {"ok": True, "resends_left": MAX_CODE_RESENDS - entry["code_resends"]}
 
 
 @router.post("/login/complete")
@@ -100,43 +179,63 @@ async def login_complete(body: CompleteIn, admin: str = Depends(get_current_admi
     if not entry:
         raise HTTPException(status_code=404, detail="login session not found")
     client = entry["client"]
+    if body.password and not body.code:
+        # 2FA step: cap attempts per login_id so brute-forcing the cloud
+        # password through this API is not possible
+        if entry.get("pw_attempts", 0) >= MAX_PASSWORD_ATTEMPTS:
+            await _drop_login(body.login_id, client)
+            raise HTTPException(status_code=429, detail="تعداد تلاش‌های رمز 2FA بیش از حد مجاز — لاگین را از ابتدا شروع کنید")
     try:
         if body.code:
             try:
-                await asyncio.to_thread(
-                    client.sign_in, entry["phone"], body.code.strip()
-                )
+                # Telethon's API is async — await directly (same fix as
+                # login_start; to_thread() here never ran the coroutine).
+                await client.sign_in(entry["phone"], body.code.strip())
             except Exception as exc:
                 name = type(exc).__name__
                 if name == "SessionPasswordNeededError":
+                    entry["awaiting_password"] = True
                     return {"login_id": body.login_id, "status": "password_needed"}
                 if name == "PhoneCodeExpiredError":
                     _logins.pop(body.login_id, None)
                     try:
-                        await asyncio.to_thread(client.disconnect)
+                        await client.disconnect()
                     except Exception:
                         pass
-                    raise HTTPException(status_code=400, detail="code expired — please start the login again")
+                    raise HTTPException(status_code=400, detail="کد منقضی شده — لطفاً لاگین را از ابتدا شروع کنید")
                 if name == "PhoneCodeInvalidError":
-                    raise HTTPException(status_code=400, detail="invalid code")
+                    raise HTTPException(status_code=400, detail="کد وارد شده اشتباه است")
                 raise
         elif body.password:
             try:
-                await asyncio.to_thread(client.sign_in, password=body.password)
+                await client.sign_in(password=body.password)
             except Exception as exc:
                 if type(exc).__name__ == "PasswordHashInvalidError":
-                    raise HTTPException(status_code=400, detail="invalid 2FA password")
+                    entry["pw_attempts"] = entry.get("pw_attempts", 0) + 1
+                    left = MAX_PASSWORD_ATTEMPTS - entry["pw_attempts"]
+                    if left <= 0:
+                        await _drop_login(body.login_id, client)
+                        raise HTTPException(status_code=429, detail="تعداد تلاش‌های رمز 2FA بیش از حد مجاز — لاگین را از ابتدا شروع کنید")
+                    raise HTTPException(status_code=400, detail=f"رمز 2FA اشتباه است — {left} تلاش باقی مانده")
                 raise
         else:
-            raise HTTPException(status_code=400, detail="code or password required")
+            raise HTTPException(status_code=400, detail="کد یا رمز لازم است")
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"telegram error: {exc}")
 
-    session_string = client.session.save()  # StringSession
+    # Telethon's async sign_in updates the session (auth key) server-side too;
+    # persist the post-login StringSession ("1:B..." form) so the account can
+    # reconnect later without this login flow.
+    session_string = str(client.session.save())
+    # a session that is not actually authorized would just fail on every future
+    # backend start — fail the login loudly instead of storing a dead account
+    if not getattr(client, "is_user_authorized", lambda: True)():
+        await _drop_login(body.login_id, client)
+        raise HTTPException(status_code=400, detail="ورود کامل نشد (سشن مجاز نیست) — دوباره تلاش کنید")
     try:
-        await asyncio.to_thread(client.disconnect)
+        await client.disconnect()
     except Exception:
         pass
     from ..core.security import encrypt_str
@@ -145,18 +244,43 @@ async def login_complete(body: CompleteIn, admin: str = Depends(get_current_admi
     acc_id = await repo.create(
         label=entry.get("label") or f"acc-{entry['phone'][-4:]}",
         phone=entry["phone"],
-        session_enc=encrypt_str(str(session_string)),
+        session_enc=encrypt_str(session_string),
         is_premium=bool(getattr(client, "is_premium", False)),
     )
-    await repo.set_session(acc_id, encrypt_str(str(session_string)), "ready")
+    await repo.set_session(acc_id, encrypt_str(session_string), "ready")
     _logins.pop(body.login_id, None)
     if state.manager:
-        await state.manager.refresh_one_account(acc_id)
+        # best-effort: the account row is already persisted — a failed initial
+        # connect (proxy hiccup, session not ready yet) must NOT turn the
+        # successful login into a 500 the panel misreads as "login failed"
+        try:
+            await state.manager.refresh_one_account(acc_id)
+        except Exception as exc:
+            from ..core.obs import log as _log
+
+            _log.warning("post-login refresh for account %s failed (account saved): %s", acc_id, exc)
     return {"login_id": "", "status": "ready", "account_id": acc_id}
+
+
+# ── login flow helpers ──────────────────────────────────────────
+MAX_PASSWORD_ATTEMPTS = 3
+MAX_CODE_RESENDS = 3
+LOGIN_TTL_SECONDS = 600  # pending login lifetime; panel's resend window is shorter
 
 
 def _fake_session(phone: str) -> str:
     return f"fake-session::{phone}::{secrets.token_hex(8)}"
+
+
+async def _drop_login(login_id: str, client=None) -> None:
+    """Forget a pending login and disconnect its client (best-effort)."""
+    entry = _logins.pop(login_id, None)
+    c = client or (entry or {}).get("client")
+    if c is not None:
+        try:
+            await c.disconnect()
+        except Exception:
+            pass
 
 
 @router.patch("/{account_id}")
@@ -241,17 +365,8 @@ async def reset_account_state(account_id: int, admin: str = Depends(get_current_
     return {"ok": True, "reconnected": True}
 
 
-# cleanup old login attempts periodically (simple, on access)
-def _gc_logins() -> None:
-    cutoff = time.time() - 600
-    for lid, entry in list(_logins.items()):
-        if entry["ts"] < cutoff:
-            entry["client"] and _safe_disconnect(entry["client"])
-            _logins.pop(lid, None)
-
-
-def _safe_disconnect(client) -> None:
-    try:
-        asyncio.get_event_loop().create_task(asyncio.to_thread(client.disconnect))
-    except Exception:
-        pass
+async def gc_logins() -> None:
+    """Drop stale login attempts (called from login_start) — disconnects clients."""
+    cutoff = time.time() - LOGIN_TTL_SECONDS
+    for lid in [lid for lid, e in _logins.items() if e["ts"] < cutoff]:
+        await _drop_login(lid)

@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 
-from app.api import accounts, admin, auth, bots, eitaa, files, folders, keys, queue as queue_api
+from app.api import accounts, admin, auth, bots, channels, eitaa, files, folders, keys, queue as queue_api
 from app.api.deps import get_current_admin as _admin_dep
 from app.core.config import get_settings
 from app.core.db import Database
@@ -228,6 +228,7 @@ app.include_router(auth.router)
 app.include_router(accounts.router)
 app.include_router(bots.router)
 app.include_router(eitaa.router)
+app.include_router(channels.router)
 app.include_router(keys.router)
 app.include_router(files.router)
 app.include_router(files.public)

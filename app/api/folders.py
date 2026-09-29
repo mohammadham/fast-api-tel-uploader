@@ -113,9 +113,9 @@ async def resolve_folder(path: str = "", principal=Depends(get_admin_or_key), db
 
 
 @router.get("")
-async def list_folders(principal=Depends(get_admin_or_key), db: Database = Depends(get_db)):
+async def list_folders(scope: str = "", principal=Depends(get_admin_or_key), db: Database = Depends(get_db)):
     repo = FolderRepo(db)
-    items = await repo.list()  # includes path + per-folder file stats
+    items = await repo.list(scope=(scope or "").strip())  # includes path + per-folder file stats
     children: dict = {}
     for f in items:
         children.setdefault(f["parent_id"], []).append(f)
@@ -124,6 +124,7 @@ async def list_folders(principal=Depends(get_admin_or_key), db: Database = Depen
         return [
             {
                 "id": f["id"], "name": f["name"], "path": f["path"],
+                "scope": f.get("scope", ""),
                 "file_count": f["file_count"], "total_size": f["total_size"],
                 "created_at": f["created_at"], "children": build(f["id"]),
             }
@@ -137,35 +138,37 @@ class FolderIn(BaseModel):
     name: str = ""            # single folder name (requires parent_id)
     path: str = ""            # OR full nested path: "projects/2026/reports"
     parent_id: Optional[int] = None
+    scope: str = ""           # per-storage-channel partition ('' = global view)
 
 
 @router.post("", status_code=201)
 async def create_folder(body: FolderIn, principal=Depends(get_admin_or_key), db: Database = Depends(get_db)):
     _write_guard(principal)
     repo = FolderRepo(db)
+    scope = (body.scope or "").strip()
     if body.path:
         parts = _clean_path(body.path)
         joined = "/".join(parts)
         try:
-            existing_id = await repo.resolve_path(joined, create=False)
+            existing_id = await repo.resolve_path(joined, create=False, scope=scope)
             if existing_id is not None:
                 row = await repo.get(int(existing_id))
-                return {"id": existing_id, "name": row["name"], "parent_id": row["parent_id"], "created": False}
-            folder_id = await repo.resolve_path(joined, create=True)
+                return {"id": existing_id, "name": row["name"], "parent_id": row["parent_id"], "scope": row["scope"], "created": False}
+            folder_id = await repo.resolve_path(joined, create=True, scope=scope)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         row = await repo.get(int(folder_id))
-        return {"id": folder_id, "name": row["name"], "parent_id": row["parent_id"], "created": True}
+        return {"id": folder_id, "name": row["name"], "parent_id": row["parent_id"], "scope": row["scope"], "created": True}
 
     name = _clean_name(body.name)
     if body.parent_id is not None:
         await _folder_or_404(repo, int(body.parent_id))
-    existing = await repo.find_child(body.parent_id, name)
+    existing = await repo.find_child(body.parent_id, name, scope)
     if existing:
         # idempotent: creating the same folder twice returns the existing one
-        return {"id": existing["id"], "name": existing["name"], "parent_id": existing["parent_id"], "created": False}
-    folder_id = await repo.create(name, body.parent_id)
-    return {"id": folder_id, "name": name, "parent_id": body.parent_id, "created": True}
+        return {"id": existing["id"], "name": existing["name"], "parent_id": existing["parent_id"], "scope": existing["scope"], "created": False}
+    folder_id = await repo.create(name, body.parent_id, scope)
+    return {"id": folder_id, "name": name, "parent_id": body.parent_id, "scope": scope, "created": True}
 
 
 class FolderPatch(BaseModel):

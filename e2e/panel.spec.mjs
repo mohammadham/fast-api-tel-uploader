@@ -122,14 +122,16 @@ test.describe.serial("panel smoke", () => {
     await login(page);
     await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
 
-    // the section's own file-table only (a hidden restore input lives in another card)
-    const uploadInput = page.locator("section input[type='file']").first();
-
-    await uploadInput.setInputFiles({
+    // new flow: dialog asks for file + folder + destination channel
+    await page.locator("section:visible button", { hasText: "آپلود جدید" }).click();
+    await expect(page.locator("dialog:visible h3", { hasText: "آپلود فایل" })).toBeVisible();
+    const dlgInput = page.locator("dialog:visible input[type='file']");
+    await dlgInput.setInputFiles({
       name: "e2e-smoke.txt",
       mimeType: "text/plain",
       buffer: Buffer.from("playwright smoke upload " + Date.now()),
     });
+    await page.locator("dialog:visible button", { hasText: "شروع آپلود" }).click();
 
     // toast confirms queueing, the new file's row appears (fresh list puts it first)
     await expect(page.locator(".toast")).toContainText("صف شد: f_");
@@ -577,9 +579,14 @@ test.describe.serial("panel smoke", () => {
     const row = section.locator("tbody tr", { hasText: "e2e-chan-acc" }).first();
     await expect(row).toBeVisible();
 
-    // open the channel prompt and set a dedicated channel
-    page.once("dialog", (d) => d.accept("@e2e-acc-chan"));
+    // register a channel first so the select dialog has a real option
+    await proxyCall(page, "/api/v1/channels", { method: "POST", body: { chat: "@e2e-acc-chan", label: "e2e chan acc", kind: "storage" } });
+
+    // open the select dialog and pick that channel
     await row.getByRole("button", { name: "کانال", exact: true }).click();
+    const chanDlg = page.locator("dialog:visible", { hasText: "کانال ذخیره‌سازی اکانت" });
+    await chanDlg.locator("select").selectOption("@e2e-acc-chan");
+    await chanDlg.getByRole("button", { name: "ذخیره" }).click();
     await expect(row).toContainText("@e2e-acc-chan");
 
     // backend round-trip confirms persistence
@@ -589,6 +596,10 @@ test.describe.serial("panel smoke", () => {
 
     // cleanup
     await proxyCall(page, `/api/v1/accounts/${acc.id}`, { method: "DELETE" });
+    const { items: chans } = await proxyCall(page, "/api/v1/channels");
+    for (const c of chans) {
+      if (c.chat === "@e2e-acc-chan") await proxyCall(page, `/api/v1/channels/${c.id}`, { method: "DELETE" });
+    }
   });
 });
 

@@ -331,12 +331,80 @@ class EitaaAccountRepo:
         await self.db.execute("DELETE FROM eitaa_accounts WHERE id=?", (eitaa_id,))
 
 
+class ChannelRepo:
+    """Registered storage channels (panel-managed registry + backup bookkeeping).
+
+    A row is a *registered* channel the admin manages from the panel: it can be
+    probed (test transfer via accounts/bots), disabled, and backed up. The
+    backup message_id points at a JSON manifest uploaded to the channel itself
+    (self-describing backup), so restore = download that document, parse, merge.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    async def create(self, chat: str, label: str = "", kind: str = "storage") -> int:
+        sql = "INSERT INTO channels(chat, label, kind, created_at) VALUES(?,?,?,?)"
+        params = (chat, label, kind, now())
+        if self.db.is_sqlite:
+            await self.db.execute(sql, params)
+            return await self.db.last_insert_rowid()
+        row = await self.db.fetch_one(sql + " RETURNING id", params)
+        return int(row["id"]) if row else 0
+
+    async def list(self) -> List[Dict[str, Any]]:
+        return await self.db.fetch_all(
+            "SELECT id, chat, label, kind, enabled, status, last_error,"
+            " last_backup_message_id, last_backup_at, last_backup_bytes, last_backup_files, created_at"
+            " FROM channels ORDER BY id"
+        )
+
+    async def get(self, channel_id: int) -> Optional[Dict[str, Any]]:
+        return await self.db.fetch_one("SELECT * FROM channels WHERE id=?", (channel_id,))
+
+    async def find_by_chat(self, chat: str) -> Optional[Dict[str, Any]]:
+        return await self.db.fetch_one("SELECT * FROM channels WHERE chat=?", (chat,))
+
+    async def update(self, channel_id: int, *, label: Optional[str] = None, kind: Optional[str] = None) -> None:
+        row = await self.get(channel_id)
+        if not row:
+            return
+        await self.db.execute(
+            "UPDATE channels SET label=?, kind=? WHERE id=?",
+            (label if label is not None else row["label"],
+             kind if kind is not None else row["kind"], channel_id),
+        )
+
+    async def set_enabled(self, channel_id: int, enabled: bool) -> None:
+        await self.db.execute("UPDATE channels SET enabled=? WHERE id=?", (int(enabled), channel_id))
+
+    async def set_status(self, channel_id: int, status: str, error: str = "") -> None:
+        await self.db.execute(
+            "UPDATE channels SET status=?, last_error=? WHERE id=?", (status, error[:500], channel_id)
+        )
+
+    async def set_backup(
+        self, channel_id: int, message_id: int, *, bytes: int = 0, files: int = 0
+    ) -> None:
+        await self.db.execute(
+            "UPDATE channels SET last_backup_message_id=?, last_backup_at=?, last_backup_bytes=?, last_backup_files=? WHERE id=?",
+            (message_id, now(), bytes, files, channel_id),
+        )
+
+    async def delete(self, channel_id: int) -> None:
+        await self.db.execute("DELETE FROM channels WHERE id=?", (channel_id,))
+
+
 class FolderRepo:
     """Virtual folders for organizing files (acts like tags with hierarchy).
 
-    A folder is (name, parent_id). The root is parent_id IS NULL. Nested
+    A folder is (name, parent_id, scope). The root is parent_id IS NULL. Nested
     folders are supported: /projects/2026/reports resolves by walking parents;
     names are unique among siblings only (like a real filesystem).
+
+    ``scope`` partitions the tree per storage channel ('' = global/unscoped):
+    a scope-scoped folder tree only shows for that channel and can never clash
+    with another channel's folders of the same name.
     """
 
     MAX_DEPTH = 32
@@ -344,10 +412,14 @@ class FolderRepo:
     def __init__(self, db: Database) -> None:
         self.db = db
 
-    async def list(self) -> List[Dict[str, Any]]:
-        """All folders + aggregated stats + full path of each node."""
+    async def list(self, scope: str = "") -> List[Dict[str, Any]]:
+        """Folders of one scope (default '') + stats + full path of each node.
+
+        The global view (scope='') ALSO includes scoped folders (prefixed
+        "chat:" in the path) so nothing ever disappears from the panel.
+        """
         rows = await self.db.fetch_all(
-            "SELECT id, name, parent_id, created_at FROM folders ORDER BY created_at, id"
+            "SELECT id, name, parent_id, created_at, scope FROM folders ORDER BY created_at, id"
         )
         stats = await self.db.fetch_all(
             "SELECT COALESCE(folder_id, 0) AS fid, COUNT(*) AS n, COALESCE(SUM(size),0) AS bytes"
@@ -355,9 +427,18 @@ class FolderRepo:
         )
         by_id = {r["id"]: r for r in rows}
         stat_map = {int(r["fid"]): (int(r["n"]), int(r["bytes"])) for r in stats}
+
+        def in_scope(r) -> bool:
+            # scoped view → only that scope's tree (its ancestors share the
+            # scope by construction); global view → everything
+            return not scope or r["scope"] == scope
+
+        visible = [r for r in rows if in_scope(r)]
+        vis_ids = {r["id"] for r in visible}
         out = []
-        for r in rows:
-            # resolve full path by walking up (guard against cycles)
+        for r in visible:
+            # resolve full path by walking up (guard against cycles); stop at
+            # invisible ancestors and mark the subtree with its scope tag
             path_parts = []
             cur = r
             seen = set()
@@ -368,6 +449,7 @@ class FolderRepo:
             n, total = stat_map.get(r["id"], (0, 0))
             out.append({
                 "id": r["id"], "name": r["name"], "parent_id": r["parent_id"],
+                "scope": r["scope"],
                 "path": "/".join(reversed(path_parts)),
                 "created_at": r["created_at"],
                 "file_count": n, "total_size": total,
@@ -375,17 +457,23 @@ class FolderRepo:
         return out
 
     async def get(self, folder_id: int) -> Optional[Dict[str, Any]]:
-        return await self.db.fetch_one("SELECT id, name, parent_id, created_at FROM folders WHERE id=?", (folder_id,))
+        return await self.db.fetch_one("SELECT id, name, parent_id, created_at, scope FROM folders WHERE id=?", (folder_id,))
 
-    async def find_child(self, parent_id: Optional[int], name: str) -> Optional[Dict[str, Any]]:
+    async def find_child(self, parent_id: Optional[int], name: str, scope: str = "") -> Optional[Dict[str, Any]]:
         if parent_id is None:
-            return await self.db.fetch_one("SELECT id, name, parent_id, created_at FROM folders WHERE parent_id IS NULL AND name=?", (name,))
-        return await self.db.fetch_one("SELECT id, name, parent_id, created_at FROM folders WHERE parent_id=? AND name=?", (parent_id, name))
+            return await self.db.fetch_one(
+                "SELECT id, name, parent_id, created_at, scope FROM folders WHERE parent_id IS NULL AND name=? AND scope=?",
+                (name, scope),
+            )
+        return await self.db.fetch_one(
+            "SELECT id, name, parent_id, created_at, scope FROM folders WHERE parent_id=? AND name=? AND scope=?",
+            (parent_id, name, scope),
+        )
 
-    async def create(self, name: str, parent_id: Optional[int] = None) -> int:
+    async def create(self, name: str, parent_id: Optional[int] = None, scope: str = "") -> int:
         await self.db.execute(
-            "INSERT INTO folders(name, parent_id, created_at) VALUES(?,?,?)",
-            (name, parent_id, now()),
+            "INSERT INTO folders(name, parent_id, created_at, scope) VALUES(?,?,?,?)",
+            (name, parent_id, now(), scope),
         )
         return await self.db.last_insert_rowid()
 
@@ -426,8 +514,13 @@ class FolderRepo:
             cur = by_id.get(cur["parent_id"])
         return "/".join(reversed(parts))
 
-    async def resolve_path(self, path: str, *, create: bool = False) -> Optional[int]:
-        """'/a/b/c' → id of c; '' or '/' → None (root). Creates missing levels when create=True."""
+    async def resolve_path(self, path: str, *, create: bool = False, scope: str = "") -> Optional[int]:
+        """'/a/b/c' → id of c; '' or '/' → None (root). Creates missing levels when create=True.
+
+        Resolution happens inside one scope: two channels can each have /reports
+        without colliding. Legacy rows (scope='') are matched for backward
+        compat when the requested scope is also ''.
+        """
         parts = [p for p in (path or "").strip().strip("/").split("/") if p]
         if not parts:
             return None
@@ -436,11 +529,11 @@ class FolderRepo:
             name = (raw or "").strip()
             if not name or len(name) > 100 or depth >= self.MAX_DEPTH:
                 raise ValueError("invalid folder path")
-            row = await self.find_child(parent, name)
+            row = await self.find_child(parent, name, scope)
             if row:
                 parent = row["id"]
             elif create:
-                parent = await self.create(name, parent)
+                parent = await self.create(name, parent, scope)
             else:
                 return None
         return parent
@@ -738,10 +831,10 @@ class UploadSessionRepo:
     def __init__(self, db: Database) -> None:
         self.db = db
 
-    async def create(self, session_id: str, name: str, size: int, mime: str, folder_path: str = "") -> None:
+    async def create(self, session_id: str, name: str, size: int, mime: str, folder_path: str = "", storage_chat: str = "") -> None:
         await self.db.execute(
-            "INSERT INTO upload_sessions(id, name, size, mime, offset, folder_path, created_at) VALUES(?,?,?,?,0,?,?)",
-            (session_id, name, size, mime, folder_path, now()),
+            "INSERT INTO upload_sessions(id, name, size, mime, offset, folder_path, storage_chat, created_at) VALUES(?,?,?,?,0,?,?,?)",
+            (session_id, name, size, mime, folder_path, storage_chat, now()),
         )
 
     async def get(self, session_id: str) -> Optional[Dict[str, Any]]:

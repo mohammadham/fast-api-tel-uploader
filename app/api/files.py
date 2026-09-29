@@ -122,8 +122,17 @@ async def create_session(request: Request, body: SessionIn, key=Depends(get_api_
     if _ext_blocked(name, str(await get_runtime(db, "blocked_extensions") or "")):
         raise HTTPException(status_code=415, detail="file type not allowed")
     folder_id, folder_path = await _resolve_folder(db, request.headers.get("x-folder"), request.query_params.get("folder"))
+    # panel can pin the destination channel per-upload (X-Storage-Chat); the
+    # key's own storage_chat stays the default when the header is absent
+    header_chat = (request.headers.get("x-storage-chat") or "").strip()
+    if header_chat and not (header_chat.startswith("@") or header_chat.lstrip("-").isdigit()):
+        raise HTTPException(status_code=400, detail="X-Storage-Chat must be @username or numeric chat id")
+    storage_chat = header_chat or (key.get("storage_chat") or "").strip()
     session_id = new_id("us")
-    await UploadSessionRepo(db).create(session_id, name, body.size, body.mime or mimetypes.guess_type(name)[0] or "application/octet-stream", folder_path=folder_path)
+    await UploadSessionRepo(db).create(
+        session_id, name, body.size, body.mime or mimetypes.guess_type(name)[0] or "application/octet-stream",
+        folder_path=folder_path, storage_chat=storage_chat,
+    )
     os.makedirs(s.final_tmp_dir(), exist_ok=True)
     open(os.path.join(s.final_tmp_dir(), f"{session_id}.part"), "wb").close()
     return {"session_id": session_id, "chunk_size": 8 * 1024 * 1024, "offset": 0}
@@ -164,9 +173,9 @@ async def upload_chunk(
     if done:
         file_id = new_id("f")
         backend = (key.get("backend") or "") or (await get_runtime(db, "default_backend")) or get_settings().default_backend
-        storage_chat = (key.get("storage_chat") or "").strip()
+        storage_chat = (sess.get("storage_chat") if "storage_chat" in sess.keys() else "") or (key.get("storage_chat") or "").strip()
         folder_path = (sess.get("folder_path") or "").strip()
-        folder_id = await FolderRepo(db).resolve_path(folder_path) if folder_path else None
+        folder_id = await FolderRepo(db).resolve_path(folder_path, scope=storage_chat) if folder_path else None
         await FileRepo(db).create(
             file_id, sess["name"], int(sess["size"]), sess["mime"], uploader=f"key:{key['id']}", source="api", backend=backend, folder_id=folder_id
         )
@@ -411,7 +420,7 @@ async def make_share_link(file_id: str, body: ShareIn, request: Request, db=Depe
     )
     await db.audit(f"key:{key['id']}", "link.share", target=file_id, details=slug)
     base = str(request.base_url).rstrip("/")
-    return {"slug": slug, "url": f"{base}/{slug}", "download_url": f"{base}/d/{slug}", "protected": bool(body.password), "max_downloads": link_id and int(body.max_downloads or 0)}
+    return {"slug": slug, "url": f"{base}/{slug}", "download_url": f"{base}/d/{slug}/dl", "protected": bool(body.password), "max_downloads": link_id and int(body.max_downloads or 0)}
 
 
 class LinkPatch(BaseModel):

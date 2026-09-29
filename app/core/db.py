@@ -92,7 +92,8 @@ CREATE TABLE IF NOT EXISTS folders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
-  created_at REAL NOT NULL
+  created_at REAL NOT NULL,
+  scope TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);
 CREATE INDEX IF NOT EXISTS idx_files_storage_chat_created ON files(storage_chat, created_at DESC);
@@ -142,6 +143,7 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
   mime TEXT NOT NULL DEFAULT 'application/octet-stream',
   offset INTEGER NOT NULL DEFAULT 0,
   folder_path TEXT NOT NULL DEFAULT '',
+  storage_chat TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS eitaa_accounts (
@@ -201,6 +203,20 @@ CREATE TABLE IF NOT EXISTS proxies (
   latency_ms REAL NOT NULL DEFAULT -1,
   last_checked_at REAL NOT NULL DEFAULT 0,
   last_error TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS channels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'storage',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'unknown',
+  last_error TEXT NOT NULL DEFAULT '',
+  last_backup_message_id INTEGER,
+  last_backup_at REAL,
+  last_backup_bytes INTEGER NOT NULL DEFAULT 0,
+  last_backup_files INTEGER NOT NULL DEFAULT 0,
   created_at REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_file_parts_file ON file_parts(file_id, idx);
@@ -288,7 +304,8 @@ CREATE TABLE IF NOT EXISTS folders (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
-  created_at DOUBLE PRECISION NOT NULL
+  created_at DOUBLE PRECISION NOT NULL,
+  scope TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS file_parts (
   id SERIAL PRIMARY KEY,
@@ -394,6 +411,20 @@ CREATE TABLE IF NOT EXISTS proxies (
   last_error TEXT NOT NULL DEFAULT '',
   created_at DOUBLE PRECISION NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS channels (
+  id SERIAL PRIMARY KEY,
+  chat TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'storage',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'unknown',
+  last_error TEXT NOT NULL DEFAULT '',
+  last_backup_message_id BIGINT,
+  last_backup_at DOUBLE PRECISION,
+  last_backup_bytes BIGINT NOT NULL DEFAULT 0,
+  last_backup_files INTEGER NOT NULL DEFAULT 0,
+  created_at DOUBLE PRECISION NOT NULL DEFAULT 0
+);
 CREATE INDEX IF NOT EXISTS idx_file_parts_file ON file_parts(file_id, idx);
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
  CREATE INDEX IF NOT EXISTS idx_files_storage_chat_created ON files(storage_chat, created_at DESC);
@@ -435,7 +466,13 @@ class Database:
             "ALTER TABLE api_keys ADD COLUMN storage_chat TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE files ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL",
             "ALTER TABLE upload_sessions ADD COLUMN folder_path TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE upload_sessions ADD COLUMN storage_chat TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE files ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE channels ADD COLUMN last_backup_message_id INTEGER",
+            "ALTER TABLE channels ADD COLUMN last_backup_at REAL",
+            "ALTER TABLE channels ADD COLUMN last_backup_bytes INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE channels ADD COLUMN last_backup_files INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE folders ADD COLUMN scope TEXT NOT NULL DEFAULT ''",
         ):
             try:
                 await self._conn.execute(stmt)

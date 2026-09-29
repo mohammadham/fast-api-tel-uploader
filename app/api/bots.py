@@ -32,6 +32,29 @@ async def add_bot(body: BotIn, admin: str = Depends(get_current_admin), db=Depen
     if len(token) < 30 or ":" not in token:
         raise HTTPException(status_code=400, detail="invalid bot token format")
     s = get_settings()
+    # fake-TG mode: no real Bot API — validate shape only and register the bot
+    # locally (mirrors how TGManager overlays env fake_tg with the runtime DB
+    # override). Without this, adding a bot from the panel always fails with
+    # getMe in dev/test setups.
+    fake_mode = bool(s.fake_tg)
+    try:
+        from ..core.settings_service import runtime_settings
+
+        cache = runtime_settings()._cache
+        if cache and "fake_tg" in cache:
+            fake_mode = bool(int(cache["fake_tg"] or 0))
+    except Exception:
+        pass
+    if fake_mode:
+        bot_id = await BotRepo(db).create(
+            label=body.label or "@fake_bot",
+            token_enc=encrypt_str(token),
+        )
+        await BotRepo(db).set_status(bot_id, "ready")
+        if state.bots:
+            state.bots.start_one(bot_id)
+        await db.audit(admin, "bot.add", target=str(bot_id), details="@fake_bot (fake-tg)")
+        return {"id": bot_id, "username": "fake_bot"}
     base = s.bot_api_base.rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=15) as http:

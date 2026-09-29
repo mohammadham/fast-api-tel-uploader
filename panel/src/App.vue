@@ -130,7 +130,7 @@
                 <td>
                   <button @click="accToggle(a)">{{ a.enabled ? "غیرفعال" : "فعال" }}</button>
                   <button @click="accTest(a)">تست</button>
-                  <button @click="accChat(a)">کانال</button>
+                  <button @click="accChatOpen(a)">کانال</button>
                   <button @click="accReset(a)">ریست</button>
                   <button class="danger" @click="accDelete(a)">حذف</button>
                 </td>
@@ -191,6 +191,60 @@
         </div>
       </section>
 
+      <!-- Channels (storage registry + backup/restore) -->
+      <section v-show="tab === 'channels'">
+        <div class="toolbar">
+          <h3 style="margin:0;flex:1;font-size:16px">کانال‌های ذخیره‌سازی</h3>
+          <button class="ghost" @click="loaders.channels()">به‌روزرسانی</button>
+          <button class="primary" @click="chanDlg.open = true">کانال جدید</button>
+        </div>
+        <p class="muted" style="font-size:12px;margin:0 0 10px">
+          کانال‌هایی که فایل‌ها در آن‌ها ذخیره می‌شوند. «تست» یک ارسال آزمایشی با اکانت‌ها/بات‌ها می‌زند؛
+          «بکاپ» فهرست کامل فایل‌های این کانال را به‌صورت JSON داخل خود کانال ذخیره می‌کند (و یک نسخه هم دانلود می‌شود)؛
+          «بازگردانی» از همان JSON فایل‌ها را به دیتابیس برمی‌گرداند (ادغام؛ ردیف‌های موجود حفظ می‌شوند).
+        </p>
+        <div class="card wide">
+          <table>
+            <thead><tr><th>شناسه</th><th>کانال</th><th>برچسب</th><th>نوع</th><th>وضعیت</th><th>فایل‌ها</th><th>آخرین بکاپ</th><th>عملیات</th></tr></thead>
+            <tbody>
+              <tr v-for="c in channels" :key="c.id">
+                <td>{{ c.id }}</td>
+                <td dir="ltr"><code>{{ c.chat }}</code><span v-if="c.is_system_default" class="tag" style="background:var(--ok,#22C55E);color:#08120b;font-size:10px;margin-inline-start:6px">پیش‌فرض</span></td>
+                <td>{{ c.label || "—" }}</td>
+                <td>{{ c.kind === "eitaa" ? "ایتا" : "تلگرام" }}</td>
+                <td>
+                  <span class="badge" :class="c.status">{{ c.status }}</span>
+                  <span v-if="!c.enabled" class="tag" style="font-size:10px;margin-inline-start:4px">غیرفعال</span>
+                  <div v-if="c.last_error" class="muted" dir="ltr" style="font-size:10px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="c.last_error">{{ c.last_error }}</div>
+                </td>
+                <td>{{ c.files || 0 }} <span class="muted" style="font-size:11px">({{ fmtBytes(c.bytes || 0) }})</span></td>
+                <td class="muted" style="font-size:11px">{{ chanFmtBackup(c) }}</td>
+                <td>
+                  <button :disabled="chanBusy[c.id]" @click="chanTest(c)">{{ chanBusy[c.id] ? "…" : "تست" }}</button>
+                  <button :disabled="chanBusy[c.id]" @click="chanBackup(c)">{{ chanBusy[c.id] ? "…" : "بکاپ" }}</button>
+                  <button :disabled="chanBusy[c.id]" @click="chanRestore(c)">{{ chanBusy[c.id] ? "…" : "بازگردانی" }}</button>
+                  <button @click="openChannelFiles({ chat: c.chat })">فایل‌ها</button>
+                  <button @click="chanRename(c)">برچسب</button>
+                  <button @click="chanToggle(c)">{{ c.enabled ? "غیرفعال" : "فعال" }}</button>
+                  <button class="danger" @click="chanDelete(c)">حذف</button>
+                </td>
+              </tr>
+              <tr v-if="defaultChannelRow && !channels.some(c => c.chat === defaultChannelRow.chat)">
+                <td>۰</td>
+                <td dir="ltr"><code>{{ defaultChannelRow.chat }}</code><span class="tag" style="background:var(--ok,#22C55E);color:#08120b;font-size:10px;margin-inline-start:6px">پیش‌فرض سیستم</span></td>
+                <td>مقصد پیش‌فرض آپلودها</td>
+                <td>تلگرام</td>
+                <td><span class="badge">default</span></td>
+                <td>{{ defaultChannelRow.files }} <span class="muted" style="font-size:11px">({{ fmtBytes(defaultChannelRow.bytes) }})</span></td>
+                <td class="muted" style="font-size:11px">—</td>
+                <td><button @click="openChannelFiles({ chat: defaultChannelRow.chat })">فایل‌ها</button></td>
+              </tr>
+              <tr v-if="!channels.length && !defaultChannelRow"><td colspan="8" class="muted">کانالی ثبت نشده — کانال ذخیره‌سازی (تنظیمات) یا هر کانال دیگری را همین‌جا اضافه کنید</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- Keys -->
       <section v-show="tab === 'keys'">
         <div class="toolbar">
@@ -229,10 +283,10 @@
       <section v-show="tab === 'files'">
         <div class="toolbar">
           <h3 style="margin:0;flex:1;font-size:16px">فایل‌ها</h3>
-          <button class="primary" :disabled="uploadBusy" @click="$refs.fileInput.click()">
-            {{ uploadBusy ? "در حال آپلود..." : "آپلود جدید" }}
+          <button class="primary" :disabled="uploadDlg.busy" @click="uploadPick">
+            {{ uploadDlg.busy ? "در حال آپلود…" : "آپلود جدید" }}
           </button>
-          <input ref="fileInput" type="file" style="display:none" @change="upload">
+          <button class="ghost" @click="loaders.channels(); switchTab('files')">به‌روزرسانی</button>
         </div>
         <div v-if="channelFilter" style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
           <span class="tag" style="font-size:12px">کانال: <b dir="ltr">{{ channelFilter }}</b></span>
@@ -281,6 +335,11 @@
           </select>
           <button class="ghost" :style="filesBlockedOnly ? 'border-color:var(--err);color:var(--err)' : ''" style="padding:5px 10px;font-size:12px" @click="filesBlockedOnly = !filesBlockedOnly; loaders.files()">فقط بن‌شده‌ها</button>
           <button class="ghost" :style="filesTrashed ? 'border-color:var(--warn);color:var(--warn)' : ''" style="padding:5px 10px;font-size:12px" @click="filesTrashed = !filesTrashed; filesOffset = 0; loaders.files()">🗑 زباله‌دان</button>
+          <select v-model="filesChannelPick" style="padding:5px 8px;font-size:13px" @change="applyChannelPick">
+            <option value="">همه کانال‌ها</option>
+            <option v-if="channelsDefaultChat" value="__default__">کانال پیش‌فرض ({{ channelsDefaultChat }})</option>
+            <option v-for="c in channels" :key="c.id" :value="c.chat">{{ c.label ? c.label + " — " : "" }}{{ c.chat }}</option>
+          </select>
           <span class="muted" style="font-size:12px">{{ filesTotal }} فایل</span>
         </div>
         <div v-if="bulkMode" style="margin-bottom:10px;display:flex;gap:8px;align-items:center">
@@ -301,8 +360,8 @@
                 style="padding:4px 6px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;gap:6px"
                 :style="currentFolderId === f.id ? 'background:var(--accent,#3b82f6);color:#fff' : ''"
                 @click="openFolder(f.id)"
-                :title="'مسیر: ' + f.path">
-                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ '\u00A0'.repeat(f.path.split('/').length - 1) + f.name }}</span>
+                :title="'مسیر: ' + f.path + (f.scope ? ' — کانال: ' + f.scope : '')">
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ '\u00A0'.repeat(f.path.split('/').length - 1) + f.name }}<span v-if="f.scope" class="tag" style="font-size:9px;margin-inline-start:4px;background:var(--panel2)">chan</span></span>
                 <span class="muted" style="font-size:11px">{{ f.file_count }}</span>
                 <span style="display:flex;gap:2px">
                   <a href="#" style="font-size:10px;text-decoration:none" title="تغییر نام" @click.prevent.stop="folderRename(f)">✏️</a>
@@ -579,20 +638,59 @@
     </main>
 
     <!-- Dialogs -->
-    <dialog :open="accDlg.open" @close="accDlg.open = false">
+    <dialog :open="accDlg.open" @close="accClose">
       <h3>افزودن اکانت تلگرام</h3>
       <template v-if="accDlg.step === 1">
-        <div class="field"><label>تلفن</label><input v-model="accDlg.phone" type="text" placeholder="+98912..."></div>
-        <div class="field"><label>برچسب (اختیاری)</label><input v-model="accDlg.label" type="text"></div>
-        <button class="primary" style="width:100%" @click="accSend">ارسال کد تایید</button>
+        <div class="field"><label>تلفن</label><input v-model="accDlg.phone" type="text" placeholder="+98912..." :disabled="accDlg.busy"></div>
+        <div class="field"><label>برچسب (اختیاری)</label><input v-model="accDlg.label" type="text" :disabled="accDlg.busy"></div>
+        <button class="primary" style="width:100%" :disabled="accDlg.busy" @click="accSend">
+          <span v-if="accDlg.busy" class="spinner" aria-hidden="true"></span>
+          {{ accDlg.busy ? "در حال ارسال کد…" : "ارسال کد تایید" }}
+        </button>
+      </template>
+      <template v-else-if="accDlg.step === 2">
+        <div class="field"><label>کد تایید تلگرام</label><input v-model="accDlg.code" type="text" placeholder="12345" inputmode="numeric" :disabled="accDlg.busy" @keydown.enter="accDone"></div>
+        <p class="muted" style="margin:0">
+          <span v-if="accDlg.resendIn > 0">ارسال مجدد کد تا {{ accTimerFmt }} دیگر</span>
+          <span v-else-if="accDlg.resendsLeft <= 0">حداکثر تعداد ارسال مجدد استفاده شد</span>
+          <template v-else>
+            <a href="#" @click.prevent="accResend">ارسال مجدد کد</a>
+            <span v-if="accDlg.resendsLeft < 3"> ({{ accDlg.resendsLeft }} باقی‌مانده)</span>
+          </template>
+        </p>
+        <button class="primary" style="width:100%" :disabled="accDlg.busy || !accDlg.code.trim()" @click="accDone">
+          <span v-if="accDlg.busy" class="spinner" aria-hidden="true"></span>
+          {{ accDlg.busy ? "در حال بررسی کد…" : "تایید کد" }}
+        </button>
       </template>
       <template v-else>
-        <div class="field"><label>کد تایید</label><input v-model="accDlg.code" type="text" placeholder="12345"></div>
-        <div class="field"><label>رمز 2FA (اختیاری)</label><input v-model="accDlg.pass" type="password"></div>
-        <button class="primary" style="width:100%" @click="accDone">اتمام</button>
+        <p class="muted" style="margin:0">این حساب ورود دو مرحله‌ای دارد — رمز تلگرام را وارد کنید ({{ accDlg.pwLeft }} تلاش باقی مانده). فیلد کد قفل شد.</p>
+        <div class="field"><label>رمز 2FA</label><input v-model="accDlg.pass" type="password" :disabled="accDlg.busy" @keydown.enter="accDone"></div>
+        <button class="primary" style="width:100%" :disabled="accDlg.busy || !accDlg.pass" @click="accDone">
+          <span v-if="accDlg.busy" class="spinner" aria-hidden="true"></span>
+          {{ accDlg.busy ? "در حال بررسی رمز…" : "تایید نهایی ورود" }}
+        </button>
       </template>
       <p class="err">{{ accDlg.msg }}</p>
-      <button class="ghost" style="width:100%" @click="accDlg.open = false">انصراف</button>
+      <button class="ghost" style="width:100%" :disabled="accDlg.busy" @click="accClose">انصراف</button>
+    </dialog>
+
+    <dialog :open="accChatDlg.open">
+      <h3>کانال ذخیره‌سازی اکانت</h3>
+      <p class="muted" style="margin:0">مقصد آپلودهای این اکانت. «پیش‌فرض سیستم» یعنی همان کانالی که در تب تنظیمات تعیین شده.</p>
+      <div class="field"><label>اکانت</label><input type="text" :value="accChatDlg.label" disabled dir="ltr"></div>
+      <div class="field">
+        <label>کانال</label>
+        <select v-model="accChatDlg.chat" :disabled="accChatDlg.busy">
+          <option v-for="o in accChatOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+      </div>
+      <p class="err">{{ accChatDlg.msg }}</p>
+      <button class="primary" style="width:100%" :disabled="accChatDlg.busy" @click="accChatSave">
+        <span v-if="accChatDlg.busy" class="spinner" aria-hidden="true"></span>
+        {{ accChatDlg.busy ? "در حال ذخیره…" : "ذخیره" }}
+      </button>
+      <button class="ghost" style="width:100%" :disabled="accChatDlg.busy" @click="accChatDlg.open = false">انصراف</button>
     </dialog>
 
     <dialog :open="botDlg.open" @close="botDlg.open = false">
@@ -606,12 +704,27 @@
 
     <dialog :open="eitDlg.open" @close="eitDlg.open = false">
       <h3>افزودن ایتایار</h3>
-      <div class="field"><label>توکن ایتا</label><input v-model="eitDlg.token" type="password"></div>
-      <div class="field"><label>کانال مقصد</label><input v-model="eitDlg.chat" type="text" dir="ltr" placeholder="123456789"></div>
+      <div class="field"><label>توکن ایتا</label><input v-model="eitDlg.token" type="password" autocomplete="off"></div>
+      <div class="field"><label>کانال مقصد</label><input v-model="eitDlg.chat" type="text" dir="ltr" autocomplete="off" placeholder="123456789"></div>
       <div class="field"><label>برچسب (اختیاری)</label><input v-model="eitDlg.label" type="text"></div>
       <button class="primary" style="width:100%" @click="eitSave">ذخیره</button>
       <p class="err">{{ eitDlg.msg }}</p>
       <button class="ghost" style="width:100%" @click="eitDlg.open = false">انصراف</button>
+    </dialog>
+
+    <dialog :open="chanDlg.open" @close="chanDlg.open = false">
+      <h3>افزودن کانال</h3>
+      <div class="field"><label>کانال (@username یا شناسه عددی)</label><input v-model="chanDlg.chat" type="text" dir="ltr" autocomplete="off" placeholder="@my_channel یا -1001234567890"></div>
+      <div class="field"><label>برچسب (اختیاری)</label><input v-model="chanDlg.label" type="text" placeholder="مثلاً کانال آرشیو"></div>
+      <div class="field"><label>نوع</label>
+        <select v-model="chanDlg.kind">
+          <option value="storage">کانال ذخیره‌سازی تلگرام</option>
+          <option value="eitaa">کانال ایتا (فقط ارسال)</option>
+        </select>
+      </div>
+      <button class="primary" style="width:100%" @click="chanSave">ذخیره</button>
+      <p class="err">{{ chanDlg.msg }}</p>
+      <button class="ghost" style="width:100%" @click="chanDlg.open = false">انصراف</button>
     </dialog>
 
     <dialog :open="previewDlg.open" @close="previewDlg.open = false" style="max-width:860px;width:calc(100vw - 40px)">
@@ -651,6 +764,13 @@
       <h3>پوشه جدید</h3>
       <div class="field"><label>مسیر (برای تو در تو از / استفاده کن، مثل projects/2026)</label>
         <input v-model="folderDlg.path" dir="ltr" placeholder="projects/2026/reports"></div>
+      <div class="field">
+        <label>مختص کانال</label>
+        <select v-model="folderDlg.scope" style="width:100%">
+          <option v-for="o in folderScopeOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+        <p class="muted" style="font-size:11px;margin:4px 0 0">هر کانال می‌تواند پوشه‌بندی مستقل خودش را داشته باشد؛ پوشه‌های عمومی همه‌جا دیده می‌شوند.</p>
+      </div>
       <button class="primary" style="width:100%" @click="folderCreate">ایجاد</button>
       <p class="err">{{ folderDlg.msg }}</p>
       <button class="ghost" style="width:100%" @click="folderDlg.open = false">انصراف</button>
@@ -679,7 +799,7 @@
     <dialog :open="keyDlg.open" @close="keyDlg.open = false">
       <h3>ایجاد کلید API</h3>
       <div class="field"><label>نام</label><input v-model="keyDlg.name" type="text"></div>
-      <div class="field"><label>سکوپ‌ها (با ویرگول)</label><input v-model="keyDlg.scopes" type="text" dir="ltr" placeholder="upload,download"></div>
+      <div class="field"><label>سکوپ‌ها (با ویرگول)</label><input v-model="keyDlg.scopes" type="text" dir="ltr" placeholder="read,write,admin"></div>
       <div style="display:flex;gap:10px">
         <div class="field" style="flex:1"><label>RPM</label><input v-model.number="keyDlg.rpm" type="number"></div>
         <div class="field" style="flex:1"><label>سهمیه روزانه (GB)</label><input v-model.number="keyDlg.quota" type="number"></div>
@@ -693,17 +813,63 @@
       </div>
       <div class="field" v-if="keyDlg.backend !== 'eitaa'">
         <label>کانال ذخیره‌سازی اختصاصی <span class="muted" style="font-size:11px">(اختیاری)</span></label>
-        <input v-model="keyDlg.storageChat" dir="ltr" autocomplete="off"
-          placeholder="@username یا -100… (خالی = کانال پیش‌فرض سیستم)">
-        <p class="muted" style="font-size:11px;margin:4px 0 0">فایل‌های آپلودشده با این کلید به این کانال می‌روند؛ خالی = کانال ذخیره‌سازی پیش‌فرض سیستم.</p>
+        <select v-model="keyDlg.storageChat" style="width:100%">
+          <option value="">پیش‌فرض سیستم (بدون کانال اختصاصی)</option>
+          <option v-for="o in keyChatOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+        <p class="muted" style="font-size:11px;margin:4px 0 0">فایل‌های آپلودشده با این کلید به این کانال می‌روند.</p>
       </div>
       <button class="primary" style="width:100%" @click="keySave">ایجاد</button>
-      <div v-if="keyDlg.result" style="background:var(--panel2);padding:12px;border-radius:8px">
+      <div v-if="keyDlg.result !== ''" style="background:var(--panel2);padding:12px;border-radius:8px">
         <p class="muted" style="font-size:12px;margin:0 0 6px">کلید (فقط همین یک بار نمایش داده می‌شود):</p>
         <code style="word-break:break-all">{{ keyDlg.result }}</code>
         <button style="margin-top:8px;width:100%" @click="copyKey">کپی</button>
       </div>
       <button class="ghost" style="width:100%" @click="keyDlg.open = false">انصراف</button>
+    </dialog>
+
+    <dialog :open="uploadDlg.open">
+      <h3>آپلود فایل</h3>
+      <div class="field">
+        <label>فایل</label>
+        <input type="file" @change="onUploadFileChosen">
+      </div>
+      <p v-if="uploadDlg.file" class="muted" style="margin:0" dir="ltr">{{ uploadDlg.file.name }} — {{ fmtBytes(uploadDlg.file.size) }}</p>
+      <p class="muted" style="margin:0">نام فایل همان‌طور که هست ذخیره می‌شود (بدون تغییر نام).</p>
+      <div class="field">
+        <label>پوشه مقصد (اختیاری، مثل projects/2026)</label>
+        <input v-model="uploadDlg.folder" dir="ltr" placeholder="از پوشه‌های همین کانال استفاده می‌شود">
+      </div>
+      <div class="field">
+        <label>کانال مقصد</label>
+        <select v-model="uploadDlg.chat" :disabled="uploadDlg.busy" style="width:100%">
+          <option v-for="o in uploadChatOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+      </div>
+      <p class="err">{{ uploadDlg.msg }}</p>
+      <button class="primary" style="width:100%" :disabled="uploadDlg.busy || !uploadDlg.file" @click="uploadStart">
+        <span v-if="uploadDlg.busy" class="spinner" aria-hidden="true"></span>
+        {{ uploadDlg.busy ? "در حال آپلود…" : "شروع آپلود" }}
+      </button>
+      <button class="ghost" style="width:100%" :disabled="uploadDlg.busy" @click="uploadDlg.open = false">انصراف</button>
+    </dialog>
+
+    <dialog :open="keyChatDlg.open">
+      <h3>کانال ذخیره‌سازی کلید</h3>
+      <p class="muted" style="margin:0">فایل‌های آپلودشده با کلید «{{ keyChatDlg.name }}» به این کانال می‌روند.</p>
+      <div class="field">
+        <label>کانال</label>
+        <select v-model="keyChatDlg.chat" :disabled="keyChatDlg.busy" style="width:100%">
+          <option value="">پیش‌فرض سیستم (بدون کانال اختصاصی)</option>
+          <option v-for="o in keyChatOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+      </div>
+      <p class="err">{{ keyChatDlg.msg }}</p>
+      <button class="primary" style="width:100%" :disabled="keyChatDlg.busy" @click="keyChatSave">
+        <span v-if="keyChatDlg.busy" class="spinner" aria-hidden="true"></span>
+        {{ keyChatDlg.busy ? "در حال ذخیره…" : "ذخیره" }}
+      </button>
+      <button class="ghost" style="width:100%" :disabled="keyChatDlg.busy" @click="keyChatDlg.open = false">انصراف</button>
     </dialog>
 
     <dialog :open="qrDlg.open" @close="qrDlg.open = false">
@@ -840,12 +1006,14 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
         clearInterval(opsPollInterval);
         opsPollInterval = null;
       }
+      if (accTimerId) { clearInterval(accTimerId); accTimerId = null; }
     });
     const tabList = [
       { id: "dash", label: "داشبورد" },
       { id: "accounts", label: "اکانت‌ها" },
       { id: "bots", label: "بات‌ها" },
       { id: "eitaa", label: "ایتا" },
+      { id: "channels", label: "کانال‌ها" },
       { id: "keys", label: "کلیدها" },
       { id: "files", label: "فایل‌ها" },
       { id: "queue", label: "صف" },
@@ -885,6 +1053,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
     const folderQuery = ref(""); // search query for folder files
     const channelFilter = ref(""); // files tab: filter by storage channel
     const channelFilterIsDefault = ref(false);
+    const filesChannelPick = ref(""); // dropdown value: '' | __default__ | chat
     /* ---------- file manager: search/filter/pagination/preview/block/links ---------- */
     const filesQuery = ref("");
     const filesMime = ref("");
@@ -1059,12 +1228,18 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
       } catch (e) { bulkMoveSelectedDlg.msg = e.message; }
       finally { bulkMoveSelectedDlg.busy = false; }
     }
-    const folderDlg = reactive({ open: false, path: "", msg: "" });
+    const folderDlg = reactive({ open: false, path: "", scope: "", msg: "" });
+    const folderScopeOptions = computed(() => {
+      const opts = [{ value: "", label: "عمومی (همه کانال‌ها)" }];
+      if (channelsDefaultChat.value) opts.push({ value: channelsDefaultChat.value, label: `کانال پیش‌فرض (${channelsDefaultChat.value})` });
+      for (const c of channels.value) if (!opts.some(o => o.value === c.chat)) opts.push({ value: c.chat, label: (c.label ? c.label + " — " : "") + c.chat });
+      return opts;
+    });
     const moveDlg = reactive({ open: false, fileId: "", fileName: "", path: "", msg: "" });
     const proxiesList = ref([]);
     const proxiesBusy = ref(false);
     const proxiesTesting = ref(false);
-    const uploadBusy = ref(false);
+    const uploadBusy = ref(false); // legacy flag; the upload dialog owns busy state
     const uploadProgress = ref("");
     const uploadPct = ref(0); // 0-100, real XHR progress
     const uploadSpeed = ref(0); // MB/s
@@ -1073,10 +1248,10 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
 
     /* ---------- dialogs ---------- */
     const proxyDlg = reactive({ open: false, link: "", host: "", port: "", kind: "socks5", label: "", username: "", password: "", msg: "" });
-    const accDlg = reactive({ open: false, step: 1, phone: "", label: "", code: "", pass: "", msg: "", loginId: "" });
+    const accDlg = reactive({ open: false, step: 1, phone: "", label: "", code: "", pass: "", msg: "", loginId: "", busy: false, resendIn: 0, resendsLeft: 3, pwLeft: 3 });
     const botDlg = reactive({ open: false, token: "", label: "", msg: "" });
     const eitDlg = reactive({ open: false, token: "", chat: "", label: "", msg: "" });
-    const keyDlg = reactive({ open: false, name: "", scopes: "upload,download", rpm: 120, quota: 0, backend: "", storageChat: "", result: "" });
+    const keyDlg = reactive({ open: false, name: "", scopes: "read,write", rpm: 120, quota: 0, backend: "", storageChat: "", result: "" });
     const qrDlg = reactive({ open: false, url: "", slug: "" });
 
     /* ---------- api helper (with refresh) ---------- */
@@ -1145,7 +1320,9 @@ const doLogin = submitLogin;
     function switchTab(id) {
       tab.value = id;
       const l = loaders[id];
-      return l ? l() : Promise.resolve();
+      const p = l ? l() : Promise.resolve();
+      if (id === "channels") loaders.accounts().catch(() => {}); // defaultChannelRow needs the accounts table
+      return p;
     }
 
     const dashCards = computed(() => {
@@ -1188,6 +1365,86 @@ const doLogin = submitLogin;
       try { const d = await api("/api/v1/eitaa"); eitaas.value = d.items || []; }
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
+    /* ---------- channels (storage channel registry + backup/restore) ---------- */
+    const channels = ref([]);
+    const channelsDefaultChat = ref("");
+    const chanDlg = reactive({ open: false, chat: "", label: "", kind: "storage", msg: "" });
+    const chanBusy = reactive({}); // id → busy flag (test/backup/restore in flight)
+    loaders.channels = async () => {
+      try { const d = await api("/api/v1/channels"); channels.value = d.items || []; channelsDefaultChat.value = d.default_chat || ""; }
+      catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    };
+    async function chanSave() {
+      try {
+        await api("/api/v1/channels", { method: "POST", json: { chat: chanDlg.chat, label: chanDlg.label, kind: chanDlg.kind } });
+        showToast("کانال ثبت شد");
+        Object.assign(chanDlg, { open: false, chat: "", label: "", kind: "storage", msg: "" });
+        loaders.channels();
+      } catch (e) { chanDlg.msg = e.message; }
+    }
+    async function chanRename(c) {
+      const v = prompt("برچسب جدید کانال:", c.label || "");
+      if (v === null) return;
+      try { await api(`/api/v1/channels/${c.id}`, { method: "PATCH", json: { label: v } }); showToast("برچسب ذخیره شد"); loaders.channels(); }
+      catch (e) { showToast("خطا: " + e.message, 4500, true); }
+    }
+    async function chanToggle(c) { try { await api(`/api/v1/channels/${c.id}/toggle`, { method: "POST" }); loaders.channels(); } catch (e) { showToast("خطا: " + e.message, 4500, true); } }
+    async function chanDelete(c) {
+      if (!confirm("کانال «" + (c.label || c.chat) + "» از فهرست حذف شود؟ (فایل‌های تلگرامی حذف نمی‌شوند)")) return;
+      try { await api(`/api/v1/channels/${c.id}`, { method: "DELETE" }); showToast("کانال حذف شد"); loaders.channels(); }
+      catch (e) { showToast("خطا: " + e.message, 4500, true); }
+    }
+    async function chanTest(c) {
+      chanBusy[c.id] = true;
+      try {
+        const d = await api(`/api/v1/channels/${c.id}/test`, { method: "POST" });
+        showToast(d.ok ? "ارتباط برقرار است (" + d.backend + ")" : "خطای ارتباط: " + d.error, 5000, !d.ok);
+      } catch (e) { showToast("خطا: " + e.message, 4500, true); }
+      chanBusy[c.id] = false;
+      loaders.channels();
+    }
+    async function chanBackup(c) {
+      chanBusy[c.id] = true;
+      showToast("در حال ساخت و ارسال بکاپ به کانال…", 5000);
+      try {
+        const d = await api(`/api/v1/channels/${c.id}/backup`);
+        showToast("بکاپ در کانال ذخیره شد (" + d.files + " فایل، " + fmtBytes(d.size) + ")", 5000);
+        try {
+          const j = await api(`/api/v1/channels/${c.id}/content`);
+          const blob = new Blob([JSON.stringify(j, null, 2)], { type: "application/json" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = d.name || ("tgdrive-backup-" + c.id + ".json");
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        } catch (e) { /* local copy optional — channel copy is the source of truth */ }
+      } catch (e) { showToast("خطا: " + e.message, 5000, true); }
+      chanBusy[c.id] = false;
+      loaders.channels();
+    }
+    async function chanRestore(c) {
+      if (!confirm("بازگردانی فهرست فایل‌های این کانال از آخرین بکاپ؟ ردیف‌های موجود حفظ می‌شوند (ادغام).")) return;
+      chanBusy[c.id] = true;
+      try {
+        const d = await api(`/api/v1/channels/${c.id}/restore`, { method: "POST" });
+        showToast(`بازگردانی شد: ${d.inserted} افزوده، ${d.skipped} موجود`, 6000);
+        loaders.files();
+      } catch (e) { showToast("خطا: " + e.message, 5000, true); }
+      chanBusy[c.id] = false;
+      loaders.channels();
+    }
+    /* virtual row for the system-default channel (settings.tg_storage_chat) when
+       it has no registry row of its own — fixes "default channel missing from the list" */
+    const defaultChannelRow = computed(() => {
+      if (!channelsDefaultChat.value) return null;
+      const a = accounts.value.find((x) => (x.storage_chat_id || "me") === "me") || accounts.value[0];
+      if (!a || a.pool == null) return null;
+      return { chat: channelsDefaultChat.value, files: 0, bytes: 0 };
+    });
+    function chanFmtBackup(c) {
+      if (!c.last_backup_at) return "—";
+      return fmtTime(c.last_backup_at) + " • " + (c.last_backup_files || 0) + " فایل" + (c.last_backup_bytes ? " • " + fmtBytes(c.last_backup_bytes) : "") + (c.last_backup_message_id ? " • msg " + c.last_backup_message_id : "");
+    }
     loaders.keys = async () => {
       try { const d = await api("/api/v1/keys"); keys.value = d.items || []; }
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
@@ -1206,7 +1463,8 @@ const doLogin = submitLogin;
           if (channelFilterIsDefault.value) p.set("default_channel", "1");
           else p.set("storage_chat", channelFilter.value);
         }
-        const [d, fo] = await Promise.all([api("/api/v1/files?" + p.toString()), api("/api/v1/folders")]);
+        const folderScope = channelFilter.value && !channelFilterIsDefault.value ? channelFilter.value : "";
+        const [d, fo] = await Promise.all([api("/api/v1/files?" + p.toString()), api("/api/v1/folders", { params: folderScope ? { scope: folderScope } : {} })]);
         files.value = d.items || [];
         filesTotal.value = d.total || 0;
         foldersFlat.value = fo.items || [];
@@ -1259,6 +1517,15 @@ const doLogin = submitLogin;
       }
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
+    /* dropdown channel picker (files tab) — mirrors the channelFilter state used by loaders.files */
+    function applyChannelPick() {
+      if (!filesChannelPick.value) { channelFilter.value = ""; channelFilterIsDefault.value = false; }
+      else if (filesChannelPick.value === "__default__") { channelFilter.value = channelsDefaultChat.value; channelFilterIsDefault.value = true; }
+      else { channelFilter.value = filesChannelPick.value; channelFilterIsDefault.value = false; }
+      currentFolderId.value = null;
+      filesOffset.value = 0;
+      loaders.files();
+    }
     async function openChannelFiles(c) {
       channelFilter.value = c.chat || "(بدون کانال)";
       channelFilterIsDefault.value = !!c.is_system_default;
@@ -1291,12 +1558,13 @@ const doLogin = submitLogin;
     async function folderCreate() {
       folderDlg.msg = "";
       try {
-        const body = folderDlg.path.includes("/")
-          ? { path: folderDlg.path }
-          : { name: folderDlg.path };
+        const body = {
+          ...(folderDlg.path.includes("/") ? { path: folderDlg.path } : { name: folderDlg.path }),
+          scope: folderDlg.scope || "",
+        };
         await api("/api/v1/folders", { method: "POST", json: body });
         showToast("پوشه ساخته شد");
-        folderDlg.open = false; folderDlg.path = "";
+        folderDlg.open = false; folderDlg.path = ""; folderDlg.scope = "";
         await loaders.files();
       } catch (e) { folderDlg.msg = e.message; }
     }
@@ -1655,35 +1923,97 @@ const doLogin = submitLogin;
     }
 
     /* ---------- accounts ---------- */
-    function accOpen() { Object.assign(accDlg, { open: true, step: 1, phone: "", label: "", code: "", pass: "", msg: "", loginId: "" }); }
+    function accOpen() { Object.assign(accDlg, { open: true, step: 1, phone: "", label: "", code: "", pass: "", msg: "", loginId: "", busy: false, resendIn: 0, resendsLeft: 3, pwLeft: 3 }); }
+
+    /* resend cooldown: resend becomes available after 2 minutes; server caps at 3 */
+    let accTimerId = null;
+    const accTimerFmt = computed(() => Math.floor(accDlg.resendIn / 60) + ":" + String(accDlg.resendIn % 60).padStart(2, "0"));
+    function accStartTimer() {
+      accDlg.resendIn = 120;
+      if (accTimerId) clearInterval(accTimerId);
+      accTimerId = setInterval(() => {
+        if (accDlg.resendIn > 0) accDlg.resendIn--;
+        if (accDlg.resendIn <= 0 && accTimerId) { clearInterval(accTimerId); accTimerId = null; }
+      }, 1000);
+    }
+    function accStopTimer() { if (accTimerId) { clearInterval(accTimerId); accTimerId = null; } accDlg.resendIn = 0; }
+    function accClose() { if (accDlg.busy) return; accStopTimer(); accDlg.open = false; }
+
     async function accSend() {
+      if (accDlg.busy) return;
+      if (!accDlg.phone.trim()) { accDlg.msg = "شماره تلفن را وارد کنید (مثلا +98912...)"; return; }
+      accDlg.busy = true; accDlg.msg = "";
       try {
         const d = await api("/api/v1/accounts/login/start", { method: "POST", json: { phone: accDlg.phone, label: accDlg.label } });
         if (d.status === "ready") { showToast("اکانت آماده شد"); accDlg.open = false; loaders.accounts(); return; }
         accDlg.loginId = d.login_id;
         accDlg.step = 2;
-        accDlg.msg = "کد ارسال شد؛ وارد کنید:";
+        accDlg.code = ""; accDlg.pass = "";
+        accDlg.msg = "کد ارسال شد — آن را در تلگرام رسمی خود ببینید.";
+        accStartTimer();
       } catch (e) { accDlg.msg = e.message; }
+      finally { accDlg.busy = false; }
+    }
+    async function accResend() {
+      if (accDlg.busy || accDlg.resendIn > 0 || accDlg.resendsLeft <= 0) return;
+      accDlg.busy = true; accDlg.msg = "";
+      try {
+        const d = await api("/api/v1/accounts/login/resend", { method: "POST", json: { login_id: accDlg.loginId } });
+        accDlg.resendsLeft = (d.resends_left == null) ? accDlg.resendsLeft - 1 : d.resends_left;
+        accStartTimer();
+        accDlg.msg = "کد دوباره ارسال شد.";
+      } catch (e) { accDlg.msg = e.message; }
+      finally { accDlg.busy = false; }
     }
     async function accDone() {
+      if (accDlg.busy) return;
+      accDlg.busy = true; accDlg.msg = "";
       try {
-        const d = await api("/api/v1/accounts/login/complete", { method: "POST", json: { login_id: accDlg.loginId, code: accDlg.code, password: accDlg.pass } });
-        if (d.status === "password_needed") { accDlg.msg = "رمز 2FA لازم است؛ وارد کرده و دوباره بزنید"; return; }
+        const payload = accDlg.step === 3
+          ? { login_id: accDlg.loginId, code: "", password: accDlg.pass }
+          : { login_id: accDlg.loginId, code: accDlg.code, password: "" };
+        const d = await api("/api/v1/accounts/login/complete", { method: "POST", json: payload });
+        if (d.status === "password_needed") {
+          accDlg.step = 3; accDlg.pwLeft = 3; accDlg.pass = "";
+          accDlg.msg = "رمز دو مرحله‌ای لازم است — فقط فیلد رمز فعال است.";
+          return;
+        }
+        accStopTimer();
         showToast("اکانت متصل شد");
         accDlg.open = false; loaders.accounts();
-      } catch (e) { accDlg.msg = e.message; }
+      } catch (e) {
+        const m = String(e.message || "");
+        const mt = m.match(/(\d+)\s*تلاش باقی مانده/);
+        if (accDlg.step === 3 && mt) accDlg.pwLeft = Number(mt[1]) || 1;
+        accDlg.msg = m;
+      }
+      finally { accDlg.busy = false; }
     }
     async function accToggle(a) { await api(`/api/v1/accounts/${a.id}/toggle`, { method: "POST" }); loaders.accounts(); }
     async function accTest(a) { const d = await api(`/api/v1/accounts/${a.id}/test`, { method: "POST" }); showToast(d.ok ? "اتصال سالم" : "خطا: " + d.error, 3000, !d.ok); }
     async function accReset(a) { await api(`/api/v1/accounts/${a.id}/reset`, { method: "POST" }); showToast("ریست شد"); loaders.accounts(); }
-    async function accChat(a) {
-      const v = prompt("کانال ذخیره‌سازی این اکانت (@username یا عددی / me = پیش‌فرض سیستم):", a.storage_chat_id || "me");
-      if (v === null) return;
+    /* per-account storage channel: pick from registered channels or the system default */
+    const accChatDlg = reactive({ open: false, id: 0, label: "", chat: "", msg: "", busy: false });
+    const accChatOptions = computed(() => {
+      const opts = [];
+      if (channelsDefaultChat.value) opts.push({ value: "default", label: `پیش‌فرض سیستم (${channelsDefaultChat.value})` });
+      for (const c of channels.value) opts.push({ value: c.chat, label: (c.label ? c.label + " — " : "") + c.chat + (c.is_system_default ? " (پیش‌فرض)" : "") });
+      opts.push({ value: "me", label: "Saved Messages (me)" });
+      return opts;
+    });
+    function accChatOpen(a) {
+      Object.assign(accChatDlg, { open: true, id: a.id, label: a.label || a.phone, chat: a.storage_chat_id || "me", msg: "", busy: false });
+      loaders.channels();
+    }
+    async function accChatSave() {
+      accChatDlg.busy = true; accChatDlg.msg = "";
       try {
-        await api(`/api/v1/accounts/${a.id}`, { method: "PATCH", json: { storage_chat_id: v.trim() || "me" } });
+        await api(`/api/v1/accounts/${accChatDlg.id}`, { method: "PATCH", json: { storage_chat_id: accChatDlg.chat } });
         showToast("کانال ذخیره‌سازی اکانت به‌روزرسانی شد");
+        accChatDlg.open = false;
         loaders.accounts();
-      } catch (e) { showToast("خطا: " + e.message, 4500, true); }
+      } catch (e) { accChatDlg.msg = e.message; }
+      finally { accChatDlg.busy = false; }
     }
     async function accDelete(a) { if (confirm("حذف اکانت؟")) { await api(`/api/v1/accounts/${a.id}`, { method: "DELETE" }); loaders.accounts(); } }
 
@@ -1713,18 +2043,28 @@ const doLogin = submitLogin;
     async function eitDelete(e) { if (confirm("حذف توکن ایتا؟")) { await api(`/api/v1/eitaa/${e.id}`, { method: "DELETE" }); loaders.eitaa(); } }
 
     /* ---------- keys ---------- */
-    function keyOpen() { Object.assign(keyDlg, { open: true, name: "", scopes: "upload,download", rpm: 120, quota: 0, backend: "", storageChat: "", result: "" }); }
-    async function keyEditChat(k) {
-      const v = prompt(
-        "کانال ذخیره‌سازی اختصاصی این کلید (@username یا -100… / خالی = پیش‌فرض سیستم):",
-        k.storage_chat || ""
-      );
-      if (v === null) return;
+    function keyOpen() { Object.assign(keyDlg, { open: true, name: "", scopes: "read,write", rpm: 120, quota: 0, backend: "", storageChat: "", result: "" }); loaders.channels(); }
+    /* per-key storage channel: pick from registered channels / system default */
+    const keyChatDlg = reactive({ open: false, id: 0, name: "", chat: "", msg: "", busy: false });
+    const keyChatOptions = computed(() => {
+      const opts = [];
+      if (channelsDefaultChat.value) opts.push({ value: channelsDefaultChat.value, label: `پیش‌فرض سیستم (${channelsDefaultChat.value})` });
+      for (const c of channels.value) if (!opts.some(o => o.value === c.chat)) opts.push({ value: c.chat, label: (c.label ? c.label + " — " : "") + c.chat });
+      return opts;
+    });
+    function keyEditChat(k) {
+      Object.assign(keyChatDlg, { open: true, id: k.id, name: k.name, chat: k.storage_chat || "", msg: "", busy: false });
+      loaders.channels();
+    }
+    async function keyChatSave() {
+      keyChatDlg.busy = true; keyChatDlg.msg = "";
       try {
-        await api(`/api/v1/keys/${k.id}`, { method: "PATCH", json: { storage_chat: v.trim() } });
-        showToast(v.trim() ? "کانال ذخیره‌سازی کلید ذخیره شد" : "کلید به کانال پیش‌فرض برگشت");
+        await api(`/api/v1/keys/${keyChatDlg.id}`, { method: "PATCH", json: { storage_chat: keyChatDlg.chat } });
+        showToast(keyChatDlg.chat ? "کانال ذخیره‌سازی کلید ذخیره شد" : "کلید به کانال پیش‌فرض برگشت");
+        keyChatDlg.open = false;
         loaders.keys();
-      } catch (e) { showToast("خطا: " + e.message, 4500, true); }
+      } catch (e) { keyChatDlg.msg = e.message; }
+      finally { keyChatDlg.busy = false; }
     }
     async function keySave() {
       try {
@@ -1738,15 +2078,41 @@ const doLogin = submitLogin;
 
     /* ---------- files ---------- */
     let cancelXHR = null;
-    async function startResumableUpload(file) {
-      // Create upload session
+    /* upload options dialog: target folder + storage channel override + original filename */
+    const uploadDlg = reactive({ open: false, file: null, folder: "", chat: "", msg: "", busy: false });
+    const uploadChatOptions = computed(() => {
+      const opts = [{ value: "", label: "پیش‌فرض کلید/سیستم" }];
+      if (channelsDefaultChat.value) opts.push({ value: channelsDefaultChat.value, label: `کانال پیش‌فرض (${channelsDefaultChat.value})` });
+      for (const c of channels.value) if (!opts.some(o => o.value === c.chat)) opts.push({ value: c.chat, label: (c.label ? c.label + " — " : "") + c.chat });
+      return opts;
+    });
+    function uploadPick() { loaders.channels(); switchTab("files"); uploadDlg.open = true; uploadDlg.file = null; }
+    function onUploadFileChosen(ev) { uploadDlg.file = ev.target.files[0] || null; ev.target.value = ""; }
+    async function uploadStart() {
+      const f = uploadDlg.file;
+      if (!f) { uploadDlg.msg = "فایل را انتخاب کنید"; return; }
+      uploadDlg.busy = true; uploadDlg.msg = "";
+      try {
+        const fid = await doUpload(f, uploadDlg.folder.trim(), uploadDlg.chat);
+        showToast("صف شد: " + fid);
+        uploadDlg.open = false;
+        uploadDlg.file = null;
+        filesFolderDraft.value = uploadDlg.folder.trim();
+        loaders.files();
+      } catch (e) { uploadDlg.msg = e.message; }
+      finally { uploadDlg.busy = false; }
+    }
+    async function doUpload(file, folderPath, storageChat) {
+      // Create upload session (original filename is kept verbatim; the server
+      // only strips unsafe chars — no renaming)
       const r = await fetch("/api/v1/files/upload/session", {
         method: "POST",
-        headers: { "Authorization": "Bearer " + token.value, "Content-Type": "application/json", ...(filesFolderDraft.value.trim() ? { "X-Folder": filesFolderDraft.value.trim() } : {}) },
+        headers: { "Authorization": "Bearer " + token.value, "Content-Type": "application/json", ...(folderPath ? { "X-Folder": folderPath } : {}), ...(storageChat ? { "X-Storage-Chat": storageChat } : {}) },
         body: JSON.stringify({ name: file.name, size: file.size, mime: file.type || "application/octet-stream" })
       });
       if (!r.ok) { const d = await r.json(); throw new Error(d.detail || "session create failed"); }
       const { session_id, chunk_size, offset } = await r.json();
+      const t0 = Date.now();
       let completed = false;
       let currentOffset = offset;
 
@@ -1765,31 +2131,21 @@ const doLogin = submitLogin;
         result = await r.json();
         currentOffset = result.offset;
         completed = result.completed;
+        // live progress + speed from the actual session offset
+        uploadPct.value = file.size ? Math.min(100, Math.round((currentOffset / file.size) * 100)) : 100;
+        const secs = (Date.now() - t0) / 1000;
+        if (secs > 0.3) uploadSpeed.value = (currentOffset / 1048576 / secs);
       }
 
       // the completing chunk response carries the queued file_id
-      return { file_id: result.file_id };
+      return result.file_id;
     }
+    async function startResumableUpload(file) { return { file_id: await doUpload(file, filesFolderDraft.value.trim(), "") }; }
     function cancelCurrentUpload() {
       if (cancelXHR && cancelXHR.readyState < 4) {
         cancelXHR.abort();
         showToast("آپلود لغو شد", 2000);
       }
-    }
-    async function upload(ev) {
-      const f = ev.target.files[0]; if (!f) return;
-      uploadBusy.value = true; uploadPct.value = 0; uploadProgress.value = f.name + " (" + fmtBytes(f.size) + ")";
-      uploadTimeStart.value = Math.floor(Date.now() / 1000);
-      try {
-        const d = await startResumableUpload(f);
-        showToast("صف شد: " + d.file_id);
-        uploadProgress.value = "";
-        cancelXHR = null; // reset after success
-        loaders.files();
-      } catch (e) { uploadProgress.value = ""; showToast("خطا: " + e.message, 4000, true); }
-      cancelXHR = null; // reset after error too
-      uploadBusy.value = false; uploadPct.value = 0;
-      ev.target.value = "";
     }
     async function cancelUpload() {
       if (!confirm("آپلود لغو شود؟ اطلاعات فایل در صف باقی می‌ماند.")) return;
@@ -1818,15 +2174,16 @@ const doLogin = submitLogin;
         const d = await api("/api/v1/files");
         const files = d.items || [];
         if (!files.length) { showToast("فایلی یافت نشد", 3000); return; }
-        const last = files[files.length - 1];
+        const last = files[0]; // list is newest-first
         const content = await fetch("/api/v1/files/" + last.id + "/content");
         if (!content.ok) { showToast("خطا در خوانش", 2000); return; }
         showToast("فایل خوانده شد: " + last.name, 2000);
-        // If it's text, show in prompt to add to DB
-        const text = await content.text().catch(() => "");
-        if (text && confirm("محتوای متن detected. به دیتابیس اضافه شود؟")) {
-          await api("/api/v1/keys", { method: "POST", json: { name: last.name, scopes: "download", rpm: 120, backend: "custom" } });
-          showToast("متن به دیتابیس اضافه شد", 3000);
+        const blob = await content.blob();
+        const text = await blob.slice(0, 512 * 1024).text().catch(() => "");
+        if (text && confirm("محتوای متنی تشخیص داده شد. در پنجره پیش‌نمایش باز شود؟")) {
+          const kind = (last.mime || "").startsWith("text/") || /\.txt$|\.json$|\.md$/i.test(last.name || "") ? "text" : "text";
+          Object.assign(previewDlg, { open: true, id: last.id, name: last.name, mime: last.mime || "text/plain", size: last.size, kind, url: "", text: text.slice(0, 20000) });
+          showToast("محتوا برای بازبینی در پیش‌نمایش باز شد", 3000);
         }
       } catch (e) { showToast("خطا: " + e.message, 4000, true); }
     }
@@ -1835,8 +2192,48 @@ const doLogin = submitLogin;
     async function qPause() { await api("/api/v1/queue/pause", { method: "POST", json: { kind: "upload" } }); showToast("آپلود متوقف شد"); loaders.queue(); }
     async function qResume() { await api("/api/v1/queue/resume", { method: "POST", json: { kind: "upload" } }); showToast("آپلود ادامه یافت"); loaders.queue(); }
     async function qPurge() { await api("/api/v1/queue/purge", { method: "POST" }); loaders.queue(); }
-    async function backupDB() { await api("/api/v1/admin/backup"); }
-    async function restoreDB() { const f = document.getElementById('restoreInput').files[0]; if (!f) return; const formData = new FormData(); formData.append('backup', f); await api("/api/v1/admin/restore", { method: "POST", body: formData, json: false }); }
+    async function backupDB() {
+      try {
+        showToast("در حال تهیه بکاپ…", 4000);
+        const d = await api("/api/v1/admin/backup");
+        // decode the base64gzip payload server-side format: {ts, tables, data}
+        const bin = atob(d.data);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const blob = new Blob([bytes], { type: "application/gzip" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "tgdrive-backup-" + new Date(d.ts * 1000).toISOString().replace(/[:.]/g, "-") + ".json.gz";
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        showToast("بکاپ دانلود شد");
+      } catch (e) { showToast("خطا: " + e.message, 4000, true); }
+    }
+    async function restoreDB(ev) {
+      const f = (ev && ev.target && ev.target.files && ev.target.files[0]) || (document.getElementById('restoreInput') || {}).files?.[0];
+      if (!f) return;
+      if (!confirm("بازگردانی از " + f.name + "؟ ردیف‌های موجود بازنویسی نمی‌شوند (ادغام).")) { ev.target.value = ""; return; }
+      try {
+        const buf = new Uint8Array(await f.arrayBuffer());
+        // the panel may receive either the raw gzip (from backupDB) or the API json envelope
+        let payload = "";
+        try {
+          const ds = new DecompressionStream("gzip");
+          const stream = new Blob([buf]).stream().pipeThrough(ds);
+          payload = btoa(String.fromCharCode(...new Uint8Array(await new Response(stream).arrayBuffer())));
+        } catch (e) {
+          // not gzip — maybe the user picked the API's json envelope
+          const text = new TextDecoder().decode(buf);
+          const j = JSON.parse(text);
+          payload = j.data || "";
+          if (!payload) throw e;
+        }
+        const res = await api("/api/v1/admin/restore", { method: "POST", json: { data: payload } });
+        const restored = Object.entries(res.restored || {}).map(([k, v]) => k + ": " + v).join(", ");
+        showToast("بازگردانی انجام شد (" + (restored || "بدون ردیف") + ")", 6000);
+      } catch (e) { showToast("خطا در بازگردانی: " + e.message, 5000, true); }
+      finally { const inp = document.getElementById('restoreInput'); if (inp) inp.value = ""; }
+    }
 
     /* ---------- boot ---------- */
     onMounted(() => { if (token.value) { switchTab("dash"); checkSetup(); } });
