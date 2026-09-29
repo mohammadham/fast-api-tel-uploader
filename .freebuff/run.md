@@ -81,3 +81,8 @@ powershell -NoProfile -Command '$env:TGDRIVE_FAKE_TG="1"; $env:TGDRIVE_DATA_DIR=
 - GET /api/v1/channels already aggregated ready/non-deleted files+bytes per chat (_stats_by_chat, '' bucket = empty storage_chat); now also returns default_stats for the system-default chat (works even when tg_storage_chat='' → the ''/Saved bucket). Gotcha: `stats.get(default_chat or "__none__")` broke the ''-bucket — default_chat '' must still read bucket ''.
 - Panel: channels tab virtual default row shows real files/bytes (channelDefaultStats ref); files-tab channel select shows counts in options («کانال پیش‌فرض (chat) — N» / «chat — N» و «همه کانال‌ها (total)»); switchTab('files') now also fires loaders.channels() so the select counts are fresh.
 - Tests: tests/test_channel_stats.py (2) → 157 pytest + 12 e2e; bundle index-Ci_l10iZ.js. Live: @-1002296795477 files=2/1536B; default_stats files=2 bytes=9.6MB.
+
+## Drag & drop upload (2026-09-29, round 8)
+- Dropping files on the files tab opens the SAME upload dialog (uploadDlg) prefilled: folder = filesFolderDraft (current folder), channel = active channel filter ('' when default-filter so the key/system default wins); multi-file drop → input now multiple, dialog lists count+total size; uploadStart queues first file (existing per-file flow).
+- dragenter/leave depth counter guards the overlay flicker; overlay hidden while dialog open; drop while trash view visible switches filesTrashed off (uploads never target trash); section got position:relative so the overlay covers only the section.
+- e2e: new test dispatches dragenter+drop with a DataTransfer (playwright dispatchEvent) asserting overlay → dialog → queued file. 13 e2e + 157 pytest; bundle index-BREDMSzH.js.

@@ -151,6 +151,40 @@ test.describe.serial("panel smoke", () => {
     });
   });
 
+  test("drag & drop onto files tab opens the upload dialog and queues the file", async ({ page }) => {
+    await login(page);
+    await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+
+    const payload = Buffer.from("playwright dragdrop upload " + Date.now());
+    const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+    await page.locator("main section:visible").dispatchEvent("dragenter", { dataTransfer });
+    await expect(page.locator("text=فایل‌ها را رها کنید")).toBeVisible();
+    await page.dispatchEvent("main section:visible", "drop", {
+      dataTransfer: await page.evaluateHandle((buf) => {
+        const dt = new DataTransfer();
+        dt.items.add(new File([buf], "e2e-dragdrop.txt", { type: "text/plain" }));
+        return dt;
+      }, payload),
+    });
+
+    // same dialog as the button flow, file prefilled
+    await expect(page.locator("dialog:visible h3", { hasText: "آپلود فایل" })).toBeVisible();
+    await expect(page.locator("dialog:visible p", { hasText: "e2e-dragdrop.txt" })).toBeVisible();
+    await page.locator("dialog:visible button", { hasText: "شروع آپلود" }).click();
+    await expect(page.locator(".toast")).toContainText("صف شد: f_");
+    const newRow = page.locator("main section:visible table tbody tr", { hasText: "e2e-dragdrop.txt" }).first();
+    await expect(newRow).toBeVisible();
+
+    // cleanup
+    await page.evaluate(async () => {
+      const token = localStorage.getItem("td_token");
+      const { items } = await fetch("/api/v1/files?limit=200", { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
+      for (const f of items.filter((x) => x.name === "e2e-dragdrop.txt")) {
+        await fetch(`/api/v1/files/${f.id}?purge=true`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+      }
+    });
+  });
+
   test("storage channels card lists dedicated channel with per-type stats", async ({ page }) => {
     await login(page);
 

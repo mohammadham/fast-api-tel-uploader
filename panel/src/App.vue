@@ -283,13 +283,16 @@
       </section>
 
       <!-- Files -->
-      <section v-show="tab === 'files'">
+      <section v-show="tab === 'files'" style="position:relative" @dragover.prevent="filesDragDepth > 0 || (filesDragDepth = 1)" @dragenter.prevent="filesDragDepth++" @dragleave.prevent="filesDragDepth = Math.max(0, filesDragDepth - 1)" @drop.prevent="onFilesDrop">
         <div class="toolbar">
           <h3 style="margin:0;flex:1;font-size:16px">فایل‌ها</h3>
           <button class="primary" :disabled="uploadDlg.busy" @click="uploadPick">
             {{ uploadDlg.busy ? "در حال آپلود…" : "آپلود جدید" }}
           </button>
           <button class="ghost" @click="loaders.channels(); switchTab('files')">به‌روزرسانی</button>
+        </div>
+        <div v-if="filesDragDepth > 0 && !uploadDlg.open" style="position:absolute;inset:0;background:rgba(59,130,246,.12);border:2px dashed var(--accent,#3b82f6);z-index:30;display:flex;align-items:center;justify-content:center;pointer-events:none">
+          <b style="background:var(--panel,#141822);padding:10px 18px;border-radius:10px;border:1px solid var(--accent,#3b82f6)">فایل‌ها را رها کنید تا دیالوگ آپلود باز شود</b>
         </div>
         <div v-if="channelFilter" style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
           <span class="tag" style="font-size:12px">کانال: <b dir="ltr">{{ channelFilter }}</b></span>
@@ -861,9 +864,9 @@
       <h3>آپلود فایل</h3>
       <div class="field">
         <label>فایل</label>
-        <input type="file" @change="onUploadFileChosen">
+        <input type="file" multiple @change="onUploadFileChosen">
       </div>
-      <p v-if="uploadDlg.file" class="muted" style="margin:0" dir="ltr">{{ uploadDlg.file.name }} — {{ fmtBytes(uploadDlg.file.size) }}</p>
+      <p v-if="uploadDlg.files.length" class="muted" style="margin:0" dir="ltr">{{ uploadDlg.files.length > 1 ? uploadDlg.files.length + " فایل — " : "" }}{{ uploadDlg.files[0].name }}{{ uploadDlg.files.length > 1 ? " …" : "" }} — {{ fmtBytes(uploadDlg.files.reduce((s, f) => s + (f.size || 0), 0)) }}</p>
       <p class="muted" style="margin:0">نام فایل همان‌طور که هست ذخیره می‌شود (بدون تغییر نام).</p>
       <div class="field">
         <label>پوشه مقصد (اختیاری، مثل projects/2026)</label>
@@ -876,7 +879,7 @@
         </select>
       </div>
       <p class="err">{{ uploadDlg.msg }}</p>
-      <button class="primary" style="width:100%" :disabled="uploadDlg.busy || !uploadDlg.file" @click="uploadStart">
+      <button class="primary" style="width:100%" :disabled="uploadDlg.busy || !uploadDlg.files.length" @click="uploadStart">
         <span v-if="uploadDlg.busy" class="spinner" aria-hidden="true"></span>
         {{ uploadDlg.busy ? "در حال آپلود…" : "شروع آپلود" }}
       </button>
@@ -2152,24 +2155,39 @@ const doLogin = submitLogin;
     /* ---------- files ---------- */
     let cancelXHR = null;
     /* upload options dialog: target folder + storage channel override + original filename */
-    const uploadDlg = reactive({ open: false, file: null, folder: "", chat: "", msg: "", busy: false });
+    const uploadDlg = reactive({ open: false, files: [], folder: "", chat: "", msg: "", busy: false });
     const uploadChatOptions = computed(() => {
       const opts = [{ value: "", label: "پیش‌فرض کلید/سیستم" }];
       if (channelsDefaultChat.value) opts.push({ value: channelsDefaultChat.value, label: `کانال پیش‌فرض (${channelsDefaultChat.value})` });
       for (const c of channels.value) if (!opts.some(o => o.value === c.chat)) opts.push({ value: c.chat, label: (c.label ? c.label + " — " : "") + c.chat });
       return opts;
     });
-    function uploadPick() { loaders.channels(); switchTab("files"); uploadDlg.open = true; uploadDlg.file = null; }
-    function onUploadFileChosen(ev) { uploadDlg.file = ev.target.files[0] || null; ev.target.value = ""; }
+    function uploadPick() { loaders.channels(); switchTab("files"); uploadDlg.open = true; uploadDlg.files = []; }
+    function onUploadFileChosen(ev) { uploadDlg.files = Array.from(ev.target.files || []); ev.target.value = ""; }
+    /* drag & drop onto the files tab → same upload dialog (folder/channel preserved) */
+    const filesDragDepth = ref(0);
+    function onFilesDrop(ev) {
+      filesDragDepth.value = 0;
+      if (tab.value !== "files" || uploadDlg.busy) return;
+      const dropped = Array.from(ev.dataTransfer?.files || []);
+      if (!dropped.length) return;
+      if (filesTrashed.value) filesTrashed.value = false; // uploads never target trash view
+      // prefill: current folder (draft mirrors it) + active channel filter
+      uploadDlg.folder = filesFolderDraft.value || "";
+      uploadDlg.chat = channelFilterIsDefault.value ? "" : channelFilter.value;
+      uploadDlg.files = dropped;
+      uploadDlg.msg = "";
+      loaders.channels();
+      uploadDlg.open = true;
+    }
     async function uploadStart() {
-      const f = uploadDlg.file;
-      if (!f) { uploadDlg.msg = "فایل را انتخاب کنید"; return; }
+      if (!uploadDlg.files.length) { uploadDlg.msg = "فایل را انتخاب کنید"; return; }
       uploadDlg.busy = true; uploadDlg.msg = "";
       try {
-        const fid = await doUpload(f, uploadDlg.folder.trim(), uploadDlg.chat);
+        const fid = await doUpload(uploadDlg.files[0], uploadDlg.folder.trim(), uploadDlg.chat);
         showToast("صف شد: " + fid);
         uploadDlg.open = false;
-        uploadDlg.file = null;
+        uploadDlg.files = [];
         filesFolderDraft.value = uploadDlg.folder.trim();
         loaders.files();
       } catch (e) { uploadDlg.msg = e.message; }
