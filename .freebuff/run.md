@@ -76,3 +76,8 @@ powershell -NoProfile -Command '$env:TGDRIVE_FAKE_TG="1"; $env:TGDRIVE_DATA_DIR=
 - Panel: bulk mode gains «انتقال گروهی به کانال…» + dialog (channel select from registry/default + folder select untouched/root/any folder) → /files/bulk-transfer.
 - FileRepo.set_parts new; KIND_TRANSFER constant; job stats by_kind includes transfer.
 - Tests: tests/test_bulk_transfer.py (4) → 155 pytest + 12 e2e; bundle index-Cj5OLOCs.js. Live: upload 512B → bulk-transfer → ready in -1002296795477 with new message_id.
+
+## Channel stats in list + filter select (2026-09-29, round 7)
+- GET /api/v1/channels already aggregated ready/non-deleted files+bytes per chat (_stats_by_chat, '' bucket = empty storage_chat); now also returns default_stats for the system-default chat (works even when tg_storage_chat='' → the ''/Saved bucket). Gotcha: `stats.get(default_chat or "__none__")` broke the ''-bucket — default_chat '' must still read bucket ''.
+- Panel: channels tab virtual default row shows real files/bytes (channelDefaultStats ref); files-tab channel select shows counts in options («کانال پیش‌فرض (chat) — N» / «chat — N» و «همه کانال‌ها (total)»); switchTab('files') now also fires loaders.channels() so the select counts are fresh.
+- Tests: tests/test_channel_stats.py (2) → 157 pytest + 12 e2e; bundle index-Ci_l10iZ.js. Live: @-1002296795477 files=2/1536B; default_stats files=2 bytes=9.6MB.

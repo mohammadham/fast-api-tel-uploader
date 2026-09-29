@@ -87,7 +87,11 @@ async def list_channels(_: str = Depends(get_current_admin), db=Depends(get_db))
         it["files"] = s["files"]
         it["bytes"] = s["bytes"]
         it["is_system_default"] = bool(default_chat) and it["chat"] == default_chat
-    return {"items": items, "default_chat": default_chat}
+    # the system-default chat may have no registry row; surface its stats
+    # explicitly so the panel's virtual row and filter options show real counts.
+    # '' (no default set) means per-account/Saved — that bucket is keyed ''
+    default_stats = stats.get(default_chat, {"files": 0, "bytes": 0})
+    return {"items": items, "default_chat": default_chat, "default_stats": default_stats}
 
 
 @router.post("")

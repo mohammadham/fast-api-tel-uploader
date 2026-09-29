@@ -339,9 +339,9 @@
           <button class="ghost" :style="filesBlockedOnly ? 'border-color:var(--err);color:var(--err)' : ''" style="padding:5px 10px;font-size:12px" @click="filesBlockedOnly = !filesBlockedOnly; loaders.files()">فقط بن‌شده‌ها</button>
           <button class="ghost" :style="filesTrashed ? 'border-color:var(--warn);color:var(--warn)' : ''" style="padding:5px 10px;font-size:12px" @click="filesTrashed = !filesTrashed; filesOffset = 0; loaders.files()">🗑 زباله‌دان</button>
           <select v-model="filesChannelPick" style="padding:5px 8px;font-size:13px" @change="applyChannelPick">
-            <option value="">همه کانال‌ها</option>
-            <option v-if="channelsDefaultChat" value="__default__">کانال پیش‌فرض ({{ channelsDefaultChat }})</option>
-            <option v-for="c in channels" :key="c.id" :value="c.chat">{{ c.label ? c.label + " — " : "" }}{{ c.chat }}</option>
+            <option value="">همه کانال‌ها ({{ filesTotal }})</option>
+            <option v-if="channelsDefaultChat" value="__default__">کانال پیش‌فرض ({{ channelsDefaultChat }}) — {{ channelDefaultStats.files }}</option>
+            <option v-for="c in channels" :key="c.id" :value="c.chat">{{ c.label ? c.label + " — " : "" }}{{ c.chat }} — {{ c.files || 0 }}</option>
           </select>
           <span class="muted" style="font-size:12px">{{ filesTotal }} فایل</span>
         </div>
@@ -1379,6 +1379,8 @@ const doLogin = submitLogin;
       const l = loaders[id];
       const p = l ? l() : Promise.resolve();
       if (id === "channels") loaders.accounts().catch(() => {}); // defaultChannelRow needs the accounts table
+      // the files-tab channel filter shows per-channel file counts → keep the registry fresh
+      if (id === "files") loaders.channels().catch(() => {});
       return p;
     }
 
@@ -1424,11 +1426,19 @@ const doLogin = submitLogin;
     };
     /* ---------- channels (storage channel registry + backup/restore) ---------- */
     const channels = ref([]);
+    const channelDefaultStats = ref({ files: 0, bytes: 0 });
     const channelsDefaultChat = ref("");
     const chanDlg = reactive({ open: false, chat: "", label: "", kind: "storage", msg: "" });
     const chanBusy = reactive({}); // id → busy flag (test/backup/restore in flight)
     loaders.channels = async () => {
-      try { const d = await api("/api/v1/channels"); channels.value = d.items || []; channelsDefaultChat.value = d.default_chat || ""; }
+      try {
+        const d = await api("/api/v1/channels");
+        channelsDefaultChat.value = d.default_chat || "";
+        channelDefaultStats.value = d.default_stats || { files: 0, bytes: 0 };
+        // registry rows missing the aggregate stats (older payloads) get zeros;
+        // ready-file counts come from the same aggregate query server-side
+        channels.value = (d.items || []).map((c) => ({ files: 0, bytes: 0, ...c }));
+      }
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
     async function chanSave() {
@@ -1494,9 +1504,7 @@ const doLogin = submitLogin;
        it has no registry row of its own — fixes "default channel missing from the list" */
     const defaultChannelRow = computed(() => {
       if (!channelsDefaultChat.value) return null;
-      const a = accounts.value.find((x) => (x.storage_chat_id || "me") === "me") || accounts.value[0];
-      if (!a || a.pool == null) return null;
-      return { chat: channelsDefaultChat.value, files: 0, bytes: 0 };
+      return { chat: channelsDefaultChat.value, files: channelDefaultStats.value.files, bytes: channelDefaultStats.value.bytes };
     });
     function chanFmtBackup(c) {
       if (!c.last_backup_at) return "—";
