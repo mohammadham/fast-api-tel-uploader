@@ -190,6 +190,52 @@ test.describe.serial("panel smoke", () => {
     });
   });
 
+  test("real batch upload: dialog files run sequentially with per-file percent and «file k of n» badges", async ({ page }) => {
+    await login(page);
+    await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+
+    // slow chunk uploads so the queue state is observable
+    await page.route("**/upload/session/*", async (route) => {
+      await new Promise((res) => setTimeout(res, 350));
+      await route.continue();
+    });
+
+    await page.locator("section:visible button", { hasText: "آپلود جدید" }).click();
+    await page.locator("dialog:visible input[type='file']").setInputFiles([
+      { name: "e2e-batch-a.txt", mimeType: "text/plain", buffer: Buffer.alloc(10 * 1024 * 1024, 1) },
+      { name: "e2e-batch-b.txt", mimeType: "text/plain", buffer: Buffer.alloc(10 * 1024 * 1024, 2) },
+    ]);
+    await page.locator("dialog:visible button", { hasText: "شروع آپلود" }).click();
+
+    const tray = page.locator("#upload-tray");
+    await expect(tray.getByText("e2e-batch-a.txt")).toBeVisible();
+    await expect(tray.getByText("e2e-batch-b.txt")).toBeVisible();
+
+    // both rows appear immediately; while the first uploads, the second shows
+    // «در صف» (queued), and the running row shows the batch ordinal badge
+    await expect(tray.getByText("فایل 1 از 2")).toBeVisible({ timeout: 10000 });
+    await expect(tray.locator(".badge", { hasText: "در صف" })).toHaveCount(1);
+    // header counts the queued one separately
+    await expect(tray.locator("b", { hasText: "در صف" })).toBeVisible();
+
+    // first finishes (its badge flips to «صف شد»), only then the second starts
+    await expect(tray.locator(".badge", { hasText: "صف شد" })).toHaveCount(1, { timeout: 20000 });
+    await expect(tray.getByText("فایل 2 از 2")).toBeVisible({ timeout: 10000 });
+    await expect(tray.locator(".badge", { hasText: "در صف" })).toHaveCount(0);
+
+    // both done: two «صف شد» badges, and both files listed server-side
+    await expect(tray.locator(".badge", { hasText: "صف شد" })).toHaveCount(2, { timeout: 20000 });
+    await page.evaluate(async () => {
+      const token = localStorage.getItem("td_token");
+      const { items } = await fetch("/api/v1/files?limit=100", { headers: { Authorization: "Bearer " + token } }).then((r) => r.json());
+      const names = items.filter((x) => x.name.startsWith("e2e-batch-")).map((x) => x.name).sort();
+      if (JSON.stringify(names) !== JSON.stringify(["e2e-batch-a.txt", "e2e-batch-b.txt"])) throw new Error("batch files missing: " + names);
+      for (const f of items.filter((x) => x.name.startsWith("e2e-batch-"))) {
+        await fetch("/api/v1/files/" + f.id + "?purge=true", { method: "DELETE", headers: { Authorization: "Bearer " + token } });
+      }
+    });
+  });
+
   test("tray cancel closes the upload session server-side (global cancel)", async ({ page }) => {
     await login(page);
     await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();

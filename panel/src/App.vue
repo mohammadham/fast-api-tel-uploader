@@ -1016,7 +1016,7 @@
     <div v-if="uploadJobs.length" id="upload-tray" class="card" :style="{ position:'fixed',bottom:'14px',left:'14px',width:'340px','max-width':'calc(100vw - 28px)','z-index':80,padding:'10px 12px','box-shadow':'0 8px 24px rgba(0,0,0,.35)', outline: trayDrag ? '2px dashed var(--accent,#3b82f6)' : 'none', 'outline-offset': '-4px', background: trayDrag ? 'rgba(59,130,246,.10)' : undefined }" @dragover.prevent="trayDrag = true" @dragenter.prevent="trayDrag = true" @dragleave.self="trayDrag = false" @drop.prevent="onTrayDrop">
       <div v-if="trayDrag" class="muted" style="text-align:center;font-size:11px;padding:2px 0 4px">فایل‌ها را همین‌جا رها کنید — با پوشه/کانالِ آخرین آپلود بالا می‌رود</div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <b style="font-size:13px">آپلودها ({{ uploadJobs.filter(j => j.status === 'uploading').length }} فعال / {{ uploadJobs.length }})</b>
+        <b style="font-size:13px">آپلودها ({{ uploadJobs.filter(j => j.status === 'uploading').length }} فعال<template v-if="uploadJobs.some(j => j.status === 'uploading' && !j.started)"> • {{ uploadJobs.filter(j => j.status === 'uploading' && !j.started).length }} در صف</template> / {{ uploadJobs.length }})</b>
         <button class="ghost" style="padding:2px 8px;font-size:11px" @click="clearFinishedUploads" :disabled="!uploadJobs.some(j => j.status !== 'uploading')">پاک‌سازی تمام‌شده‌ها</button>
       </div>
       <div v-for="j in uploadJobs" :key="j.id" style="padding:6px 0;border-top:1px solid var(--border,#2a2f3a)">
@@ -1024,7 +1024,7 @@
           <span class="muted" dir="ltr" style="font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="j.name">{{ j.name }}</span>
           <span v-if="j.folder" class="tag" style="font-size:10px" dir="ltr">{{ j.folder }}</span>
           <span v-if="j.chat" class="tag" style="font-size:10px" dir="ltr">{{ j.chat }}</span>
-          <span class="badge" :class="j.status" style="font-size:10px">{{ j.status === 'uploading' ? (j.cancelRequested ? "در حال لغو…" : "در حال آپلود") : j.status === "done" ? "صف شد" : j.status === "canceled" ? "لغو شد" : "خطا" }}</span>
+          <span class="badge" :class="j.status" style="font-size:10px">{{ j.status === 'uploading' ? (j.cancelRequested ? "در حال لغو…" : !j.started ? "در صف" : (j.batchTotal > 1 ? ("فایل " + j.batchIndex + " از " + j.batchTotal) : "در حال آپلود")) : j.status === "done" ? "صف شد" : j.status === "canceled" ? "لغو شد" : "خطا" }}</span>
           <button v-if="j.status === 'uploading'" class="ghost" style="padding:1px 7px;font-size:11px" @click="cancelUploadJob(j)">لغو</button>
           <button v-else class="ghost" style="padding:1px 7px;font-size:11px" @click="dismissUploadJob(j)">×</button>
         </div>
@@ -2220,11 +2220,7 @@ const doLogin = submitLogin;
       const folder = (last && last.folder) || "";
       const chat = (last && last.chat) || "";
       if (filesTrashed.value) filesTrashed.value = false;
-      for (const f of dropped) {
-        const job = { id: ++uploadJobSeq, name: f.name, folder, chat, pct: 0, speed: 0, status: "uploading", error: "", controller: new AbortController() };
-        uploadJobs.value.push(job);
-        runUploadJob(job, f);
-      }
+      enqueueUploadJobs(dropped.map((f) => [f, folder, chat]));
       showToast("آپلود " + dropped.length + " فایل با تنظیمات آخرین جاب");
     }
     function onFilesDrop(ev) {
@@ -2247,18 +2243,30 @@ const doLogin = submitLogin;
       const chat = uploadDlg.chat;
       const dropped = uploadDlg.files;
       // hand the files over to the persistent tray and close the dialog —
-      // the transfers continue in the background
-      for (const f of dropped) {
-        const job = { id: ++uploadJobSeq, name: f.name, folder, chat, pct: 0, speed: 0, status: "uploading", error: "", controller: new AbortController() };
-        uploadJobs.value.push(job);
-        runUploadJob(job, f);
-      }
+      // the batch uploads file-by-file in the background
+      enqueueUploadJobs(dropped.map((f) => [f, folder, chat]));
       uploadDlg.busy = false;
       uploadDlg.files = [];
       uploadDlg.open = false;
       filesFolderDraft.value = folder;
     }
+    /* real batch upload: files of one batch run SEQUENTIALLY (one HTTP upload
+    at a time) while every file keeps its own tray row with its own percent;
+    the row badge shows «فایل k از n». uploadChain tail-queues so a new batch
+    never interleaves with an in-flight one. */
+    let uploadChain = Promise.resolve();
+    function enqueueUploadJobs(pairs) {
+      const total = pairs.length;
+      let ordinal = 0;
+      for (const [f, folder, chat] of pairs) {
+        const job = { id: ++uploadJobSeq, name: f.name, folder, chat, pct: 0, speed: 0, status: "uploading", error: "", controller: new AbortController(), batchTotal: total, batchIndex: ++ordinal };
+        uploadJobs.value.push(job);
+        uploadChain = uploadChain.then(() => runUploadJob(job, f));
+      }
+    }
     async function runUploadJob(job, file) {
+      if (job.status === "canceled") return; // cancelled while still queued
+      job.started = true;
       try {
         const fid = await doUpload(file, job.folder, job.chat, job);
         job.status = "done";
