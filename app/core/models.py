@@ -246,6 +246,25 @@ class AccountRepo:
     async def set_circuit(self, account_id: int, until: float) -> None:
         await self.db.execute("UPDATE tg_accounts SET circuit_open_until=? WHERE id=?", (until, account_id))
 
+    async def handled_24h_map(self) -> Dict[str, int]:
+        """Queue jobs handled per backend key over the last 24h (payload.handled_by)."""
+        since = time.time() - 86400
+        out: Dict[str, int] = {}
+        try:
+            rows = await self.db.fetch_all(
+                "SELECT payload FROM jobs WHERE status='done' AND finished_at >= ?", (since,)
+            )
+            for r in rows:
+                try:
+                    k = (json.loads(r["payload"] if isinstance(r["payload"], str) else "{}") or {}).get("handled_by", "")
+                except Exception:
+                    continue
+                if k:
+                    out[k] = out.get(k, 0) + 1
+        except Exception:
+            return {}
+        return out
+
     async def set_status(self, account_id: int, status: str, error: str = "") -> None:
         await self.db.execute(
             "UPDATE tg_accounts SET status=?, last_error=? WHERE id=?", (status, error[:500], account_id)

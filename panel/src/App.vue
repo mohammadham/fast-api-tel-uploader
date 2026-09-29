@@ -120,12 +120,13 @@
         </div>
         <div class="card wide">
           <table>
-            <thead><tr><th>شناسه</th><th>برچسب</th><th>تلفن</th><th>وضعیت</th><th>آپلودها</th><th>دانلودها</th><th>حجم آپلود</th><th>کانال ذخیره</th><th>عملیات</th></tr></thead>
+            <thead><tr><th>شناسه</th><th>برچسب</th><th>تلفن</th><th>وضعیت</th><th>آپلودها</th><th>دانلودها</th><th>حجم آپلود</th><th>هندل ۲۴س</th><th>کانال ذخیره</th><th>عملیات</th></tr></thead>
             <tbody>
               <tr v-for="a in accounts" :key="a.id">
                 <td>{{ a.id }}</td><td>{{ a.label }}</td><td dir="ltr">{{ a.phone }}</td>
                 <td><span class="badge" :class="a.status">{{ a.status }}</span></td>
                 <td>{{ a.uploads_done }}</td><td>{{ a.downloads_done }}</td><td>{{ fmtBytes(a.bytes_up) }}</td>
+                <td>{{ a.handled_24h ?? 0 }}</td>
                 <td dir="ltr"><code style="font-size:11px">{{ a.storage_chat_id || 'default' }}</code></td>
                 <td>
                   <button @click="accToggle(a)">{{ a.enabled ? "غیرفعال" : "فعال" }}</button>
@@ -135,7 +136,7 @@
                   <button class="danger" @click="accDelete(a)">حذف</button>
                 </td>
               </tr>
-              <tr v-if="!accounts.length"><td colspan="9" class="muted">اکانتی نیست</td></tr>
+              <tr v-if="!accounts.length"><td colspan="10" class="muted">اکانتی نیست</td></tr>
             </tbody>
           </table>
         </div>
@@ -149,18 +150,20 @@
         </div>
         <div class="card wide">
           <table>
-            <thead><tr><th>شناسه</th><th>برچسب</th><th>وضعیت</th><th>خطا</th><th>عملیات</th></tr></thead>
+            <thead><tr><th>شناسه</th><th>برچسب</th><th>وضعیت</th><th>هندل ۲۴س</th><th>خطا</th><th>عملیات</th></tr></thead>
             <tbody>
               <tr v-for="b in bots" :key="b.id">
                 <td>{{ b.id }}</td><td>{{ b.label }}</td>
                 <td><span class="badge" :class="b.status">{{ b.status }}</span></td>
+                <td>{{ b.handled_24h ?? 0 }}</td>
                 <td class="muted">{{ b.last_error }}</td>
                 <td>
                   <button @click="botToggle(b)">{{ b.enabled ? "غیرفعال" : "فعال" }}</button>
+                  <button @click="botTest(b)">تست</button>
                   <button class="danger" @click="botDelete(b)">حذف</button>
                 </td>
               </tr>
-              <tr v-if="!bots.length"><td colspan="5" class="muted">باتی نیست</td></tr>
+              <tr v-if="!bots.length"><td colspan="6" class="muted">باتی نیست</td></tr>
             </tbody>
           </table>
         </div>
@@ -1748,7 +1751,7 @@ const doLogin = submitLogin;
       download_workers: "ورکرهای دانلود",
       upload_workers: "ورکرهای آپلود",
       max_concurrent_downloads: "دانلود همزمان هر اکانت",
-      max_concurrent_uploads: "آپلود همزمان",
+      max_concurrent_uploads: "سقف آپلود همزمان کل سیستم (فشار روی بک‌اندها)",
       default_backend: "بک‌اند پیش‌فرض",
       eitaa_mode: "مقصد ایتا (۰=تلگرام، ۱=ایتا)",
       fake_tg: "حالت تست (تلگرام آزمایشی درون‌حافظه‌ای)",
@@ -2027,6 +2030,14 @@ const doLogin = submitLogin;
       } catch (e) { botDlg.msg = e.message; }
     }
     async function botToggle(b) { await api(`/api/v1/bots/${b.id}/toggle`, { method: "POST" }); loaders.bots(); }
+    async function botTest(b) {
+      showToast("در حال تست ربات…");
+      try {
+        const d = await api(`/api/v1/bots/${b.id}/test`, { method: "POST" });
+        showToast(d.ok ? "ربات سالم است (پیام آزمایشی ارسال شد)" : "خطا: " + d.error, 3500, !d.ok);
+      } catch (e) { showToast("خطا: " + e.message, 3500, true); }
+      loaders.bots();
+    }
     async function botDelete(b) { if (confirm("حذف بات؟")) { await api(`/api/v1/bots/${b.id}`, { method: "DELETE" }); loaders.bots(); } }
 
     /* ---------- eitaa ---------- */

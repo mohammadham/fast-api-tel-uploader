@@ -60,3 +60,11 @@ powershell -NoProfile -Command '$env:TGDRIVE_FAKE_TG="1"; $env:TGDRIVE_DATA_DIR=
 - **Tests**: tests/test_folder_scopes.py (۲ تست)؛ e2e upload + account-channel دو تست به جریان دیالوگ آپدیت شدند (prompt دیگر نیست؛ برای دیالوگ select اکانت باید کانال با POST /api/v1/channels seed شود).
 - Suite: 147 pytest + 12 e2e؛ پنل باندل index-BsSGw9I7.js (حاشه: vite شناسه‌ها را minify می‌کند — برای verify باندل، متن فارسی جست‌وجو کن نه نام متغیر).
 - Live (8765, data-livepanel): آپلود 1KB با X-Storage-Chat=-1002296795477 و X-Folder=live-scope/clip → ready، storage_chat و folder_id درست؛ folders با scope دو کانال جدا ایزوله؛ PATCH کلید → storage_chat عوض شد.
+
+## Bots ops + load-pressure wiring (2026-09-29, round 5)
+- **Bot test**: POST /api/v1/bots/{id}/test — probes THIS bot via acquire_key + tiny sendDocument to tg_storage_chat (fallback 'me'); status flips ready/error, audited. add_bot now also refresh_one_bot so the backend exists without restart.
+- **handled_24h**: upload/delete/download handlers record borrowed.key into payload.handled_by after job done (_last_backend_by_job map; download/delete get __job_id injected). GET /bots and /accounts join a 24h done-jobs count per backend key (AccountRepo.handled_24h_map). Panel: «هندل ۲۴س» column in bots + accounts tables.
+- **Pressure settings audit**: download_workers/upload_workers → live resize (set_worker_counts via apply_runtime) ✓; max_concurrent_downloads → per-acc semaphore in manager._sem ✓; circuit breaker (CIRCUIT_THRESHOLD=5/300s) + FloodWait ✓. GAP FIXED: max_concurrent_uploads was defined in EDITABLE_SETTINGS + panel label but NEVER used → now a global asyncio gate around the whole upload send in _handle_upload (async _upload_semaphore, rebuilt on runtime change; env default max=2).
+- Gotcha: FakeBackend/BotBackend have no `.key` — use borrowed.key (caught by test_delete_queues_job).
+- Tests: tests/test_bots_ops.py (4 tests) → 151 pytest + 12 e2e; panel bundle index-Ct1ThFHn.js.
+- Live (8765): bot:2 test ok (probe 5557); upload → acc handled_24h=1; PUT settings max_concurrent_uploads 3→2 round-trip works.

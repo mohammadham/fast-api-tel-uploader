@@ -69,6 +69,12 @@ class QueueManager:
         self._worker_counts = {"download": 0, "upload": 0}
         self._worker_seq = {"download": 0, "upload": 0}
         self._stopped = False
+        # job_id → backend key (acc:1 / bot:2) that handled it, set by handlers
+        # via self._handled_by and consumed in _process after a job completes
+        self._last_backend_by_job: Dict[str, str] = {}
+        # global upload concurrency gate (runtime setting max_concurrent_uploads)
+        self._upload_gate: Optional[asyncio.Semaphore] = None
+        self._upload_gate_val: int = 0
         self._redis: Optional[redis.Redis] = None
         self._redis_enabled = self.settings.redis_enabled and self.settings.redis_url
         # Redis connection is initialized lazily on first use to avoid blocking startup
@@ -124,6 +130,19 @@ class QueueManager:
         self._workers.clear()
 
     # ── dynamic worker resizing ───────────────────────────────
+    async def _upload_semaphore(self) -> asyncio.Semaphore:
+        """Global upload gate; rebuilt lazily when the runtime setting changes."""
+        cap = self.settings.max_concurrent_uploads
+        try:
+            cap = int(await get_runtime(self.db, "max_concurrent_uploads") or cap)
+        except Exception:
+            pass
+        cap = max(1, cap)
+        if self._upload_gate is None or self._upload_gate_val != cap:
+            self._upload_gate = asyncio.Semaphore(cap)
+            self._upload_gate_val = cap
+        return self._upload_gate
+
     def set_worker_counts(self, download: int, upload: int) -> None:
         """Grow/shrink worker pools live (no restart needed)."""
         download = max(1, int(download))
@@ -433,11 +452,11 @@ class QueueManager:
         try:
             try:
                 if kind == KIND_DOWNLOAD:
-                    await self._handle_download(payload)
+                    await self._handle_download({**payload, "__job_id": job_id})
                 elif kind == KIND_UPLOAD:
                     await self._handle_upload(payload, job_id)
                 elif kind == KIND_DELETE:
-                    await self._handle_delete(payload)
+                    await self._handle_delete({**payload, "__job_id": job_id})
                 else:
                     raise TransferError(f"unknown job kind {kind}")
             except FloodWait as exc:
@@ -450,6 +469,15 @@ class QueueManager:
                 await self._retry(job_id, row, f"internal: {exc}")
             else:
                 await self.jobs.update_fields(job_id, status="done", finished_at=now(), error="")
+                # remember which backend handled this job so the panel can show
+                # a per-account/per-bot 24h handled-files counter
+                try:
+                    bk = self._last_backend_by_job.pop(job_id, None)
+                    if bk:
+                        payload["handled_by"] = bk
+                        await self.jobs.update_fields(job_id, payload=payload)
+                except Exception:
+                    pass
                 self._rows.pop(job_id, None)
                 metrics.inc(f"queue.done.{kind}")
                 self._wake.set()
@@ -460,6 +488,9 @@ class QueueManager:
                     duration_ms=round((time.perf_counter() - t0) * 1000, 1),
                 )
         finally:
+            # handlers re-set this on every attempt; dropping it here keeps the
+            # map bounded when jobs fail permanently
+            self._last_backend_by_job.pop(job_id, None)
             job_var.reset(token)
             corr_var.reset(corr_token)
 
@@ -555,32 +586,41 @@ class QueueManager:
                 folder_tag = tags
         except Exception as exc:  # never fail the upload because of a caption
             slog_q.warning("folder tag skipped", file_id=file_id, error=str(exc)[:120])
-        borrowed = await self.manager.acquire("acc", backend=backend)
-        async with borrowed as be:
-            account_key = borrowed.key
-            # fall back to the backend default when neither the key nor the
-            # record pins a chat ('' → send_document resolves 'me'/global)
-            storage_chat = storage_chat or getattr(be, "storage_chat", "me") or ""
-            if size > split_at and backend != "eitaa":
-                # split into parts below the MTProto 2GB cap
-                part_size = split_at
-                part_paths = await self._split_file(tmp_path, part_size)
-                try:
-                    for idx, ppath in enumerate(part_paths):
-                        part_name = f"{name}.part{idx:04d}"
-                        result = await be.send_document(storage_chat, ppath, part_name, mime, caption=folder_tag)
-                        message_ids.append(int(result["message_id"]))
-                        await self.files.add_part(file_id, idx, int(result["message_id"]), int(result["size"]))
-                finally:
-                    for ppath in part_paths:
-                        try:
-                            os.remove(ppath)
-                        except OSError:
-                            pass
-            else:
-                result = await be.send_document(storage_chat, tmp_path, name, mime, caption=folder_tag)
-                message_ids.append(int(result["message_id"]))
-                await self.files.add_part(file_id, 0, int(result["message_id"]), int(result["size"]))
+        # global upload concurrency gate: caps how many uploads touch telegram
+        # backends at the same time (runtime setting max_concurrent_uploads);
+        # held for the whole send so uploads never exceed the configured cap
+        gate = await self._upload_semaphore()
+        await gate.acquire()
+        try:
+            borrowed = await self.manager.acquire("acc", backend=backend)
+            async with borrowed as be:
+                account_key = borrowed.key
+                self._last_backend_by_job[job_id] = borrowed.key
+                # fall back to the backend default when neither the key nor the
+                # record pins a chat ('' → send_document resolves 'me'/global)
+                storage_chat = storage_chat or getattr(be, "storage_chat", "me") or ""
+                if size > split_at and backend != "eitaa":
+                    # split into parts below the MTProto 2GB cap
+                    part_size = split_at
+                    part_paths = await self._split_file(tmp_path, part_size)
+                    try:
+                        for idx, ppath in enumerate(part_paths):
+                            part_name = f"{name}.part{idx:04d}"
+                            result = await be.send_document(storage_chat, ppath, part_name, mime, caption=folder_tag)
+                            message_ids.append(int(result["message_id"]))
+                            await self.files.add_part(file_id, idx, int(result["message_id"]), int(result["size"]))
+                    finally:
+                        for ppath in part_paths:
+                            try:
+                                os.remove(ppath)
+                            except OSError:
+                                pass
+                else:
+                    result = await be.send_document(storage_chat, tmp_path, name, mime, caption=folder_tag)
+                    message_ids.append(int(result["message_id"]))
+                    await self.files.add_part(file_id, 0, int(result["message_id"]), int(result["size"]))
+        finally:
+            gate.release()
 
         await self.files.set_stored(file_id, storage_chat, message_ids, len(message_ids))
         try:
@@ -671,6 +711,7 @@ class QueueManager:
         borrowed = await self.manager.acquire("acc", backend=rec.get("backend") or "telegram")
         async with borrowed as backend:
             account_key = borrowed.key
+            self._last_backend_by_job[payload.get("__job_id", "")] = borrowed.key
             chat = rec["storage_chat"] or getattr(backend, "storage_chat", "me")
             with open(tmp, "wb") as fh:
                 for part in parts:
@@ -698,7 +739,9 @@ class QueueManager:
             return
         parts = await self.files.parts(file_id)
         if parts:
-            async with await self.manager.acquire("acc", backend=rec.get("backend") or "telegram") as backend:
+            borrowed = await self.manager.acquire("acc", backend=rec.get("backend") or "telegram")
+            async with borrowed as backend:
+                self._last_backend_by_job[payload.get("__job_id", "")] = borrowed.key
                 chat = rec["storage_chat"] or getattr(backend, "storage_chat", "me")
                 for part in parts:
                     try:

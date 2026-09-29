@@ -46,10 +46,11 @@ async def list_accounts(_: str = Depends(get_current_admin), db=Depends(get_db))
     rows = await AccountRepo(db).list()
     manager = state.manager
     health = {h["key"]: h for h in (manager.health() if manager else [])}
+    handled = await AccountRepo(db).handled_24h_map()
     out = []
     for r in rows:
         h = health.get(f"acc:{r['id']}", {})
-        out.append({**r, "pool": h})
+        out.append({**r, "pool": h, "handled_24h": handled.get(f"acc:{r['id']}", 0)})
     return {"items": out}
 
 

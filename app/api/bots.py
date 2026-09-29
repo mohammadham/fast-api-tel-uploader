@@ -1,5 +1,13 @@
-"""Bot token management: add (validated via getMe), enable/disable, delete."""
+"""Bot token management: add (validated via getMe), enable/disable, delete.
+
+Per-bot ops: a direct health probe (/test) and a 24h handled-files counter
+fed from the queue jobs table (jobs record which backend handled them).
+"""
 from __future__ import annotations
+
+import os
+import tempfile
+import time
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,7 +29,28 @@ class BotIn(BaseModel):
 
 @router.get("")
 async def list_bots(_: str = Depends(get_current_admin), db=Depends(get_db)):
-    return {"items": await BotRepo(db).list()}
+    rows = await BotRepo(db).list()
+    # handled_24h: queue jobs this backend handled in the last 24h. The queue
+    # writes the handling backend key into the job payload on completion.
+    since = time.time() - 86400
+    handled: dict = {}
+    try:
+        rows_jobs = await db.fetch_all(
+            "SELECT payload FROM jobs WHERE status='done' AND finished_at >= ?",
+            (since,),
+        )
+        import json as _json
+
+        for r in rows_jobs:
+            try:
+                k = (_json.loads(r["payload"] if isinstance(r["payload"], str) else "{}") or {}).get("handled_by", "")
+            except Exception:
+                continue
+            if k:
+                handled[k] = handled.get(k, 0) + 1
+    except Exception:
+        handled = {}
+    return {"items": [{**r, "handled_24h": handled.get(f"bot:{r['id']}", 0)} for r in rows]}
 
 
 @router.post("")
@@ -53,6 +82,11 @@ async def add_bot(body: BotIn, admin: str = Depends(get_current_admin), db=Depen
         await BotRepo(db).set_status(bot_id, "ready")
         if state.bots:
             state.bots.start_one(bot_id)
+        if state.manager:
+            try:
+                await state.manager.refresh_one_bot(bot_id)
+            except Exception:
+                pass
         await db.audit(admin, "bot.add", target=str(bot_id), details="@fake_bot (fake-tg)")
         return {"id": bot_id, "username": "fake_bot"}
     base = s.bot_api_base.rstrip("/")
@@ -73,6 +107,11 @@ async def add_bot(body: BotIn, admin: str = Depends(get_current_admin), db=Depen
     await repo.set_status(bot_id, "ready")
     if state.bots:
         state.bots.start_one(bot_id)
+    if state.manager:
+        try:
+            await state.manager.refresh_one_bot(bot_id)
+        except Exception:
+            pass
     await db.audit(admin, "bot.add", target=str(bot_id), details=f"@{data['result'].get('username', '')}")
     return {"id": bot_id, "username": data["result"].get("username")}
 
@@ -93,6 +132,50 @@ async def toggle_bot(bot_id: int, admin: str = Depends(get_current_admin), db=De
             if task:
                 task.cancel()
     return {"enabled": enabled}
+
+
+@router.post("/{bot_id}/test")
+async def test_bot(bot_id: int, admin: str = Depends(get_current_admin), db=Depends(get_db)):
+    """Directly probe THIS bot's backend: send a tiny document to Saved Messages
+    (or the system default chat when set) and report ok/error."""
+    repo = BotRepo(db)
+    row = await repo.get(bot_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="bot not found")
+    if state.manager is None:
+        raise HTTPException(status_code=503, detail="manager not running")
+    key = f"bot:{bot_id}"
+    s = get_settings()
+    try:
+        from ..core.settings_service import runtime_settings
+
+        cache = runtime_settings()._cache
+        chat = (cache.get("tg_storage_chat") or s.tg_storage_chat or "me").strip() or "me"
+    except Exception:
+        chat = (s.tg_storage_chat or "me").strip() or "me"
+    fd, path = tempfile.mkstemp(suffix=".txt")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write("tgdrive bot probe")
+        try:
+            async with await state.manager.acquire_key(key) as backend:
+                result = await backend.send_document(chat, path, "probe_bot.txt", "text/plain", caption="tgdrive-probe")
+            if state.manager._available(key):
+                # successful probe resets transient error counter
+                state.manager.release_stats(key)
+            await repo.set_status(bot_id, "ready", "")
+            await db.audit(admin, "bot.test", target=str(bot_id), details=f"{key} → {chat}")
+            return {"ok": True, "message_id": result["message_id"], "chat": chat, "bot_id": bot_id}
+        except Exception as exc:
+            err = str(exc)[:280]
+            await repo.set_status(bot_id, "error", err)
+            await db.audit(admin, "bot.test", target=str(bot_id), details=f"FAIL {key}: {err}")
+            return {"ok": False, "error": err, "bot_id": bot_id}
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 @router.delete("/{bot_id}")
