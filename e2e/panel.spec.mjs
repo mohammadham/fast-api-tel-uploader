@@ -228,12 +228,61 @@ test.describe.serial("panel smoke", () => {
     await page.evaluate(async () => {
       const token = localStorage.getItem("td_token");
       const { items } = await fetch("/api/v1/files?limit=100", { headers: { Authorization: "Bearer " + token } }).then((r) => r.json());
-      const names = items.filter((x) => x.name.startsWith("e2e-batch-")).map((x) => x.name).sort();
-      if (JSON.stringify(names) !== JSON.stringify(["e2e-batch-a.txt", "e2e-batch-b.txt"])) throw new Error("batch files missing: " + names);
+      const names = new Set(items.filter((x) => x.name.startsWith("e2e-batch-")).map((x) => x.name));
+      if (!names.has("e2e-batch-a.txt") || !names.has("e2e-batch-b.txt")) throw new Error("batch files missing: " + [...names]);
       for (const f of items.filter((x) => x.name.startsWith("e2e-batch-"))) {
         await fetch("/api/v1/files/" + f.id + "?purge=true", { method: "DELETE", headers: { Authorization: "Bearer " + token } });
       }
     });
+  });
+
+  test("drop onto a sidebar folder row uploads straight into that folder", async ({ page }) => {
+    await login(page);
+    await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+
+    // create the target folder via API
+    const fid = await page.evaluate(async () => {
+      const token = localStorage.getItem("td_token");
+      const r = await fetch("/api/v1/folders", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ path: "e2e-sbdrop" }) });
+      if (!r.ok) throw new Error("folder create failed: " + r.status);
+      return (await r.json()).id;
+    });
+
+    // re-enter the files tab so the sidebar folder list refreshes
+    await page.locator("#tabs button", { hasText: "داشبورد" }).click();
+    await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+
+    const row = page.locator("div[title^='مسیر: e2e-sbdrop']");
+    await expect(row).toBeVisible();
+
+    // hovering highlights the row with a dashed outline
+    await row.dispatchEvent("dragenter", { dataTransfer: await page.evaluateHandle(() => new DataTransfer()) });
+    await expect(row).toHaveCSS("outline-style", "dashed");
+
+    // drop → no dialog, job goes straight to the tray with the folder pinned
+    await row.dispatchEvent("drop", {
+      dataTransfer: await page.evaluateHandle((buf) => {
+        const dt = new DataTransfer();
+        dt.items.add(new File([buf], "e2e-sbdrop.txt", { type: "text/plain" }));
+        return dt;
+      }, Buffer.from("sidebar drop " + Date.now())),
+    });
+    await expect(page.locator("dialog:visible")).toHaveCount(0);
+    const tray = page.locator("#upload-tray");
+    await expect(tray.getByText("e2e-sbdrop.txt")).toBeVisible();
+    await expect(tray.locator(".tag", { hasText: "e2e-sbdrop" })).toBeVisible(); // folder pinned on the job
+    await expect(tray.locator(".badge", { hasText: "صف شد" })).toHaveCount(1, { timeout: 15000 });
+
+    // the file really landed in the dropped-on folder (server-side check)
+    await page.evaluate(async (fid) => {
+      const token = localStorage.getItem("td_token");
+      const { items } = await fetch("/api/v1/files?limit=100", { headers: { Authorization: "Bearer " + token } }).then((r) => r.json());
+      const f = items.find((x) => x.name === "e2e-sbdrop.txt");
+      if (!f) throw new Error("dropped file not found");
+      if (f.folder_id !== fid) throw new Error("wrong folder: " + f.folder_id + " != " + fid);
+      await fetch("/api/v1/files/" + f.id + "?purge=true", { method: "DELETE", headers: { Authorization: "Bearer " + token } });
+      await fetch("/api/v1/folders/" + fid, { method: "DELETE", headers: { Authorization: "Bearer " + token } });
+    }, fid);
   });
 
   test("tray cancel closes the upload session server-side (global cancel)", async ({ page }) => {

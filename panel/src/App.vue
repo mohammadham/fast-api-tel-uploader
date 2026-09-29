@@ -362,12 +362,13 @@
               <button class="ghost" style="padding:2px 8px;font-size:11px" @click="folderDlg.open = true">+ پوشه</button>
             </div>
             <div style="max-height:320px;overflow:auto">
-              <div style="padding:4px 6px;border-radius:6px;cursor:pointer;" :style="currentFolderId === null ? 'background:var(--accent,#3b82f6);color:#fff' : ''" @click="openFolder(null)">همه فایل‌ها</div>
+              <div style="padding:4px 6px;border-radius:6px;cursor:pointer;" :style="sbRowStyle(null)" @click="openFolder(null)" @dragover.prevent="onSidebarDragOver(null)" @dragenter.prevent="onSidebarDragOver(null)" @dragleave="onSidebarDragLeave(null)" @drop.prevent="onSidebarDrop($event, null)" title="رها کردن فایل برای آپلود در ریشه">همه فایل‌ها</div>
               <div v-for="f in foldersFlat" :key="f.id"
                 style="padding:4px 6px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;gap:6px"
-                :style="currentFolderId === f.id ? 'background:var(--accent,#3b82f6);color:#fff' : ''"
+                :style="sbRowStyle(f.id)"
                 @click="openFolder(f.id)"
-                :title="'مسیر: ' + f.path + (f.scope ? ' — کانال: ' + f.scope : '')">
+                @dragover.prevent="onSidebarDragOver(f.id)" @dragenter.prevent="onSidebarDragOver(f.id)" @dragleave="onSidebarDragLeave(f.id)" @drop.prevent="onSidebarDrop($event, f)"
+                :title="'مسیر: ' + f.path + (f.scope ? ' — کانال: ' + f.scope : '') + ' — فایل را اینجا رها کنید تا در همین پوشه آپلود شود'">
                 <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ '\u00A0'.repeat(f.path.split('/').length - 1) + f.name }}<span v-if="f.scope" class="tag" style="font-size:9px;margin-inline-start:4px;background:var(--panel2)">chan</span></span>
                 <span class="muted" style="font-size:11px">{{ f.file_count }}</span>
                 <span style="display:flex;gap:2px">
@@ -2209,6 +2210,33 @@ const doLogin = submitLogin;
     function onUploadFileChosen(ev) { uploadDlg.files = Array.from(ev.target.files || []); ev.target.value = ""; }
     /* drag & drop onto the files tab → same upload dialog (folder/channel preserved) */
     const filesDragDepth = ref(0);
+    /* drop onto a sidebar folder row → upload straight into that folder
+    (scoped folders also pin their own channel); the row highlights while the
+    file hovers over it */
+    const SIDEBAR_ROOT = "__root__"; // hover key for the "all files" row (null means no hover)
+    const sidebarDropId = ref(null); // hovered row: folder id or SIDEBAR_ROOT
+    function sbRowStyle(id) {
+      const key = id === null ? SIDEBAR_ROOT : id;
+      if (sidebarDropId.value === key) return { background: "rgba(59,130,246,.18)", outline: "2px dashed var(--accent,#3b82f6)", "outline-offset": "-2px" };
+      if (currentFolderId.value === id) return { background: "var(--accent,#3b82f6)", color: "#fff" };
+      return {};
+    }
+    function onSidebarDragOver(id) { sidebarDropId.value = id === null ? SIDEBAR_ROOT : id; }
+    function onSidebarDragLeave(id) { const key = id === null ? SIDEBAR_ROOT : id; if (sidebarDropId.value === key) sidebarDropId.value = null; }
+    function onSidebarDrop(ev, folder) {
+      sidebarDropId.value = null;
+      if (tab.value !== "files" || uploadDlg.busy) return;
+      const dropped = Array.from(ev.dataTransfer?.files || []);
+      if (!dropped.length) return;
+      if (filesTrashed.value) filesTrashed.value = false;
+      ev.sidebarDropped = true; // onFilesDrop must not open the dialog for this
+      filesDragDepth.value = 0;
+      const path = folder ? folder.path : "";
+      const chat = folder && folder.scope ? folder.scope : ""; // scoped folder pins its channel
+      enqueueUploadJobs(dropped.map((f) => [f, path, chat]));
+      showToast("آپلود " + dropped.length + " فایل در " + (path || "/"));
+      filesFolderDraft.value = path;
+    }
     /* drag & drop onto the tray itself → enqueue with the last job's folder/chat */
     const trayDrag = ref(false);
     function onTrayDrop(ev) {
@@ -2225,6 +2253,7 @@ const doLogin = submitLogin;
     }
     function onFilesDrop(ev) {
       filesDragDepth.value = 0;
+      if (ev.sidebarDropped) return; // handled by the sidebar folder row
       if (tab.value !== "files" || uploadDlg.busy) return;
       const dropped = Array.from(ev.dataTransfer?.files || []);
       if (!dropped.length) return;
