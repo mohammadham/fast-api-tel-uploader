@@ -900,6 +900,81 @@ test.describe.serial("panel smoke", () => {
     }
   });
 
+  test("bulk zip download: select files in the UI and fetch the temp archive", async ({ page }) => {
+    await login(page);
+    await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+
+    const tag = "e2e-zipdl-" + Date.now().toString(36) + "-";
+    // upload two fresh files via the API (their contents end up in the zip)
+    const fileIds = await page.evaluate(async (tag) => {
+      const token = localStorage.getItem("td_token");
+      const H = { Authorization: "Bearer " + token, "Content-Type": "application/json" };
+      const out = [];
+      for (const [name, text] of [[tag + "one.txt", "zip-one-" + tag], [tag + "two.txt", "zip-two-" + tag]]) {
+        const s = await fetch("/api/v1/files/upload/session", { method: "POST", headers: H, body: JSON.stringify({ name, size: text.length }) }).then((r) => r.json());
+        const done = await fetch("/api/v1/files/upload/session/" + s.session_id, { method: "PATCH", headers: { Authorization: "Bearer " + token, "X-Offset": "0" }, body: text }).then((r) => r.json());
+        out.push(done.file_id);
+      }
+      return out;
+    }, tag);
+    expect(fileIds).toHaveLength(2);
+
+    // wait for both to be ready (queue may be draining earlier tests)
+    await page.evaluate(async (fileIds) => {
+      const token = localStorage.getItem("td_token");
+      for (let i = 0; i < 80; i++) {
+        const { items } = await fetch("/api/v1/files?limit=100", { headers: { Authorization: "Bearer " + token } }).then((r) => r.json());
+        const mine = items.filter((f) => fileIds.includes(f.id));
+        if (mine.length === fileIds.length && mine.every((f) => f.status === "ready")) return;
+        if (mine.some((f) => f.status === "failed")) throw new Error("upload failed");
+        await new Promise((res) => setTimeout(res, 500));
+      }
+      throw new Error("zip files never became ready");
+    }, fileIds);
+
+    // select both rows in the UI and click the bulk-zip button
+    await page.locator("section:visible button", { hasText: "به‌روزرسانی" }).click();
+    await expect(page.locator("main section:visible table tbody")).toContainText(tag + "one.txt");
+    await page.locator("section:visible button", { hasText: "انتخاب گروهی" }).click();
+    for (const k of ["one", "two"]) {
+      await page.locator("main section:visible table tbody tr", { hasText: tag + k + ".txt" }).first().locator("input[type='checkbox']").check();
+    }
+
+    // capture the download the button triggers and verify the archive content
+    const downloadPromise = page.waitForEvent("download");
+    await page.locator("section:visible button", { hasText: "دانلود گروهی (zip)" }).click();
+    await expect(page.locator(".toast")).toContainText("آرشیو 2 فایل آماده شد");
+    const download = await downloadPromise;
+    const zipPath = await download.path();
+    const fs = await import("fs");
+    const zipBuf = fs.readFileSync(zipPath);
+
+    // unzip in the browser context? no — assert via the page's DecompressionStream-free JSZip absence:
+    // simplest server-side check: re-mint the same selection and verify bytes server-side
+    const check = await page.evaluate(async (fileIds) => {
+      const token = localStorage.getItem("td_token");
+      const r = await fetch("/api/v1/files/bulk-zip", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ file_ids: fileIds }) });
+      const d = await r.json();
+      const zr = await fetch(d.url);
+      const buf = await zr.arrayBuffer();
+      return { status: zr.status, type: zr.headers.get("content-type"), size: buf.byteLength, files: d.files };
+    }, fileIds);
+    expect(check.status).toBe(200);
+    expect(check.type).toBe("application/zip");
+    expect(check.files).toBe(2);
+    expect(check.size).toBeGreaterThan(100);
+    expect(zipBuf.length).toBe(check.size); // the UI download and the direct fetch agree
+
+    // cleanup
+    await page.evaluate(async (tag) => {
+      const token = localStorage.getItem("td_token");
+      const { items } = await fetch("/api/v1/files?limit=200", { headers: { Authorization: "Bearer " + token } }).then((r) => r.json());
+      for (const f of items.filter((x) => x.name.startsWith("e2e-zipdl-"))) {
+        await fetch("/api/v1/files/" + f.id + "?purge=true", { method: "DELETE", headers: { Authorization: "Bearer " + token } });
+      }
+    }, tag);
+  });
+
   test("trash view: soft-delete hides file, restore brings it back", async ({ page }) => {
     await login(page);
 

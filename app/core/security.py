@@ -129,6 +129,13 @@ def sign_str(msg: str) -> str:
     return hmac.new(s.secret.encode(), msg.encode(), hashlib.sha256).hexdigest()[:32]
 
 
+def verify_str(msg: str, sig: str) -> bool:
+    try:
+        return hmac.compare_digest(sign_str(msg), str(sig or ""))
+    except Exception:
+        return False
+
+
 def sign_download(file_id: str, expires_at: int, one_time: bool = False) -> str:
     s = get_settings()
     msg = f"{file_id}:{expires_at}:{1 if one_time else 0}"

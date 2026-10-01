@@ -17,7 +17,7 @@ from ..core.security import make_preview_token
 from ..core.settings_service import get_runtime
 from ..core.state import get_db, state
 from ..services.presign import make_link
-from ..services.streaming import file_response
+from ..services.streaming import file_response, zip_stream_response
 from .deps import get_admin_or_key, get_api_key, get_client_ip, get_current_admin, require_scope
 
 router = APIRouter(prefix="/api/v1/files", tags=["files"])
@@ -390,6 +390,100 @@ async def preview_file(
         head_only=request.method == "HEAD",
         inline=True,
     )
+
+
+# ── bulk zip download (temp archive, streaming) ──────────────────
+
+ZIP_SIG_TTL = 600  # seconds; the signed URL only opens a small window
+MAX_ZIP_FILES = 100
+MAX_ZIP_TOTAL_BYTES = 2_100_000_000  # same cap as a single upload
+
+
+class BulkZipIn(BaseModel):
+    file_ids: list[str]
+
+
+def _zip_sig(ids_json: str, exp: int) -> str:
+    from ..core.security import sign_str
+
+    return sign_str(f"zip:{ids_json}:{exp}")
+
+
+@router.post("/bulk-zip")
+async def bulk_zip_create(body: BulkZipIn, request: Request, db=Depends(get_db), key=Depends(get_api_key)):
+    """Validate a multi-file selection and mint a short-lived signed GET url
+    that streams them as one temporary zip (built on the fly, never stored)."""
+    require_scope(key, "read")
+    if not body.file_ids:
+        raise HTTPException(status_code=400, detail="file_ids required")
+    if len(body.file_ids) > MAX_ZIP_FILES:
+        raise HTTPException(status_code=400, detail=f"too many files per zip (max {MAX_ZIP_FILES})")
+    repo = FileRepo(db)
+    items: list = []
+    total = 0
+    skipped: list = []
+    seen: set = set()
+    for fid in body.file_ids:
+        if fid in seen:
+            continue
+        seen.add(fid)
+        rec = await repo.get(fid)
+        if not rec or rec["status"] != "ready" or rec.get("deleted_at") or rec.get("blocked"):
+            skipped.append({"file_id": fid, "reason": "not ready or blocked"})
+            continue
+        size = int(rec.get("size") or 0)
+        if total + size > MAX_ZIP_TOTAL_BYTES:
+            skipped.append({"file_id": fid, "reason": "zip size limit reached"})
+            continue
+        total += size
+        items.append({"id": fid, "name": rec["name"], "size": size})
+    if not items:
+        raise HTTPException(status_code=400, detail="no downloadable files in selection")
+    import json as _json
+
+    ids_json = _json.dumps([it["id"] for it in items], separators=(",", ":"))
+    exp = int(time.time()) + ZIP_SIG_TTL
+    sig = _zip_sig(ids_json, exp)
+    return {
+        "url": f"/api/v1/files/bulk-zip?ids={ids_json}&exp={exp}&sig={sig}",
+        "expires_at": exp,
+        "files": len(items),
+        "bytes": total,
+        "skipped": skipped,
+    }
+
+
+@router.get("/bulk-zip")
+async def bulk_zip_stream(ids: str, exp: int, sig: str, request: Request, db=Depends(get_db), key: str = ""):
+    """Stream the selection as a zip; entries are fetched from telegram and
+    compressed on the fly. The query is HMAC-signed (short TTL) so it can sit
+    in a plain <a href> without exposing the admin JWT; an optional Bearer
+    key is accepted too."""
+    import json as _json
+
+    from ..core.security import verify_str
+
+    if int(exp) < int(time.time()) or not verify_str(f"zip:{ids}:{int(exp)}", sig):
+        raise HTTPException(status_code=403, detail="invalid or expired signature")
+    try:
+        id_list = _json.loads(ids)
+    except Exception:
+        raise HTTPException(status_code=400, detail="bad ids")
+    if not isinstance(id_list, list) or not id_list or len(id_list) > MAX_ZIP_FILES:
+        raise HTTPException(status_code=400, detail="bad ids")
+    repo = FileRepo(db)
+    files: list = []
+    for fid in id_list:
+        if not isinstance(fid, str) or not fid.startswith("f_"):
+            raise HTTPException(status_code=400, detail="bad ids")
+        rec = await repo.get(fid)
+        if not rec or rec["status"] != "ready" or rec.get("deleted_at") or rec.get("blocked"):
+            continue
+        files.append(rec)
+    if not files:
+        raise HTTPException(status_code=404, detail="no downloadable files")
+
+    return await zip_stream_response(db=db, manager=state.manager, files=files)
 
 
 @router.get("/{file_id}")

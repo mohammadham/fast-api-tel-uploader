@@ -2,16 +2,27 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import re
+import time
 import typing
+import zlib
 from typing import AsyncIterator, Optional, Tuple
 
 from ..core.db import Database
 from ..core.models import FileRepo, now
 from ..tg.base import BackendClient, TransferError
 from ..tg.manager import TGManager
+
+
+def _tmp_dir() -> str:
+    from ..core.config import get_settings
+
+    d = get_settings().final_tmp_dir()
+    os.makedirs(d, exist_ok=True)
+    return d
 
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)$")
 
@@ -196,6 +207,179 @@ def _quote(name: str) -> str:
     from urllib.parse import quote
 
     return quote(name, safe="")
+
+
+class _ZipBackground:
+    """After a bulk-zip response completes: release the borrowed backend,
+    unlink the temp file, and swallow client-abort errors quietly."""
+
+    def __init__(self, manager: TGManager, key: str, tmp_path: Optional[str]) -> None:
+        self.manager = manager
+        self.key = key
+        self.tmp_path = tmp_path
+        self.error: Optional[BaseException] = None
+
+    async def __call__(self) -> None:
+        try:
+            await self.manager.release(self.key, self.error)
+        except Exception:
+            pass
+        if self.tmp_path:
+            try:
+                os.remove(self.tmp_path)
+            except OSError:
+                pass
+
+
+async def zip_stream_response(
+    *,
+    db: Database,
+    manager: TGManager,
+    files: list,
+) -> "typing.Any":
+    """Stream several stored files as one temporary zip archive.
+
+    Each entry is downloaded from telegram into a temp file (parts joined),
+    then streamed into the client. The archive is never fully stored: only
+    one entry exists on disk at a time and it is unlinked right after its
+    bytes are emitted. Entries share one borrowed backend, released after
+    the response completes.
+
+    The zip is written by hand (local header with flag bit 3 = data
+    descriptor, raw deflate, descriptor, then one central directory at the
+    end) because zipfile.open(w) force-rewrites the local header afterwards —
+    impossible on a non-seekable stream.
+    """
+    import struct
+    import zipfile
+
+    from fastapi.responses import StreamingResponse
+
+    # one backend for the whole archive (uploads/other jobs queue behind it)
+    borrowed = await manager.acquire("acc", backend=files[0].get("backend") or "telegram")
+    backend = borrowed.backend
+    chat = files[0]["storage_chat"] or getattr(backend, "storage_chat", "me")
+    tmp_dir = _tmp_dir()
+    tmp_paths: list = []
+
+    async def fetch_entry(rec: dict) -> str:
+        """Materialise one stored file (joined parts) into a temp file."""
+        parts = await FileRepo(db).parts(rec["id"])
+        path = os.path.join(tmp_dir, f"zip_{rec['id'].replace('/', '_')}.bin")
+        tmp_paths.append(path)
+        with open(path, "wb") as fh:
+            for part in parts:
+                async for chunk in backend.iter_file(
+                    part["message_id"], chat, start=0, end=None, size=part["size"]
+                ):
+                    fh.write(chunk)
+        return path
+
+    def _cleanup_tmp() -> None:
+        for p in tmp_paths:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        tmp_paths.clear()
+
+    async def gen() -> AsyncIterator[bytes]:
+        names_seen: set = set()
+        centrals: list = []  # (name_b, crc, csize, usize, offset)
+        offset = 0
+        try:
+            for rec in files:
+                name = _unique_zip_name(rec["name"], names_seen)
+                name_b = name.encode("utf-8")
+                try:
+                    path = await fetch_entry(rec)
+                except TransferError as exc:
+                    # a dead entry must not kill the whole archive: record a stub
+                    stub_name = f"_errors/{name}.txt".encode("utf-8")
+                    stub = f"download failed: {exc}\n".encode("utf-8")
+                    crc0 = zlib.crc32(stub) & 0xFFFFFFFF
+                    comp0 = zlib.compressobj(level=6, wbits=-zlib.MAX_WBITS)
+                    body0 = comp0.compress(stub) + comp0.flush()
+                    header0 = struct.pack("<IHHHHHIIIHH", 0x04034b50, 20, 0x08, 8, 0, 0, 0, 0, 0, len(stub_name), 0) + stub_name
+                    desc0 = struct.pack("<LLLL", 0x08074b50, crc0, len(body0), len(stub))
+                    centrals.append((stub_name, crc0, len(body0), len(stub), offset))
+                    offset += len(header0) + len(body0) + len(desc0)
+                    yield header0 + body0 + desc0
+                    continue
+                with open(path, "rb") as fh:
+                    comp = zlib.compressobj(level=6, wbits=-zlib.MAX_WBITS)
+                    crc = 0
+                    usize = 0
+                    csize = 0
+                    entry_offset = offset
+                    # local file header (flag bit 3: sizes/CRC in the trailing
+                    # data descriptor, so the header can be flushed as-is)
+                    header = struct.pack("<IHHHHHIIIHH", 0x04034b50, 20, 0x08, 8, 0, 0, 0, 0, 0, len(name_b), 0) + name_b
+                    offset += len(header)
+                    yield header
+                    while True:
+                        chunk = fh.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        crc = zlib.crc32(chunk, crc)
+                        usize += len(chunk)
+                        piece = comp.compress(chunk)
+                        if piece:
+                            csize += len(piece)
+                            offset += len(piece)
+                            yield piece
+                    piece = comp.flush()
+                    if piece:
+                        csize += len(piece)
+                        offset += len(piece)
+                        yield piece
+                    descriptor = struct.pack("<LLLL", 0x08074b50, crc & 0xFFFFFFFF, csize, usize)
+                    offset += len(descriptor)
+                    yield descriptor
+                centrals.append((name_b, crc & 0xFFFFFFFF, csize, usize, entry_offset))
+                os.remove(path)
+                tmp_paths.remove(path)
+            # central directory + EOCD
+            cd = io.BytesIO()
+            cd_start = offset
+            for name_b, crc, csize, usize, lho in centrals:
+                cd.write(struct.pack("<IHHHHHHIIIHHHHHII", 0x02014b50, 20, 20, 0x08, 8, 0, 0, crc, csize, usize, len(name_b), 0, 0, 0, 0, (0o600 << 16), lho))
+                cd.write(name_b)
+            cd_data = cd.getvalue()
+            cd_size = len(cd_data)
+            offset += cd_size
+            eocd = struct.pack("<IHHHHIIH", 0x06054b50, 0, 0, len(centrals), len(centrals), cd_size, cd_start, 0)
+            yield cd_data + eocd
+        except GeneratorExit:
+            _cleanup_tmp()
+            raise
+        except Exception as exc:
+            _cleanup_tmp()
+            bg.error = exc
+            raise
+
+    bg = _ZipBackground(manager, borrowed.key, None)
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    resp = StreamingResponse(
+        gen(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="tgdrive-{stamp}.zip"'},
+    )
+    resp.background = bg
+    return resp
+
+
+def _unique_zip_name(name: str, seen: set) -> str:
+    base = os.path.basename(name or "file").replace("\\", "_").replace("/", "_")[:150] or "file"
+    candidate = base
+    i = 1
+    while candidate in seen:
+        stem, dot, ext = base.rpartition(".")
+        candidate = f"{stem or base}-{i}{dot}{ext}" if dot else f"{base}-{i}"
+        i += 1
+    seen.add(candidate)
+    return candidate
 
 
 class _ReleaseAndCount:

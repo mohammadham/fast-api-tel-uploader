@@ -359,6 +359,7 @@
           <button class="ghost" @click="bulkBlockSelected" style="padding:5px 10px;font-size:12px">بن گروهی ({{ selectedFiles.size }})</button>
           <button class="ghost" @click="bulkMoveSelectedDlg.open = true" style="padding:5px 10px;font-size:12px">انتصال گروهی به پوشه...</button>
           <button class="primary" @click="bulkTransferOpen" style="padding:5px 10px;font-size:12px">انتقال گروهی به کانال… ({{ selectedFiles.size }})</button>
+          <button class="ghost" :disabled="bulkZipBusy" @click="bulkZipDownload" style="padding:5px 10px;font-size:12px">{{ bulkZipBusy ? "در حال آماده‌سازی…" : "دانلود گروهی (zip)" }}</button>
         </div>
         <div style="display:flex;gap:14px;align-items:flex-start">
           <div class="card" style="width:230px;flex-shrink:0;padding:10px 12px">
@@ -1293,6 +1294,25 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
       if (selectedFiles.value.size === 0) return;
       loaders.channels();
       Object.assign(bulkTransferDlg, { open: true, chat: channelsDefaultChat.value || "", folderId: "", msg: "", busy: false });
+    }
+    /* bulk zip download: mint a signed url then let the browser save it;
+    the archive is built (and cleaned up) server-side on the fly */
+    const bulkZipBusy = ref(false);
+    async function bulkZipDownload() {
+      if (selectedFiles.value.size === 0) return;
+      bulkZipBusy.value = true;
+      try {
+        const r = await api("/api/v1/files/bulk-zip", { method: "POST", json: { file_ids: [...selectedFiles.value] } });
+        const skipped = (r.skipped || []).length;
+        showToast(`آرشیو ${r.files} فایل آماده شد` + (skipped ? ` (${skipped} فایل رد شد)` : ""), 4000, !!skipped);
+        const a = document.createElement("a");
+        a.href = r.url;
+        a.download = "tgdrive.zip";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } catch (e) { showToast("خطا: " + e.message, 4500, true); }
+      bulkZipBusy.value = false;
     }
     async function bulkTransferDo() {
       bulkTransferDlg.msg = "";
