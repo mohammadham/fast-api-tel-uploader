@@ -194,9 +194,11 @@ test.describe.serial("panel smoke", () => {
     await login(page);
     await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
 
-    // slow chunk uploads so the queue state is observable
+    // slow chunk uploads so the queue state is observable (2 × 8MB chunks per
+    // file → keep the per-chunk delay well above Playwright's poll interval,
+    // otherwise the «فایل k از n» window closes before expect can see it)
     await page.route("**/upload/session/*", async (route) => {
-      await new Promise((res) => setTimeout(res, 350));
+      await new Promise((res) => setTimeout(res, 900));
       await route.continue();
     });
 
@@ -779,6 +781,104 @@ test.describe.serial("panel smoke", () => {
     const { items: keysNow } = await proxyCall(page, "/api/v1/keys");
     for (const k of keysNow) {
       if (k.name?.startsWith("e2e-chat-key")) await proxyCall(page, `/api/v1/keys/${k.id}`, { method: "DELETE" });
+    }
+  });
+
+  test("files tab shows a live transfer progress badge while a transfer runs", async ({ page }) => {
+    await login(page);
+    await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+
+    // unique per-run names: stale leftovers from a crashed run must never be
+    // picked by the row selectors (they'd be skipped as "already in target")
+    const tag = "e2e-tprog-" + Date.now().toString(36) + "-";
+
+    // upload three files (each chunked into parts) so the bulk transfer
+    // queues several jobs — enough to keep the badge visible for a while
+    // (a single small transfer can finish before the panel's first poll)
+    const fileIds = await page.evaluate(async (tag) => {
+      const token = localStorage.getItem("td_token");
+      const H = { Authorization: "Bearer " + token, "Content-Type": "application/json" };
+      const out = [];
+      for (let k = 0; k < 3; k++) {
+        const data = new Uint8Array(8 * 1024 * 1024).fill(5);
+        const s = await fetch("/api/v1/files/upload/session", { method: "POST", headers: H, body: JSON.stringify({ name: tag + k + ".bin", size: data.length }) }).then((r) => r.json());
+        let off = 0;
+        while (off < data.length) {
+          const chunk = data.slice(off, off + 4 * 1024 * 1024);
+          const r = await fetch("/api/v1/files/upload/session/" + s.session_id, { method: "PATCH", headers: { Authorization: "Bearer " + token, "X-Offset": String(off) }, body: chunk });
+          const j = await r.json();
+          off = j.offset;
+          if (j.completed) { out.push(j.file_id); break; }
+        }
+      }
+      return out;
+    }, tag);
+    expect(fileIds).toHaveLength(3);
+
+    // the upload jobs may still be draining the queue (earlier tests fill it);
+    // wait until the files are ready, otherwise bulk-transfer rejects them
+    await page.evaluate(async (fileIds) => {
+      const token = localStorage.getItem("td_token");
+      for (let i = 0; i < 120; i++) {
+        const { items } = await fetch("/api/v1/files?limit=100", { headers: { Authorization: "Bearer " + token } }).then((r) => r.json());
+        const mine = items.filter((f) => fileIds.includes(f.id));
+        if (i % 10 === 0) console.log("[tprog-wait] " + JSON.stringify(mine.map((f) => [f.name, f.status])));
+        if (mine.length === fileIds.length && mine.every((f) => f.status === "ready")) return;
+        if (mine.some((f) => f.status === "failed")) throw new Error("upload failed: " + JSON.stringify(mine.filter((f) => f.status === "failed").map((f) => f.error)));
+        await new Promise((res) => setTimeout(res, 500));
+      }
+      throw new Error("files never became ready");
+    }, fileIds);
+
+    // register a channel so the bulk dialog has a concrete destination
+    const chanId = await page.evaluate(async () => {
+      const token = localStorage.getItem("td_token");
+      const r = await fetch("/api/v1/channels", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ chat: "@e2e-tprog-chan", label: "e2e tprog", kind: "storage" }) });
+      if (!r.ok && r.status !== 409) throw new Error("channel register failed: " + r.status);
+      return (await r.json().catch(() => ({}))).id || null;
+    });
+
+    // refresh the files table so the freshly uploaded rows are rendered
+    await page.locator("section:visible button", { hasText: "به‌روزرسانی" }).click();
+    await expect(page.locator("main section:visible table tbody")).toContainText(tag + "0.bin");
+
+    // start the bulk transfer through the UI: enable bulk mode, select the
+    // three rows, open the dialog, pick the registered channel, submit
+    await page.locator("section:visible button", { hasText: "انتخاب گروهی" }).click();
+    for (let k = 0; k < 3; k++) {
+      await page.locator("main section:visible table tbody tr", { hasText: tag + k + ".bin" }).first().locator("input[type='checkbox']").check();
+    }
+    await expect(page.locator("section:visible button", { hasText: "انتقال گروهی به کانال" })).toContainText("(3)");
+    await page.locator("section:visible button", { hasText: "انتقال گروهی به کانال" }).click();
+    const btDlg = page.locator("dialog:visible", { hasText: "انتقال گروهی" });
+    await expect(btDlg).toBeVisible();
+    await btDlg.locator("select").first().selectOption("@e2e-tprog-chan");
+    await btDlg.getByRole("button", { name: "انتقال", exact: true }).click();
+
+    // the toast confirms enqueueing (all 3!) and the live badge appears
+    await expect(page.locator(".toast")).toContainText("3 فایل به صف انتقال رفت");
+    const badge = page.locator("#transfer-live");
+    await expect(badge).toBeVisible({ timeout: 10000 });
+    await expect(badge).toContainText("انتقال:");
+    await expect(badge).toContainText("%");
+
+    // wait for all transfers to finish; the badge disappears (jobs done)
+    await expect(badge).toHaveCount(0, { timeout: 45000 });
+
+    // cleanup: purge the transferred files (by name — also sweeps stale
+    // leftovers), drop the channel
+    await page.evaluate(async (tag) => {
+      const token = localStorage.getItem("td_token");
+      const { items } = await fetch("/api/v1/files?limit=200", { headers: { Authorization: "Bearer " + token } }).then((r) => r.json());
+      for (const f of items.filter((x) => x.name.startsWith("e2e-tprog-"))) {
+        await fetch("/api/v1/files/" + f.id + "?purge=true", { method: "DELETE", headers: { Authorization: "Bearer " + token } });
+      }
+    }, tag);
+    if (chanId) {
+      await page.evaluate(async (chanId) => {
+        const token = localStorage.getItem("td_token");
+        await fetch("/api/v1/channels/" + chanId, { method: "DELETE", headers: { Authorization: "Bearer " + token } });
+      }, chanId);
     }
   });
 

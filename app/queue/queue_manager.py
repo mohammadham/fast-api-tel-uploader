@@ -797,9 +797,33 @@ class QueueManager:
 
         borrowed = await self.manager.acquire("acc", backend=rec.get("backend") or "telegram")
         new_ids: List[int] = []
+        job_id = payload.get("__job_id", "")
+        job_row = await self.jobs.fetch(job_id) if job_id else None
+        # JobRepo.fetch returns the raw payload TEXT — parse it once here so
+        # both the pre-loop and in-loop progress writes spread a dict, not a str.
+        raw_payload = (job_row or {}).get("payload")
+        if isinstance(raw_payload, str):
+            try:
+                cur_payload = json.loads(raw_payload or "{}")
+            except Exception:
+                cur_payload = {}
+        else:
+            cur_payload = raw_payload or {}
+        total_bytes = sum(int(p.get("size") or 0) for p in parts)
+        progress = {
+            "file_id": file_id,
+            "file_name": rec["name"],
+            "target_chat": target_chat,
+            "parts_total": len(parts),
+            "bytes_total": total_bytes,
+        }
+        if job_row:
+            await self.jobs.update_payload(job_id, {**cur_payload, "progress": progress, "progress_pct": 0})
         async with borrowed as backend:
             self._last_backend_by_job[payload.get("__job_id", "")] = borrowed.key
             src = src_chat or getattr(backend, "storage_chat", "me")
+            done_bytes = 0
+            last_pct = -1
             for part in parts:
                 # one temp file per part; the whole source part is re-sent verbatim
                 tmp = f"{get_settings().final_tmp_dir()}/{file_id}.{part['idx']}.transfer"
@@ -809,6 +833,15 @@ class QueueManager:
                             part["message_id"], src, start=0, end=None, size=part["size"]
                         ):
                             fh.write(chunk)
+                            if job_id:
+                                done_bytes += len(chunk)
+                                pct = int(done_bytes * 100 / total_bytes) if total_bytes else 0
+                                if pct != last_pct:  # throttle DB writes to pct changes
+                                    last_pct = pct
+                                    await self.jobs.update_payload(
+                                        job_id,
+                                        {**cur_payload, "progress": {**progress, "bytes_done": done_bytes}, "progress_pct": pct},
+                                    )
                     name = rec["name"] if len(parts) == 1 else f"{rec['name']}.part{part['idx']:04d}"
                     result = await backend.send_document(target_chat, tmp, name, rec["mime"], caption=tags)
                     new_ids.append(int(result["message_id"]))

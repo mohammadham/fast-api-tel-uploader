@@ -286,6 +286,10 @@
       <section v-show="tab === 'files'" style="position:relative" @dragover.prevent="filesDragDepth > 0 || (filesDragDepth = 1)" @dragenter.prevent="filesDragDepth++" @dragleave.prevent="filesDragDepth = Math.max(0, filesDragDepth - 1)" @drop.prevent="onFilesDrop">
         <div class="toolbar">
           <h3 style="margin:0;flex:1;font-size:16px">فایل‌ها</h3>
+          <span v-if="transferJobs.length" id="transfer-live" class="tag" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 10px" :title="transferJobs.map(j => (j.file_name || j.file_id) + ' → ' + (j.target_chat || '?') + ' (' + j.pct + '%)').join('\n')">
+            <span style="width:8px;height:8px;border-radius:50%;background:var(--warn,#F59E0B);display:inline-block" :style="transferRunning ? 'animation: pulse 1.2s ease-in-out infinite' : ''"></span>
+            انتقال: {{ transferJobs.length }} • {{ transferJobs.reduce((m, j) => Math.max(m, j.pct), 0) }}%
+          </span>
           <button class="primary" :disabled="uploadDlg.busy" @click="uploadPick">
             {{ uploadDlg.busy ? "در حال آپلود…" : "آپلود جدید" }}
           </button>
@@ -341,6 +345,7 @@
           </select>
           <button class="ghost" :style="filesBlockedOnly ? 'border-color:var(--err);color:var(--err)' : ''" style="padding:5px 10px;font-size:12px" @click="filesBlockedOnly = !filesBlockedOnly; loaders.files()">فقط بن‌شده‌ها</button>
           <button class="ghost" :style="filesTrashed ? 'border-color:var(--warn);color:var(--warn)' : ''" style="padding:5px 10px;font-size:12px" @click="filesTrashed = !filesTrashed; filesOffset = 0; loaders.files()">🗑 زباله‌دان</button>
+          <button class="ghost" :style="bulkMode ? 'border-color:var(--accent);color:var(--accent)' : ''" style="padding:5px 10px;font-size:12px" @click="toggleBulkMode">انتخاب گروهی</button>
           <select v-model="filesChannelPick" style="padding:5px 8px;font-size:13px" @change="applyChannelPick">
             <option value="">همه کانال‌ها ({{ filesTotal }})</option>
             <option v-if="channelsDefaultChat" value="__default__">کانال پیش‌فرض ({{ channelsDefaultChat }}) — {{ channelDefaultStats.files }}</option>
@@ -1042,7 +1047,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue";
 
     /* ---------- auth state ---------- */
     const token = ref(localStorage.getItem("td_token") || "");
@@ -1196,6 +1201,10 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
       const allSelected = files.value.length > 0 && selectedFiles.value.size === files.value.length;
       selectAllFiles.value = allSelected;
     }
+    function toggleBulkMode() {
+      bulkMode.value = !bulkMode.value;
+      if (!bulkMode.value) { selectedFiles.value.clear(); selectAllFiles.value = false; }
+    }
     async function toggleSelectAll() {
       if (selectAllFiles.value) {
         selectedFiles.value = new Set(files.value.map((f) => f.id));
@@ -1293,6 +1302,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
         bulkTransferDlg.open = false; bulkTransferDlg.chat = ""; bulkTransferDlg.folderId = "";
         selectedFiles.value.clear(); selectAllFiles.value = false;
         loaders.files();
+        if (r.enqueued?.length && tab.value === "files") pollTransferProgress(); // refresh the live badge immediately
       } catch (e) { bulkTransferDlg.msg = e.message; }
       finally { bulkTransferDlg.busy = false; }
     }
@@ -2210,6 +2220,30 @@ const doLogin = submitLogin;
     function onUploadFileChosen(ev) { uploadDlg.files = Array.from(ev.target.files || []); ev.target.value = ""; }
     /* drag & drop onto the files tab → same upload dialog (folder/channel preserved) */
     const filesDragDepth = ref(0);
+    /* live transfer indicator: polls /queue/transfer-progress while the files
+    tab is visible and transfer jobs exist; each item keeps its own percent */
+    const transferJobs = ref([]);
+    let transferPollTimer = null;
+    const transferRunning = computed(() => transferJobs.value.some((j) => j.pct > 0));
+    async function pollTransferProgress() {
+      try {
+        const d = await api("/api/v1/queue/transfer-progress");
+        transferJobs.value = d.items || [];
+      } catch (e) { /* admin-only endpoint; indicator just stays hidden */ }
+    }
+    function syncTransferPolling() {
+      const active = tab.value === "files";
+      if (active && !transferPollTimer) {
+        pollTransferProgress();
+        transferPollTimer = setInterval(pollTransferProgress, 2500);
+      } else if (!active && transferPollTimer) {
+        clearInterval(transferPollTimer);
+        transferPollTimer = null;
+        transferJobs.value = [];
+      }
+    }
+    watch(() => tab.value, syncTransferPolling, { immediate: true });
+    onBeforeUnmount(() => { if (transferPollTimer) clearInterval(transferPollTimer); });
     /* drop onto a sidebar folder row → upload straight into that folder
     (scoped folders also pin their own channel); the row highlights while the
     file hovers over it */

@@ -813,6 +813,12 @@ class JobRepo:
             "SELECT * FROM jobs WHERE status IN ('pending','running','lease') ORDER BY priority DESC, seq LIMIT 500"
         )
 
+    async def update_payload(self, job_id: str, payload: Dict[str, Any]) -> None:
+        """Persist mutated payload (used for live transfer progress)."""
+        await self.db.execute(
+            "UPDATE jobs SET payload=? WHERE id=?", (json.dumps(payload), job_id)
+        )
+
     async def stats(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
         for status in ("pending", "running", "done", "failed", "retry"):

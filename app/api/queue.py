@@ -20,6 +20,62 @@ async def jobs(limit: int = 100, _: str = Depends(get_current_admin), db=Depends
     return {"items": await state.queue.jobs.recent(min(limit, 500)), "paused": state.queue.paused()}
 
 
+@router.get("/transfer-progress")
+async def transfer_progress(_: str = Depends(get_current_admin), db=Depends(get_db)):
+    """Live snapshot of in-flight transfer jobs (files tab progress badge).
+
+    Jobs that finished within the last few seconds are still reported (pct=100)
+    so tiny transfers — done in milliseconds on a fast backend — remain
+    observable instead of blinking in and out between polls.
+    """
+    from ..core.models import now
+
+    rows = await db.fetch_all(
+        "SELECT id, status, payload, attempts FROM jobs WHERE kind='transfer'"
+        " AND (status IN ('running','pending','retry') OR (status='done' AND finished_at >= ?))"
+        " ORDER BY seq DESC LIMIT 200",
+        (now() - 3.0,),
+    )
+    items = []
+    for r in rows:
+        try:
+            import json as _json
+
+            p = _json.loads(r["payload"] or "{}")
+        except Exception:
+            continue
+        prog = p.get("progress") or {}
+        file_id = p.get("file_id") or prog.get("file_id") or ""
+        bytes_total = int(prog.get("bytes_total") or 0)
+        parts_total = int(prog.get("parts_total") or 0)
+        file_name = prog.get("file_name") or ""
+        if not bytes_total and file_id:
+            # job not started yet → take totals from the file record
+            from ..core.models import FileRepo
+
+            rec = await FileRepo(db).get(file_id)
+            if rec:
+                file_name = file_name or rec["name"]
+                pl = await FileRepo(db).parts(file_id)
+                bytes_total = sum(int(x.get("size") or 0) for x in pl)
+                parts_total = parts_total or len(pl)
+        items.append(
+            {
+                "job_id": r["id"],
+                "status": "running",
+                "file_id": file_id,
+                "file_name": file_name,
+                "pct": int(p.get("progress_pct") or 0) if r["status"] == "running" else (100 if r["status"] == "done" else 0),
+                "bytes_done": int(prog.get("bytes_done") or 0),
+                "bytes_total": bytes_total,
+                "parts_total": parts_total,
+                "target_chat": prog.get("target_chat") or p.get("target_chat") or "",
+                "attempts": int(r["attempts"] or 0),
+            }
+        )
+    return {"items": items, "running": sum(1 for i in items if i["pct"] > 0 or i["job_id"])}
+
+
 class PauseIn(BaseModel):
     kind: str
 
