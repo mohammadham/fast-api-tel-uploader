@@ -854,6 +854,33 @@ class QueueManager:
         metrics.inc("transfer.files")
         slog_q.info("file transferred", file_id=file_id, from_chat=src_chat, to_chat=target_chat, parts=len(new_ids))
 
+        # optional source cleanup: the copies in the old chat are dead weight
+        # once the record points at the target. Best-effort — a failed source
+        # delete must NOT fail the (already successful) transfer job. Runs on
+        # a freshly borrowed backend so the previous borrow is released first.
+        try:
+            delete_source = int(await get_runtime(self.db, "transfer_delete_source") or 0) == 1
+        except Exception:
+            delete_source = False
+        if delete_source and src_chat and src_chat != target_chat:
+            try:
+                cleanup = await self.manager.acquire("acc", backend=rec.get("backend") or "telegram")
+            except Exception as exc:
+                log.warning("transfer source-cleanup borrow failed: %s", exc)
+                cleanup = None
+            if cleanup is not None:
+                async with cleanup as backend:
+                    deleted = 0
+                    for part in parts:
+                        try:
+                            await backend.delete_message(part["message_id"], src)
+                            deleted += 1
+                        except Exception as exc:
+                            log.warning("transfer source delete failed (%s/%s): %s", src, part["message_id"], exc)
+                    if deleted:
+                        metrics.inc("transfer.source_deleted")
+                        slog_q.info("transfer source cleaned", file_id=file_id, chat=src, parts=deleted)
+
     # ── introspection ──────────────────────────────────────────
     async def stats(self) -> Dict[str, Any]:
         base = await self.jobs.stats()

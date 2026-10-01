@@ -788,6 +788,18 @@ test.describe.serial("panel smoke", () => {
     await login(page);
     await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
 
+    // turn on source-cleanup for this run (restored in the finally below)
+    const savedSetting = await page.evaluate(async () => {
+      const token = localStorage.getItem("td_token");
+      const { items } = await fetch("/api/v1/admin/settings", { headers: { Authorization: "Bearer " + token } }).then((r) => r.json());
+      return (items || []).find((x) => x.key === "transfer_delete_source")?.current ?? 0;
+    });
+    try {
+      await page.evaluate(async () => {
+        const token = localStorage.getItem("td_token");
+        await fetch("/api/v1/admin/settings", { method: "PUT", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ transfer_delete_source: 1 }) });
+      });
+
     // unique per-run names: stale leftovers from a crashed run must never be
     // picked by the row selectors (they'd be skipped as "already in target")
     const tag = "e2e-tprog-" + Date.now().toString(36) + "-";
@@ -879,6 +891,12 @@ test.describe.serial("panel smoke", () => {
         const token = localStorage.getItem("td_token");
         await fetch("/api/v1/channels/" + chanId, { method: "DELETE", headers: { Authorization: "Bearer " + token } });
       }, chanId);
+    }
+    } finally {
+      await page.evaluate(async (saved) => {
+        const token = localStorage.getItem("td_token");
+        await fetch("/api/v1/admin/settings", { method: "PUT", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ transfer_delete_source: saved }) });
+      }, savedSetting);
     }
   });
 

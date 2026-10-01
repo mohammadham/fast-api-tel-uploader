@@ -573,6 +573,10 @@
                   <option value="0">تلگرام (پیش‌فرض)</option>
                   <option value="1">ایتا</option>
                 </template>
+                <template v-else-if="it.key === 'transfer_delete_source'">
+                  <option value="0">خاموش — نسخه‌های منبع در کانال قبلی بمانند</option>
+                  <option value="1">روشن — پس از انتقال موفق، پیام‌های منبع حذف شوند</option>
+                </template>
               </select>
               <input v-else-if="it.key === 'tg_api_hash'" v-model="settingsDraft[it.key]" type="password"
                 dir="ltr" autocomplete="off" placeholder="32 کاراکتر هگز از my.telegram.org"
@@ -1803,7 +1807,7 @@ const doLogin = submitLogin;
     const settingsBusy = ref(false);
     const settingsErrors = reactive({}); // key → error message
 
-    const optionedSettings = ["fake_tg", "eitaa_mode"]; // int settings rendered as selects
+    const optionedSettings = ["fake_tg", "eitaa_mode", "transfer_delete_source"]; // int settings rendered as selects
     function validateSetting(it, value) {
       if (it.type === "int") {
         if (value === "" || value === null || value === undefined || Number.isNaN(Number(value)))
@@ -1856,6 +1860,7 @@ const doLogin = submitLogin;
       max_concurrent_uploads: "سقف آپلود همزمان کل سیستم (فشار روی بک‌اندها)",
       default_backend: "بک‌اند پیش‌فرض",
       eitaa_mode: "مقصد ایتا (۰=تلگرام، ۱=ایتا)",
+      transfer_delete_source: "پاک‌سازی خودکار منبع پس از انتقال (۰=خاموش، ۱=روشن)",
       fake_tg: "حالت تست (تلگرام آزمایشی درون‌حافظه‌ای)",
       tg_api_id: "API ID تلگرام (my.telegram.org)",
       tg_api_hash: "API Hash تلگرام (my.telegram.org)",

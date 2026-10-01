@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     tg_api_hash: str = ""
     tg_storage_chat: str = ""  # global storage channel (@username or id); empty → per-account / Saved Messages
     # note: env file key is TGDRIVE_TG_STORAGE_CHAT (pydantic env_prefix maps it)
+    transfer_delete_source: bool = False  # after a successful transfer, delete the source copies
     bot_api_base: str = "https://api.telegram.org"
     bot_admin_ids: str = ""  # comma separated telegram user ids allowed to control the bot
 

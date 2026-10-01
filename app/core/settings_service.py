@@ -60,7 +60,6 @@ def _storage_chat_ok(v: str) -> str:
     except (ValueError, TypeError):
         return "must be @username, numeric chat id, or empty";
 
-
 EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     # limits
     "max_upload_size": (int, _positive_int, "max upload size (bytes)"),
@@ -81,6 +80,8 @@ EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     "default_backend": (str, _backend_ok, "default storage backend"),
     # eitaa mode
     "eitaa_mode": (int, _eitaa_mode_ok, "use eitaa backend (0=telegram, 1=eitaa)"),
+    # after a successful transfer, also delete the source copies (0/1)
+    "transfer_delete_source": (int, _int_flag, "after a successful transfer, delete the source copies (0/1)"),
     # fake / real telegram toggle (runtime: rebuilds backends on change)
     "fake_tg": (int, _int_flag, "use in-memory fake Telegram (0=real, 1=fake)"),
     # telegram api credentials (my.telegram.org; used when fake_tg=0)
@@ -110,7 +111,7 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "max_concurrent_uploads",
     ],
     "backend": ["default_backend"],
-    "telegram_api": ["fake_tg", "eitaa_mode", "tg_api_id", "tg_api_hash", "tg_storage_chat"],
+    "telegram_api": ["fake_tg", "eitaa_mode", "tg_api_id", "tg_api_hash", "tg_storage_chat", "transfer_delete_source"],
     "proxy": ["proxy_enabled", "proxy_strategy", "proxy_monitor_interval"],
 }
 
