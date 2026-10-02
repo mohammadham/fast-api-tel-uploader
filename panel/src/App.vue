@@ -2313,7 +2313,7 @@ const doLogin = submitLogin;
       }
     }
     function uploadPick() { loaders.channels(); switchTab("files"); uploadDlg.open = true; uploadDlg.files = []; }
-    function onUploadFileChosen(ev) { uploadDlg.files = Array.from(ev.target.files || []); ev.target.value = ""; }
+    function onUploadFileChosen(ev) { uploadDlg.files = Array.from(ev.target.files || []); ev.target.value = ""; if (uploadJobs.length > 0 && uploadJobs[0].folder) { uploadDlg.folder = uploadJobs[0].folder; } if (uploadJobs.length > 0 && uploadJobs[0].chat) { uploadDlg.chat = uploadJobs[0].chat; } }
     /* drag & drop onto the files tab → same upload dialog (folder/channel preserved) */
     const filesDragDepth = ref(0);
     /* live transfer indicator: polls /queue/transfer-progress while the files
