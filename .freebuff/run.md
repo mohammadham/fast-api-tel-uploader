@@ -205,3 +205,10 @@ powershell -NoProfile -Command '$env:TGDRIVE_FAKE_TG="1"; $env:TGDRIVE_DATA_DIR=
   with tmp>1h, sessions via `UploadSessionRepo.stale(ttl)`, jobs via
   `purge_finished(86400)`, keys/audit_tokens, >7d trash → `KIND_DELETE` w/
   `?purge=true`).
+
+
+### Panel UI summary (round 18)
+- Tray heading badge: `{{ totalFreedBytes > 0 ? fmtBytes(totalFreedBytes) : "۰" }}`
+  under «آپلودها (N) فعال… / M، فضا آزاد شده: …».
+- `cancelUploadJob` robust read: `.then(async (r) => { const jr = await r.json(); const freed = Number(jr.bytes_freed ?? jr.part_bytes?.length ?? 0) || 0; ... })`; alias `bytesToString = fmtBytes`.
+- Tests `tests/test_upload_cancel.py` green (full suite EXIT:0).
