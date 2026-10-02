@@ -145,6 +145,12 @@ powershell -NoProfile -Command '$env:TGDRIVE_FAKE_TG="1"; $env:TGDRIVE_DATA_DIR=
 - **e2e gotchas:** (a) rows are name-keyed — use a per-run unique name tag, otherwise stale same-name leftovers from a crashed run get selected and the transfer skips ALL of them as "already in target" (audit_log said '0 enqueued, 3 skipped'); (b) assert the toast says «3 فایل به صف انتقال رفت» to catch silent skips; (c) refresh the table before selecting (panel table was rendered before the uploads landed). Test: upload 3×8MB → ready-wait → UI bulk-select → dialog @e2e-tprog-chan → badge visible with % → disappears when all done.
 - Tests: tests/test_transfer_progress.py (1) → 161 pytest + 19 e2e; bundle index-DhYBYYtW.js. Live: 4MB transfer streamed 0→100% in payload + endpoint, job done, file moved to -1002296795477; post-fix live re-test done.
 
+## Per-job resume from upload-session offset (round 17)
+- **Feature:** `POST /api/v1/queue/resume/{job_id}` resumes a durable upload job (status `pending`/`running`/`retry`, not paused) from the server's stored upload-session offset (`upload_sessions.offset`). Non-upload or paused jobs return 409.
+- **Handler (`_handle_upload`):** when a `session_id` is present, the upload streams from the session's saved offset instead of re-sending the full tmp file; on success the session `offset` is advanced to the file size so the offset never rewinds. Push-button `qResume` by kind still exists too.
+- **Panel:** the queue table now shows a "Continue from offset N" button for active upload jobs (pending/running/retry), not just `failed`;"`qResumeJob(j)` calls the per-job endpoint.
+- **Tests:** `tests/test_queue.py` + `tests/test_api.py` full green (22 dots; also passed the earlier janitor suite + the whole suite `EXIT:0`).
+
 ## Sidebar drag & drop (round 12)
 - Sidebar rows (root «همه فایل‌ها» + each folder) accept drops: onSidebarDrop enqueues via enqueueUploadJobs with the row's path as X-Folder; scoped folders also pin their own channel (folder.scope). Row highlights (dashed outline) during hover via sbRowStyle; ev.sidebarDropped flag stops section-level onFilesDrop from opening the dialog; toast reports target folder; filesFolderDraft follows the drop target.
 - Gotcha: SIDEBAR_ROOT key ("__root__") distinguishes no-hover from hovering the root row (null is a valid folder id).
