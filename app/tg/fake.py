@@ -29,6 +29,7 @@ class FakeBackend(BackendClient):
         self.id = cid
         self.fail_rate = fail_rate
         self.flood_seconds = flood_seconds
+        self.send_delay = 0.0  # simulate slow telegram (fake_send_delay_s runtime setting)
         self.closed = False
 
     async def send_document(self, chat: str, path: str, name: str, mime: str, caption: str = "") -> dict:
@@ -43,6 +44,8 @@ class FakeBackend(BackendClient):
             raise FloodWait(self.flood_seconds)
         with open(path, "rb") as fh:
             data = fh.read()
+        if self.send_delay > 0:
+            await asyncio.sleep(self.send_delay)  # hold the borrow → queue waits on the gate
         mid = next(counter)
         self.STORE[(chat, mid)] = (data, mime)
         if caption:

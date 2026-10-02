@@ -15,6 +15,30 @@ async def stats(_: str = Depends(get_current_admin), db=Depends(get_db)):
     return await state.queue.stats()
 
 
+@router.get("/pressure")
+async def pressure(_: str = Depends(get_current_admin), db=Depends(get_db)):
+    """Upload-pressure snapshot for the admin banner: queue stall behind the
+    concurrency gate + backends currently flood-isolated + a plain-language
+    summary line. Polled every few seconds while the panel is open."""
+    q = state.queue
+    if q is None:
+        return {"stall": {"stalled": False, "waiting": 0, "threshold": 0, "oldest_waiting_s": 0, "gate_full": False, "gate_capacity": 0, "upload_workers": 0}, "flooded": [], "summary": ""}
+    stall = await q._stall_info()
+    flooded = q._flooded_backends()
+    summary = ""
+    if stall["stalled"] and stall["waiting"]:
+        summary = (
+            f"صف آپلود معطل است: {stall['waiting']} جاب پشت سقف همزمانی "
+            f"({stall['oldest_waiting_s']:.0f} ثانیه؛ سقف {stall['gate_capacity']})"
+        )
+    elif stall["waiting"]:
+        summary = f"{stall['waiting']} جاب آپلود منتظر اسلات آزاد (سقف {stall['gate_capacity']})"
+    if flooded:
+        names = "، ".join(f["key"] for f in flooded)
+        summary = (summary + " — " if summary else "") + f"فشار تلگرام: {names} موقتاً از چرخش خارج"
+    return {"stall": stall, "flooded": flooded, "summary": summary}
+
+
 @router.get("/jobs")
 async def jobs(limit: int = 100, _: str = Depends(get_current_admin), db=Depends(get_db)):
     return {"items": await state.queue.jobs.recent(min(limit, 500)), "paused": state.queue.paused()}

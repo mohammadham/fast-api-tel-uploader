@@ -76,12 +76,20 @@ class QueueManager:
         # global upload concurrency gate (runtime setting max_concurrent_uploads)
         self._upload_gate: Optional[asyncio.Semaphore] = None
         self._upload_gate_val: int = 0
+        # admin alerting: upload-queue stall detection + per-backend flood tracker
+        self._stall_since: Optional[float] = None
+        self._stall_notified: bool = False
+        self._stall_clear_notified: bool = True
+        # job_id → wait-started-at for uploads currently blocked acquiring the
+        # global upload gate (they are status=running but stuck behind the cap)
+        self._gate_waiters: Dict[str, float] = {}
         self._redis: Optional[redis.Redis] = None
         self._redis_enabled = self.settings.redis_enabled and self.settings.redis_url
         # Redis connection is initialized lazily on first use to avoid blocking startup
         self._redis_ping_done = False
         self._lease_task: Optional[asyncio.Task] = None
         self._hb_task: Optional[asyncio.Task] = None
+        self._stall_task: Optional[asyncio.Task] = None
 
     async def _ensure_redis(self) -> None:
         """Initialize Redis connection if not yet done."""
@@ -116,14 +124,16 @@ class QueueManager:
         self.set_worker_counts(dl, ul)
         self._lease_task = asyncio.create_task(self._lease_loop())
         self._hb_task = asyncio.create_task(self._heartbeat_loop())
+        self._stall_task = asyncio.create_task(self._stall_loop())
         log.info("queue started (node=%s) with %s workers", self.node_id, len(self._workers))
 
     async def stop(self) -> None:
         self._stopped = True
         self._wake.set()
-        for t in self._workers + [t for t in (self._lease_task, self._hb_task) if t]:
+        bg = (self._lease_task, self._hb_task, self._stall_task)
+        for t in self._workers + [t for t in bg if t]:
             t.cancel()
-        for t in self._workers + [t for t in (self._lease_task, self._hb_task) if t]:
+        for t in self._workers + [t for t in bg if t]:
             try:
                 await t
             except (asyncio.CancelledError, Exception):
@@ -184,6 +194,16 @@ class QueueManager:
             except Exception as exc:
                 log.debug("lease renewal failed: %s", exc)
             await asyncio.sleep(60)
+
+    async def _stall_loop(self) -> None:
+        """Frequent upload-stall check: a stalled queue should alert admins
+        within seconds of crossing the threshold, not on the 30s heartbeat."""
+        while not self._stopped:
+            try:
+                await self.check_upload_stall()
+            except Exception as exc:
+                log.debug("upload stall check failed: %s", exc)
+            await asyncio.sleep(5)
 
     async def _heartbeat_loop(self) -> None:
         """Upsert this node into the nodes table (multi-server dashboard)."""
@@ -279,7 +299,7 @@ class QueueManager:
         self._rows[job.id] = {
             "id": job.id, "kind": kind, "priority": priority, "seq": seq, "correlation_id": corr,
             "status": "pending", "payload": json.dumps(payload), "attempts": 0,
-            "max_retries": job.max_retries, "next_run_at": 0,
+            "max_retries": job.max_retries, "next_run_at": 0, "created_at": job.created_at,
         }
         heapq.heappush(self._heap, (-priority, seq, job.id))
         self._wake.set()
@@ -449,6 +469,107 @@ class QueueManager:
                 return True
         return False
 
+    # ── admin alerts: stalled upload queue + repeated floods ───
+    def _notify_admins_sync(self, text: str) -> None:
+        """Fire-and-forget admin notification (never blocks the queue)."""
+        from ..services.notify import notify_admins
+
+        asyncio.get_running_loop().create_task(self._safe_notify(text))
+
+    async def _safe_notify(self, text: str) -> None:
+        try:
+            from ..services.notify import notify_admins
+
+            await notify_admins(text)
+        except Exception:
+            pass
+
+    async def check_upload_stall(self) -> None:
+        """Detect an upload queue stuck behind the concurrency gate and alert.
+
+        A stall = ≥1 runnable upload/transfer waiting while all upload workers
+        are busy (or all backends flooded) for longer than
+        upload_stall_threshold_s. Recovering clears the banner; crossing the
+        threshold again re-alerts (unlike the flood alert, this one is cheap —
+        it means real uploads are piled up).
+        """
+        if self._stopped:
+            return
+        try:
+            threshold = int(await get_runtime(self.db, "upload_stall_threshold_s") or 0)
+        except Exception:
+            threshold = 0
+        if threshold <= 0:
+            self._stall_since = None
+            self._stall_notified = False
+            return
+        t = now()
+        waiting_rows = self._waiting_uploads()
+        waiting = len(waiting_rows) + len(self._gate_waiters)
+        oldest = 0.0
+        for row in waiting_rows:
+            # waiting since the later of (enqueued, became-runnable-after-retry)
+            age = t - max(float(row.get("next_run_at") or 0), float(row.get("created_at") or 0))
+            if age > oldest:
+                oldest = age
+        gw_age = self._gate_wait_age()
+        if gw_age > oldest:
+            oldest = gw_age
+        stalled = waiting > 0 and oldest >= threshold
+        if stalled:
+            # the job's own age measures the persistence — no extra clock needed
+            if self._stall_since is None:
+                self._stall_since = t
+            if not self._stall_notified:
+                self._stall_notified = True
+                self._stall_clear_notified = False
+                metrics.inc("queue.stall_alert")
+                self._notify_admins_sync(
+                    f"⚠ صف آپلود معطل شده: {waiting} جاب پشت سقف همزمانی (قدیمی‌ترین {int(oldest)} ثانیه)"
+                )
+                slog_q.warning("upload queue stalled", waiting=waiting, oldest_s=round(oldest, 1))
+        else:
+            if self._stall_since is not None and not self._stall_clear_notified:
+                self._stall_clear_notified = True
+                self._notify_admins_sync("✅ صف آپلود رفع معطلی شد")
+            self._stall_since = None
+            self._stall_notified = False
+
+    def _gate_wait_age(self) -> float:
+        """Longest current wait behind the upload gate (0 = nobody waiting)."""
+        t = time.time()
+        return max([t - ts for ts in self._gate_waiters.values()], default=0.0)
+
+    def _waiting_uploads(self) -> List[Dict[str, Any]]:
+        """Upload/transfer jobs runnable right now but blocked by the global
+        upload gate (or flood-isolated backends) — empty when the queue is free.
+        Single source of truth for both the stall detector and the banner."""
+        gate_full = self._upload_gate is not None and self._upload_gate._value <= 0
+        if not gate_full and not self._all_upload_backends_flooded():
+            return []
+        t = now()
+        out: List[Dict[str, Any]] = []
+        for row in self._rows.values():
+            if row.get("kind") not in (KIND_UPLOAD, KIND_TRANSFER):
+                continue
+            if row.get("status") == "running":
+                continue
+            if float(row.get("next_run_at") or 0) > t:
+                continue
+            out.append(row)
+        return out
+
+    def _all_upload_backends_flooded(self) -> bool:
+        """True when every acc/eit backend is currently flood-isolated."""
+        flooded = {
+            k
+            for k, until in self.manager._flood_until.items()
+            if k.startswith(("acc:", "eit:")) and until > time.time()
+        }
+        if not flooded:
+            return False
+        return all(k in flooded for k in self.manager._backends if k.startswith(("acc:", "eit:")))
+
     # ── job processing ─────────────────────────────────────────
     async def _process(self, row: Dict[str, Any], worker_name: str) -> None:
         job_id = row["id"]
@@ -600,7 +721,11 @@ class QueueManager:
         # backends at the same time (runtime setting max_concurrent_uploads);
         # held for the whole send so uploads never exceed the configured cap
         gate = await self._upload_semaphore()
-        await gate.acquire()
+        self._gate_waiters[job_id] = time.time()
+        try:
+            await gate.acquire()
+        finally:
+            self._gate_waiters.pop(job_id, None)
         try:
             borrowed = await self.manager.acquire("acc", backend=backend)
             async with borrowed as be:
@@ -882,8 +1007,52 @@ class QueueManager:
                         slog_q.info("transfer source cleaned", file_id=file_id, chat=src, parts=deleted)
 
     # ── introspection ──────────────────────────────────────────
+    async def _stall_info(self) -> Dict[str, Any]:
+        """Live stall info for the queue tab banner and dash cards."""
+        waiting_rows = self._waiting_uploads()
+        t = now()
+        oldest = 0.0
+        for r in waiting_rows:
+            age = t - max(float(r.get("next_run_at") or 0), float(r.get("created_at") or 0))
+            if age > oldest:
+                oldest = age
+        gw_age = self._gate_wait_age()
+        if gw_age > oldest:
+            oldest = gw_age
+        try:
+            threshold = int(await get_runtime(self.db, "upload_stall_threshold_s") or 0)
+        except Exception:
+            threshold = 0
+        gate = self._upload_gate
+        return {
+            "stalled": self._stall_since is not None,
+            "since": self._stall_since,
+            "waiting": len(waiting_rows) + len(self._gate_waiters),
+            "oldest_waiting_s": round(oldest, 1),
+            "threshold": threshold,
+            "gate_full": gate is not None and gate._value <= 0,
+            "gate_capacity": self._upload_gate_val,
+            "upload_workers": self._worker_counts.get("upload", 0),
+        }
+
+    def _flooded_backends(self) -> List[Dict[str, Any]]:
+        """acc/eit backends currently flood-isolated (for the queue banner)."""
+        t = time.time()
+        return [
+            {
+                "key": k,
+                "remaining_s": int(v - t),
+                "burst_alerted": bool(self.manager._flood_alerts.get(k, {}).get("last_alert_at")),
+            }
+            for k, v in sorted(self.manager._flood_until.items())
+            if k.startswith(("acc:", "eit:")) and v > t
+        ]
+
     async def stats(self) -> Dict[str, Any]:
         base = await self.jobs.stats()
         base["paused"] = self.paused()
         base["heap_size"] = len(self._heap)
+        # admin-visibility extras: upload-queue stall + flooded backends
+        base["stall"] = await self._stall_info()
+        base["flooded"] = self._flooded_backends()
         return base

@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     tg_storage_chat: str = ""  # global storage channel (@username or id); empty → per-account / Saved Messages
     # note: env file key is TGDRIVE_TG_STORAGE_CHAT (pydantic env_prefix maps it)
     transfer_delete_source: bool = False  # after a successful transfer, delete the source copies
+    upload_stall_threshold_s: int = 120  # upload queue waiting longer than this → admin stall alert
+    fake_send_delay_s: int = 0           # fake-TG only: sleep per send (simulate slow telegram)
+    flood_alert_threshold: int = 3       # consecutive flood-waits on one backend before an admin alert
+    flood_alert_cooldown_s: int = 600    # min seconds between repeated flood alerts per backend
     bot_api_base: str = "https://api.telegram.org"
     bot_admin_ids: str = ""  # comma separated telegram user ids allowed to control the bot
 

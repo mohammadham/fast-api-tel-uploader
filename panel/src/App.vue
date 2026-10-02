@@ -46,6 +46,16 @@
       <button class="ghost" @click="logout">خروج</button>
     </header>
 
+    <!-- admin pressure banner: upload-queue stall / telegram flood (global) -->
+    <div v-if="pressureSummary" class="pressure-banner" role="alert">
+      <span class="pb-icon">⚠</span>
+      <span>{{ pressureSummary }}</span>
+      <div class="pb-detail">
+        <template v-if="pressure.stall && pressure.stall.waiting">{{ pressure.stall.waiting }} جاب منتظر — قدیمی‌ترین {{ Math.round(pressure.stall.oldest_waiting_s) }} ثانیه؛ سقف آپلود همزمان {{ pressure.stall.gate_capacity }}.</template>
+        <template v-if="pressure.flooded && pressure.flooded.length"> بک‌اندهای در فشار: {{ pressure.flooded.map(f => f.key + ' (' + f.remaining_s + 's)').join('، ') }}.</template>
+      </div>
+    </div>
+
     <main>
       <!-- Dashboard -->
       <section v-show="tab === 'dash'">
@@ -451,6 +461,19 @@
           <button class="danger" @click="qPurge">پاک کردن صف</button>
           <button class="ghost" style="margin-left:8px" @click="backupDB">بکاپ</button>
           <input type="file" style="display:none" id="restoreInput" @change="restoreDB"/><button class="ghost" style="margin-left:8px" @click="document.getElementById('restoreInput').click()">بازگردانی</button>
+        </div>
+        <!-- upload-pressure status: stall behind the concurrency gate + flooded backends -->
+        <div v-if="pressure.stall && (pressure.stall.waiting > 0 || pressure.stall.stalled)" class="card wide pressure-card">
+          <div class="pt-row">
+            <span class="badge" :class="pressure.stall.stalled ? 'failed' : 'pending'">{{ pressure.stall.stalled ? "معطلی — هشدار داده شد" : "در انتظار" }}</span>
+            <b>{{ pressure.stall.waiting }} جاب آپلود/انتقال پشت سقف همزمانی</b>
+            <span class="muted">قدیمی‌ترین {{ Math.round(pressure.stall.oldest_waiting_s) }} ثانیه؛ آستانه هشدار {{ pressure.stall.threshold }} ثانیه؛ سقف {{ pressure.stall.gate_capacity }}؛ ورکر آپلود {{ pressure.stall.upload_workers }}</span>
+          </div>
+          <div v-if="pressure.flooded.length" class="pt-row">
+            <span class="badge degraded">فشار تلگرام</span>
+            <b>بک‌اندهای موقتاً خارج از چرخش:</b>
+            <span v-for="f in pressure.flooded" :key="f.key" class="badge" :class="f.burst_alerted ? 'failed' : 'degraded'" dir="ltr">{{ f.key }} — {{ f.remaining_s }}s{{ f.burst_alerted ? " ⚠" : "" }}</span>
+          </div>
         </div>
         <div class="cards">
           <div class="stat" v-for="(v, k) in queueStats" :key="k"><div class="lbl">{{ k }}</div><div class="num">{{ v }}</div></div>
@@ -1109,6 +1132,31 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
     const jobs = ref([]);
     const audit = ref([]);
     const queueStats = ref({});
+    /* admin pressure alerts: upload-queue stall + flooded telegram backends */
+    const pressure = ref({ stall: { waiting: 0, stalled: false, oldest_waiting_s: 0, threshold: 0, gate_capacity: 0, upload_workers: 0, gate_full: false }, flooded: [], summary: "" });
+    let pressureTimer = null;
+    const pressureSummary = computed(() => pressure.value.summary || "");
+    async function pollPressure() {
+      try {
+        const d = await api("/api/v1/queue/pressure");
+        const prev = pressure.value.summary;
+        pressure.value = d;
+        // fire a toast when a NEW problem appears (not while it persists)
+        if (d.summary && d.summary !== prev && tab.value !== "queue") showToast("⚠ " + d.summary, 5000, true);
+      } catch (e) { /* admin-only endpoint; banner just stays hidden */ }
+    }
+    function syncPressurePolling() {
+      if (token.value && !pressureTimer) {
+        pollPressure();
+        pressureTimer = setInterval(pollPressure, 5000);
+      } else if (!token.value && pressureTimer) {
+        clearInterval(pressureTimer);
+        pressureTimer = null;
+        pressure.value = { stall: { waiting: 0, stalled: false, oldest_waiting_s: 0, threshold: 0, gate_capacity: 0, upload_workers: 0, gate_full: false }, flooded: [], summary: "" };
+      }
+    }
+    watch(() => token.value, syncPressurePolling, { immediate: true });
+    onBeforeUnmount(() => { if (pressureTimer) clearInterval(pressureTimer); });
     const overview = ref(null);
     const nodesList = ref([]);
     const storageChannels = ref([]);
@@ -1878,10 +1926,14 @@ const doLogin = submitLogin;
       upload_workers: "ورکرهای آپلود",
       max_concurrent_downloads: "دانلود همزمان هر اکانت",
       max_concurrent_uploads: "سقف آپلود همزمان کل سیستم (فشار روی بک‌اندها)",
+      upload_stall_threshold_s: "آستانه هشدار معطلی صف آپلود (ثانیه؛ ۰=خاموش)",
+      flood_alert_threshold: "تعداد FloodWait پشت‌سرهم تا هشدار فشار تلگرام",
+      flood_alert_cooldown_s: "فاصله تکرار هشدار فشار (ثانیه)",
       default_backend: "بک‌اند پیش‌فرض",
       eitaa_mode: "مقصد ایتا (۰=تلگرام، ۱=ایتا)",
       transfer_delete_source: "پاک‌سازی خودکار منبع پس از انتقال (۰=خاموش، ۱=روشن)",
       fake_tg: "حالت تست (تلگرام آزمایشی درون‌حافظه‌ای)",
+      fake_send_delay_s: "تأخیر ارسال در حالت تست (ثانیه؛ شبیه‌سازی کندی تلگرام)",
       tg_api_id: "API ID تلگرام (my.telegram.org)",
       tg_api_hash: "API Hash تلگرام (my.telegram.org)",
       tg_storage_chat: "کانال ذخیره‌سازی (فایل‌ها اینجا ذخیره می‌شوند)",

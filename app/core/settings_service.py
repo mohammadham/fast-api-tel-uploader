@@ -71,6 +71,10 @@ EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     "presigned_ttl": (int, _positive_int, "presigned link TTL (seconds)"),
     "upload_session_ttl_minutes": (int, _positive_int, "upload session TTL (minutes)"),
     "job_max_retries": (int, _non_negative_int, "max job retries"),
+    "upload_stall_threshold_s": (int, _non_negative_int, "upload-queue stall alert threshold (seconds; 0=off)"),
+    "fake_send_delay_s": (int, _non_negative_int, "fake-TG only: per-send delay seconds (simulate slow telegram; 0=off)"),
+    "flood_alert_threshold": (int, _gt_one_int, "consecutive flood-waits per backend before an admin alert"),
+    "flood_alert_cooldown_s": (int, _positive_int, "min seconds between repeated flood alerts per backend"),
     # queue & concurrency
     "download_workers": (int, _gt_one_int, "download workers (applied live)"),
     "upload_workers": (int, _gt_one_int, "upload workers (applied live)"),
@@ -109,6 +113,10 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "upload_workers",
         "max_concurrent_downloads",
         "max_concurrent_uploads",
+        "upload_stall_threshold_s",
+        "fake_send_delay_s",
+        "flood_alert_threshold",
+        "flood_alert_cooldown_s",
     ],
     "backend": ["default_backend"],
     "telegram_api": ["fake_tg", "eitaa_mode", "tg_api_id", "tg_api_hash", "tg_storage_chat", "transfer_delete_source"],
@@ -192,6 +200,7 @@ async def apply_runtime(db, changed: Optional[list] = None) -> None:
         or "tg_api_id" in changed
         or "tg_api_hash" in changed
         or "tg_storage_chat" in changed
+        or "fake_send_delay_s" in changed  # delay lives on the FakeBackend instance
     ):
         try:
             if state.manager is not None and hasattr(state.manager, "reload_all"):

@@ -40,6 +40,20 @@ def state_bots():
     return state.bots
 
 
+def notify_admins_bg(text: str) -> None:
+    """Fire-and-forget variant for sync call sites (tg manager release paths).
+
+    Schedules on the running loop and never raises; used where we cannot await
+    (e.g. Borrowed.__aexit__ error bookkeeping).
+    """
+    import asyncio
+
+    try:
+        asyncio.get_running_loop().create_task(notify_admins(text))
+    except Exception:
+        pass
+
+
 async def _first_ready_token() -> str | None:
     from .security import decrypt_str
     from .state import state

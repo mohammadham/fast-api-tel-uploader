@@ -55,6 +55,8 @@ class TGManager:
         self._circuit_until: Dict[str, float] = {}
         self._errors: Dict[str, int] = {}
         self._flood_counts: Dict[str, int] = {}
+        # flood-burst tracker for admin alerts: key → {count, last_at, last_alert_at, seconds}
+        self._flood_alerts: Dict[str, Dict[str, float]] = {}
         self._rr: int = 0
         self._stopped = False
         # backend key -> proxy row id it was built with (fallback tracking)
@@ -195,6 +197,7 @@ class TGManager:
             from .fake import FakeBackend
 
             backend = FakeBackend(cid=key)
+            backend.send_delay = self._fake_send_delay()
         else:
             session = decrypt_str(row["session_enc"])
             proxy, prow = await self._pick_proxy(account_id)
@@ -210,6 +213,14 @@ class TGManager:
             await backend.start()
             self._proxy_by_backend[key] = prow["id"] if prow else None
         self._backends[key] = backend
+
+    def _fake_send_delay(self) -> float:
+        """fake-TG only: delay every fake send so queue pressure is reproducible
+        (applies to acc/bot/eit alike — the pool mixes kinds in fake mode)."""
+        try:
+            return float(runtime_settings()._cache.get("fake_send_delay_s") or 0)
+        except Exception:
+            return 0.0
 
     async def _pick_proxy(self, account_id: int):
         """Resolve (telethon_proxy_arg, proxy_row_or_None) for a new connection."""
@@ -245,6 +256,7 @@ class TGManager:
             from .fake import FakeBackend
 
             backend = FakeBackend(cid=key)
+            backend.send_delay = self._fake_send_delay()
         else:
             token = decrypt_str(row["token_enc"])
             backend = BotBackend(key, token, base=s.bot_api_base)
@@ -265,6 +277,7 @@ class TGManager:
             from .fake import FakeBackend
 
             backend = FakeBackend(cid=key)
+            backend.send_delay = self._fake_send_delay()
         else:
             from .eitaa_backend import EitaaBackend
 
@@ -338,12 +351,48 @@ class TGManager:
         """Reset transient error counter after a successful direct probe."""
         self._errors.pop(key, None)
         self._flood_counts.pop(key, None)
+        self._flood_alerts.pop(key, None)
+
+    def _note_flood_burst(self, key: str, exc: FloodWait) -> None:
+        """Count consecutive flood-waits per backend; alert once per burst.
+
+        Consecutive = back-to-back releases with a FloodWait on the same
+        backend; a healthy release (exc=None) or a manual probe resets it.
+        Once the count crosses flood_alert_threshold (runtime setting), an
+        admin notification fires — and then stays quiet for
+        flood_alert_cooldown_s so a long flood doesn't spam.
+        """
+        try:
+            threshold = int(runtime_settings()._cache.get("flood_alert_threshold") or 0)
+        except Exception:
+            threshold = 0
+        if threshold <= 0:
+            return
+        t = time.time()
+        st = self._flood_alerts.setdefault(key, {"count": 0, "last_at": 0.0, "last_alert_at": 0.0, "seconds": 0})
+        # a long healthy gap (>= flood seconds or 2 min) restarts the burst
+        if st["last_at"] and t - st["last_at"] > max(float(exc.seconds), 120.0):
+            st["count"] = 0
+        st["count"] += 1
+        st["last_at"] = t
+        st["seconds"] = int(exc.seconds)
+        if st["count"] < threshold:
+            return
+        if t - st["last_alert_at"] < max(1, int(runtime_settings()._cache.get("flood_alert_cooldown_s") or 600)):
+            return
+        st["last_alert_at"] = t
+        st["count"] = 0  # burst consumed; the next burst re-alerts after cooldown
+        from ..services.notify import notify_admins_bg
+
+        notify_admins_bg(f"⚠ فشار تلگرام روی {key}: FloodWait مکرر (صبر {int(exc.seconds)} ثانیه). بک‌اند موقتاً از چرخش خارج است.")
+        log.warning("flood burst on %s (wait %ss) — admin alerted", key, exc.seconds)
 
     async def release(self, key: str, exc: Optional[BaseException]) -> None:
         sem = self._sems.get(key)
         if exc is None:
             self._errors.pop(key, None)
             self._flood_counts.pop(key, None)
+            self._flood_alerts.pop(key, None)
             if key.startswith("acc:"):
                 try:
                     await AccountRepo(self.db).mark_success(int(key.split(":")[1]))
@@ -364,6 +413,7 @@ class TGManager:
             if isinstance(exc, FloodWait):
                 self._flood_until[key] = time.time() + exc.seconds
                 metrics.inc("backends.flood")
+                self._note_flood_burst(key, exc)
             else:
                 self._errors[key] = self._errors.get(key, 0) + 1
                 metrics.inc("backends.errors")

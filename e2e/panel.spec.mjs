@@ -975,6 +975,87 @@ test.describe.serial("panel smoke", () => {
     }, tag);
   });
 
+  test("upload pressure banner: jobs stuck behind the concurrency gate alert the admin", async ({ page }) => {
+    test.setTimeout(150_000); // 4 uploads + stall window + settle needs more than the default 60s
+    await login(page);
+    await page.locator("#tabs button", { hasText: "فایل‌ها" }).click();
+
+    const tag = "e2e-pressure-" + Date.now().toString(36) + "-";
+    // Slow the fake backend (6s per send) so the default config
+    // (2 workers, gate 2) shows a LONG real stall: 4 parallel uploads →
+    // 2 running hold both slots ~6s each pair → ≥10s window, so the panel's
+    // 5s pressure poll cannot miss it.
+    await proxyCall(page, "/api/v1/admin/settings", { method: "PUT", body: { fake_send_delay_s: 6 } });
+    try {
+      // rebuild backends so the new delay applies (fake backends cache it at
+      // spawn time — proxies/apply drops and re-spawns every backend)
+      await proxyCall(page, "/api/v1/admin/proxies/apply", { method: "POST" });
+
+      // 4 parallel uploads (16MB each) with gate capacity 2 → two jobs wait
+      // behind the upload gate while the other two send slowly
+      const pushPromise = page.evaluate(async (tag) => {
+        const token = localStorage.getItem("td_token");
+        const H = { Authorization: "Bearer " + token, "Content-Type": "application/json" };
+        const SIZE = 8 * 1024 * 1024;
+        await Promise.all([0, 1, 2, 3].map(async (i) => {
+          const s = await fetch("/api/v1/files/upload/session", { method: "POST", headers: H, body: JSON.stringify({ name: tag + "p" + i + ".bin", size: SIZE }) }).then((r) => r.json());
+          let off = 0;
+          while (off < SIZE) {
+            const n = Math.min(s.chunk_size, SIZE - off);
+            const r = await fetch("/api/v1/files/upload/session/" + s.session_id, { method: "PATCH", headers: { Authorization: "Bearer " + token, "X-Offset": String(off) }, body: new Uint8Array(n) });
+            if (!r.ok) throw new Error("chunk failed " + r.status);
+            off = (await r.json()).offset;
+          }
+        }));
+        return tag;
+      }, tag);
+
+      // poll the pressure endpoint until the stall condition is observable
+      let seen = null;
+      const samples = [];
+      for (let i = 0; i < 100 && !seen; i++) {
+        const d = await proxyCall(page, "/api/v1/queue/pressure");
+        samples.push(`w=${d.stall.waiting} full=${d.stall.gate_full} uw=${d.stall.upload_workers} cap=${d.stall.gate_capacity} sum=${(d.summary || "-").slice(0, 60)}`);
+        if (d.summary && d.stall.waiting > 0) seen = d;
+        else await page.waitForTimeout(250);
+      }
+      if (!seen) {
+        await pushPromise;
+        throw new Error("no stall observed; last samples: " + samples.slice(-10).join(" | "));
+      }
+      expect(seen.stall.gate_full).toBe(true);
+      expect(seen.summary).toContain("منتظر");
+
+      // while the stall is LIVE (before the uploads drain) the global banner
+      // must appear within one 5s UI poll cycle, on any tab
+      await expect(page.locator(".pressure-banner")).toContainText("منتظر", { timeout: 15000 });
+      // and the queue tab shows the detailed stall card
+      await page.locator("#tabs button", { hasText: "صف" }).click();
+      await expect(page.locator(".pressure-card")).toBeVisible();
+      await expect(page.locator(".pressure-card")).toContainText("سقف همزمانی");
+
+      await pushPromise; // let the uploads drain before cleanup
+    } finally {
+      await proxyCall(page, "/api/v1/admin/settings", { method: "PUT", body: { fake_send_delay_s: 0, upload_workers: 2 } });
+      await proxyCall(page, "/api/v1/admin/proxies/apply", { method: "POST" });
+    }
+
+    // cleanup: wait for settle, then purge by name prefix
+    await page.evaluate(async (tag) => {
+      const token = localStorage.getItem("td_token");
+      for (let i = 0; i < 60; i++) {
+        const { items } = await fetch("/api/v1/files?limit=100", { headers: { Authorization: "Bearer " + token } }).then((r) => r.json());
+        const mine = items.filter((f) => f.name.startsWith("e2e-pressure-"));
+        if (mine.length === 4 && mine.every((f) => f.status === "ready" || f.status === "failed")) break;
+        await new Promise((res) => setTimeout(res, 500));
+      }
+      const { items } = await fetch("/api/v1/files?limit=100", { headers: { Authorization: "Bearer " + token } }).then((r) => r.json());
+      for (const f of items.filter((x) => x.name.startsWith("e2e-pressure-"))) {
+        await fetch("/api/v1/files/" + f.id + "?purge=true", { method: "DELETE", headers: { Authorization: "Bearer " + token } });
+      }
+    }, tag);
+  });
+
   test("trash view: soft-delete hides file, restore brings it back", async ({ page }) => {
     await login(page);
 

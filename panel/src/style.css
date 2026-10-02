@@ -139,6 +139,21 @@ input.invalid:focus { box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.25); }
 .badge.failed, .badge.error { color: var(--err); border-color: var(--err); background: rgba(239, 68, 68, 0.08); }
 .badge.revoked { color: var(--err); border-color: var(--err); }
 
+/* ── admin pressure banner: upload-queue stall / telegram flood ── */
+.pressure-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 var(--s3) var(--s3);
+  padding: 10px 14px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid var(--err);
+  border-radius: 10px;
+  color: var(--err);
+  font-size: 13.5px;
+}
+.pressure-banner .pb-icon { font-size: 16px; }
+.pressure-banner .pb-detail { color: var(--muted); font-size: 12px; width: 100%; }
+.pressure-card .pt-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0; font-size: 13px; }
+
 .toolbar { display: flex; gap: var(--s2); margin-bottom: var(--s3); align-items: center; flex-wrap: wrap; }
 
 /* ── upload progress bar ────────────────────────────────── */
