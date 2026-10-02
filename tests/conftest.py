@@ -97,4 +97,18 @@ async def api_key(client, token):
     return resp.json()["key"]
 
 
+@pytest.fixture()
+async def db():
+    # state.db is wired by the client fixture; expose it after setup
+    from app.core.state import state
+
+    yield state.db
+
+    state.db = None
+    state.manager = None
+    state.queue = None
+    state.bots = None
+    state.janitor = None
+
+
 AUTH = {"Authorization": "Bearer x"}  # replaced per-test with real key
