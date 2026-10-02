@@ -669,3 +669,81 @@ async def proxies_apply(admin: str = Depends(get_current_admin), db=Depends(get_
         await state.manager.reload_all()
     await db.audit(admin, "proxy.apply")
     return {"ok": True}
+
+
+@router.post("/janitor/run")
+async def janitor_run(admin: str = Depends(get_current_admin), db=Depends(get_db)):
+    """Run one manual janitor sweep: purge expired sessions + tombstoned tmp
+    files (>1h), old finished jobs, revoked keys (>30d), audit/revoked_tokens
+    (>90d) right now — instead of waiting for the next 10-minute loop."""
+    from app.core.models import FileRepo, JobRepo, KIND_DELETE, UploadSessionRepo
+    from app.services.janitor import Janitor
+
+    if state.janitor is None:
+        raise HTTPException(status_code=503, detail="janitor not initialized")
+
+    s = get_settings()
+    tmp_dir = s.final_tmp_dir()
+    cutoff = time.time() - 3600  # tmp files older than 1h
+    removed = 0
+    if os.path.isdir(tmp_dir):
+        entries = sorted(
+            ((os.path.getmtime(os.path.join(tmp_dir, n)), n)
+             for n in os.listdir(tmp_dir)),
+            reverse=True,
+        )
+        for _, name in entries:
+            path = os.path.join(tmp_dir, name)
+            try:
+                if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                    os.remove(path)
+                    removed += 1
+            except OSError:
+                pass
+
+    # expired upload sessions + their .part tombstoned tmp files
+    try:
+        from ..core.settings_service import get_runtime
+
+        ttl_min = int(await get_runtime(db, "upload_session_ttl_minutes") or s.upload_session_ttl_minutes)
+    except Exception:
+        ttl_min = s.upload_session_ttl_minutes
+    stale = await UploadSessionRepo(db).stale(ttl_min * 60)
+    for sess in stale:
+        await UploadSessionRepo(db).delete(sess["id"])
+        path = os.path.join(tmp_dir, f"{sess['id']}.part")
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except OSError:
+            pass
+
+    # old finished jobs (keep 24h) + trashed files purge (>7d, via queue) + retention keys/audit/tokens
+    from ..core.models import UploadSessionRepo, FileRepo, JobRepo
+
+    deleted = await JobRepo(db).purge_finished(time.time() - 86400)
+    trashed = await FileRepo(db).trashed(time.time() - 7 * 86400)
+    purged = 0
+    for f in trashed:
+        if state.queue and state.manager:
+            await state.queue.enqueue(KIND_DELETE, {"file_id": f["id"]}, 10)
+            purged += 1
+    cut30, cut90 = time.time() - 30 * 86400, time.time() - 90 * 86400
+    old_keys = await db.execute("DELETE FROM api_keys WHERE revoked=1 AND created_at < ?", (cut30,))
+    old_audit = await db.execute("DELETE FROM audit_log WHERE ts < ?", (cut90,))
+    old_tokens = await db.execute("DELETE FROM revoked_tokens WHERE expires_at < ?", (cut90,))
+
+    # don't log via the module logger (which attaches to the periodic loop);
+    # just return counts
+    return {
+        "ok": True,
+        "tmp_removed": removed,
+        "sessions_deleted": len(stale),
+        "jobs_purged": deleted,
+        "trash_purged": purged,
+        "revoked_keys_deleted": old_keys,
+        "audit_deleted": old_audit,
+        "revoked_tokens_deleted": old_tokens,
+        "note": "janitor sweep executed manually via POST /api/v1/admin/janitor/run",
+    }
+
