@@ -1056,7 +1056,7 @@
     <div v-if="uploadJobs.length" id="upload-tray" class="card" :style="{ position:'fixed',bottom:'14px',left:'14px',width:'340px','max-width':'calc(100vw - 28px)','z-index':80,padding:'10px 12px','box-shadow':'0 8px 24px rgba(0,0,0,.35)', outline: trayDrag ? '2px dashed var(--accent,#3b82f6)' : 'none', 'outline-offset': '-4px', background: trayDrag ? 'rgba(59,130,246,.10)' : undefined }" @dragover.prevent="trayDrag = true" @dragenter.prevent="trayDrag = true" @dragleave.self="trayDrag = false" @drop.prevent="onTrayDrop">
       <div v-if="trayDrag" class="muted" style="text-align:center;font-size:11px;padding:2px 0 4px">فایل‌ها را همین‌جا رها کنید — با پوشه/کانالِ آخرین آپلود بالا می‌رود</div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <b style="font-size:13px">آپلودها ({{ uploadJobs.filter(j => j.status === 'uploading').length }} فعال<template v-if="uploadJobs.some(j => j.status === 'uploading' && !j.started)"> • {{ uploadJobs.filter(j => j.status === 'uploading' && !j.started).length }} در صف</template> / {{ uploadJobs.length }})</b>
+        <b style="font-size:13px">آپلودها ({{ uploadJobs.filter(j => j.status === 'uploading').length }} فعال<template v-if="uploadJobs.some(j => j.status === 'uploading' && !j.started)"> • {{ uploadJobs.filter(j => j.status === 'uploading' && !j.started).length }} در صف</template> / {{ uploadJobs.length }}, فضا آزاد شده: {{ totalFreedBytes > 0 ? fmtBytes(totalFreedBytes) : "۰" }})</b>
         <button class="ghost" style="padding:2px 8px;font-size:11px" @click="clearFinishedUploads" :disabled="!uploadJobs.some(j => j.status !== 'uploading')">پاک‌سازی تمام‌شده‌ها</button>
       </div>
       <div v-for="j in uploadJobs" :key="j.id" style="padding:6px 0;border-top:1px solid var(--border,#2a2f3a)">
@@ -1437,8 +1437,8 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
       const resp = await fetch(path, opts);
       if (resp.status === 401 && refresh.value) {
         const r = await fetch("/api/v1/auth/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refresh_token: refresh.value }) });
+        const d = await r.json();
         if (r.ok) {
-          const d = await r.json();
           token.value = d.access_token;
           localStorage.setItem("td_token", token.value);
           return api(path, opts);
@@ -1450,11 +1450,15 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
         const d = await resp.json().catch(() => ({}));
         throw new Error(d.detail || resp.statusText || "خطای ناشناخته");
       }
-      return resp.json();
+      return await resp.json();
     }
 
     /* ---------- formatting ---------- */
-    function fmtBytes(n) {
+    /* alias kept for legacy code paths */
+    /* alias kept for legacy code paths */
+    const bytesToString = fmtBytes;
+    /* alias kept for legacy code paths */
+    const bytesToString = fmtBytes;
       n = Number(n) || 0;
       const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
       while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
@@ -2286,6 +2290,7 @@ const doLogin = submitLogin;
        INDEPENDENT of the dialog — closing the dialog never aborts an upload */
     const uploadJobs = ref([]);
     let uploadJobSeq = 0;
+    let totalFreedBytes = 0;
     function clearFinishedUploads() { uploadJobs.value = uploadJobs.value.filter((j) => j.status === "uploading"); }
     function dismissUploadJob(j) { uploadJobs.value = uploadJobs.value.filter((x) => x.id !== j.id); }
     function cancelUploadJob(j) {
@@ -2294,9 +2299,17 @@ const doLogin = submitLogin;
       j.status = "canceled";
       if (j.controller) { try { j.controller.abort(); } catch (e) { /* already done */ } }
       // server-side too: tombstone the resumable session so racing chunk
-      // PATCHes fail and the tmp .part file gets deleted
+      // PATCHes fail and the tmp .part file is deleted; surface freed bytes
+      // back to the persistent upload tray
       if (j.sessionId) {
-        api(`/api/v1/files/upload/session/${j.sessionId}`, { method: "DELETE" }).catch(() => {});
+        api(`/api/v1/files/upload/session/${j.sessionId}`, { method: "DELETE" })
+          .then(async (r) => {
+            const jr = await r.json();
+            const freed = Number(jr.bytes_freed ?? jr.part_bytes?.length ?? 0) || 0;
+            if (Number.isFinite(freed)) totalFreedBytes += freed;
+            showToast(`فایل موقت حذف شد: ${freed > 0 ? fmtBytes(freed) : "هیچ»}`);
+          })
+          .catch(() => {});
       }
     }
     function uploadPick() { loaders.channels(); switchTab("files"); uploadDlg.open = true; uploadDlg.files = []; }
