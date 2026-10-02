@@ -1456,10 +1456,6 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
     /* ---------- formatting ---------- */
     /* alias kept for legacy code paths */
     /* alias kept for legacy code paths */
-    const bytesToString = fmtBytes;
-    /* alias kept for legacy code paths */
-    const bytesToString = fmtBytes;
-      n = Number(n) || 0;
       const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
       while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
       return n.toFixed(i ? 1 : 0) + " " + u[i];
