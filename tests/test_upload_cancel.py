@@ -30,7 +30,7 @@ async def test_cancel_tombstones_session_and_rejects_chunks(client, api_key):
 
 
 @pytest.mark.asyncio
-async def test_cancel_deletes_part_file(client, api_key):
+async def test_cancel_deletes_part_file_and_returns_bytes(client, api_key):
     from app.core.config import get_settings
 
     H = _H(api_key)
@@ -43,10 +43,13 @@ async def test_cancel_deletes_part_file(client, api_key):
 
     part = os.path.join(get_settings().final_tmp_dir(), sid + ".part")
     assert os.path.isfile(part)
+    expected_bytes = open(part, "rb").read()
 
     r = await client.delete("/api/v1/files/upload/session/" + sid, headers=H)
     assert r.status_code == 200
     assert not os.path.exists(part)
+    assert r.json()["bytes_freed"] == len(expected_bytes)
+    assert r.json()["part_bytes"] == expected_bytes.decode("ascii")
 
 
 @pytest.mark.asyncio

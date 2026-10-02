@@ -337,6 +337,11 @@ class QueueManager:
 
     def paused(self) -> List[str]:
         return sorted(self._paused_kinds)
+    def unenqueue_deleted_job(self, job_id: str) -> None:
+        """Remove a canceled upload's leftover job from the queue + jobs table."""
+        self._rows.pop(job_id, None)
+        self._heap = [r for r in self._heap if r[2] != job_id]
+        heapq.heapify(self._heap)
 
     # ── worker loops ───────────────────────────────────────────
     async def _worker_loop(self, worker_kind: str, name: str) -> None:

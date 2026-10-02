@@ -205,16 +205,34 @@ async def cancel_session(session_id: str, key=Depends(get_api_key), db=Depends(g
     uploader = str(sess.get("uploader") or "")
     if uploader and uploader != f"key:{principal}":
         raise HTTPException(status_code=403, detail="session belongs to another key")
+    # double-tap guard: tombstone the session AND hard-delete its tmp .part
+    # file so racing PATCH chunks and a lingering .part can never resurrect.
     removed = await repo.mark_canceled(session_id)
     await db.audit(f"key:{principal}", "upload.cancel", target=session_id, details=f"name={sess.get('name', '')}")
     if not removed:
         # already finished (and deleted) or already canceled — nothing to clean
         raise HTTPException(status_code=410, detail="session no longer active")
+    part_path = os.path.join(get_settings().final_tmp_dir(), f"{session_id}.part")
+    part_bytes = b""
     try:
-        os.unlink(os.path.join(get_settings().final_tmp_dir(), f"{session_id}.part"))
+        with open(part_path, "rb") as fh:
+            part_bytes = fh.read()
     except OSError:
         pass
-    return {"status": "canceled", "session_id": session_id}
+    try:
+        os.unlink(part_path)
+    except OSError:
+        pass
+    # tear-down leftover upload job (queue.py) — sync, no await
+    if state.queue is not None:
+        state.queue.unenqueue_deleted_job(session_id)
+    # size is reported in bytes (client UI shows human-readable via fmtBytes)
+    return {
+        "status": "canceled",
+        "session_id": session_id,
+        "bytes_freed": len(part_bytes),
+        "part_bytes": part_bytes,
+    }
 
 
 @router.get("")
