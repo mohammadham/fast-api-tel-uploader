@@ -160,3 +160,48 @@ powershell -NoProfile -Command '$env:TGDRIVE_FAKE_TG="1"; $env:TGDRIVE_DATA_DIR=
 - Sidebar rows (root «همه فایل‌ها» + each folder) accept drops: onSidebarDrop enqueues via enqueueUploadJobs with the row's path as X-Folder; scoped folders also pin their own channel (folder.scope). Row highlights (dashed outline) during hover via sbRowStyle; ev.sidebarDropped flag stops section-level onFilesDrop from opening the dialog; toast reports target folder; filesFolderDraft follows the drop target.
 - Gotcha: SIDEBAR_ROOT key ("__root__") distinguishes no-hover from hovering the root row (null is a valid folder id).
 - Tests: e2e "drop onto a sidebar folder row…" (creates folder, hover outline, drop, folder_id check on server) → 18 e2e + 160 pytest; bundle index-DLK0rnjN.js.
+
+### Round 18 — Jan 2026 (Admin-triggered manual janitor + upload-cancel bytes)
+- `POST /api/v1/admin/janitor/run` hands one sweep immediately
+  (stale tmp >1h, tombstoned sessions + `.part`, jobs >24h, revoked keys >30d,
+  audit/revoked_tokens >90d); returns per-category counts.
+- Tests in `tests/test_janitor_admin.py` (3 pass, red/verifying-style).
+- Panel: `cancelUploadJob` now reads `bytes_freed`/`part_bytes` robustly and
+  accumulates `totalFreedBytes`; `#upload-tray` heading shows a freed-space
+  summary badge (`{{ totalFreedBytes > 0 ? fmtBytes(totalFreedBytes) : "۰" }}`),
+  matching Janitor round-18 spec.
+- Ref: Janitor class in `app/services/janitor.py` (600s loop `_loop`, `_sweep`
+  with tmp>1h, sessions via `UploadSessionRepo.stale(ttl)`, jobs via
+  `purge_finished(86400)`, keys/audit_tokens, >7d trash → `KIND_DELETE` w/
+  `?purge=true`).### Round 18 — Jan 2026 (Admin-triggered manual janitor)
+- `POST /api/v1/admin/janitor/run` hands one sweep immediately
+  (stale tmp >1h, tombstoned sessions + `.part`, jobs >24h, revoked keys >30d,
+  audit/revoked_tokens >90d); returns per-category counts.
+- Tests in `tests/test_janitor_admin.py` (3 pass, red/verifying-style).
+- Panel: `cancelUploadJob` now reads `bytes_freed`/`part_bytes` robustly and
+  accumulates `totalFreedBytes`; `#upload-tray` heading shows a freed-space
+  summary badge (`{{ totalFreedBytes > 0 ? fmtBytes(totalFreedBytes) : "۰" }}`).
+- Ref: Janitor class in `app/services/janitor.py` (600s loop `_loop`, `_sweep`
+  with tmp>1h, sessions via `UploadSessionRepo.stale(ttl)`, jobs via
+  `purge_finished(86400)`, keys/audit_tokens, >7d trash → `KIND_DELETE` w/
+  `?purge=true`).
+
+
+## Sidebar drag & drop (round 12)
+- Sidebar rows (root «همه فایل‌ها» + each folder) accept drops: onSidebarDrop enqueues via enqueueUploadJobs with the row's path as X-Folder; scoped folders also pin their own channel (folder.scope). Row highlights (dashed outline) during hover via sbRowStyle; ev.sidebarDropped flag stops section-level onFilesDrop from opening the dialog; toast reports target folder; filesFolderDraft follows the drop target.
+- Gotcha: SIDEBAR_ROOT key ("__root__") distinguishes no-hover from hovering the root row (null is a valid folder id).
+- Tests: e2e "drop onto a sidebar folder row…" (creates folder, hover outline, drop, folder_id check on server) → 18 e2e + 160 pytest; bundle index-DLK0rnjN.js.
+
+### Round 18 — Jan 2026 (Admin-triggered manual janitor + upload-cancel bytes)
+- `POST /api/v1/admin/janitor/run` hands one sweep immediately
+  (stale tmp >1h, tombstoned sessions + `.part`, jobs >24h, revoked keys >30d,
+  audit/revoked_tokens >90d); returns per-category counts.
+- Tests in `tests/test_janitor_admin.py` (3 pass, red/verifying-style).
+- Panel: `cancelUploadJob` now reads `bytes_freed`/`part_bytes` robustly and
+  accumulates `totalFreedBytes`; `#upload-tray` heading shows a freed-space
+  summary badge (`{{ totalFreedBytes > 0 ? fmtBytes(totalFreedBytes) : "۰" }}`),
+  matching Janitor round-18 spec.
+- Ref: Janitor class in `app/services/janitor.py` (600s loop `_loop`, `_sweep`
+  with tmp>1h, sessions via `UploadSessionRepo.stale(ttl)`, jobs via
+  `purge_finished(86400)`, keys/audit_tokens, >7d trash → `KIND_DELETE` w/
+  `?purge=true`).
