@@ -151,6 +151,11 @@ powershell -NoProfile -Command '$env:TGDRIVE_FAKE_TG="1"; $env:TGDRIVE_DATA_DIR=
 - **Panel:** the queue table now shows a "Continue from offset N" button for active upload jobs (pending/running/retry), not just `failed`;"`qResumeJob(j)` calls the per-job endpoint.
 - **Tests:** `tests/test_queue.py` + `tests/test_api.py` full green (22 dots; also passed the earlier janitor suite + the whole suite `EXIT:0`).
 
+## Manual admin janitor trigger (round 17)
+- **Endpoint:** `POST /api/v1/admin/janitor/run` (admin auth). Runs one janitor sweep immediately: deletes stale tmp files >1h in `final_tmp_dir()`, purges expired upload sessions + their `{session}.part` tombstoned tmp files, old finished jobs (>24h), revoked keys (>30d), audit_log/revoked_tokens (>90d). Returns per-category counts (`tmp_removed`, `sessions_deleted`, `jobs_purged`, `trash_purged`, `revoked_keys_deleted`, `audit_deleted`, `revoked_tokens_deleted`).
+- **Why:** the janitor loop is 600s (`app/services/janitor.py`), so a forced/urgent cleanup (e.g. in-flight crash cleanup, stale session expiry) needs a manual trigger rather than waiting.
+- **Tests:** `tests/test_janitor_admin.py` (3: deletes stale tmp files + expired sessions, rejects unauthenticated 401, rejects uninitialized janitor 503). Full suite green.
+
 ## Sidebar drag & drop (round 12)
 - Sidebar rows (root «همه فایل‌ها» + each folder) accept drops: onSidebarDrop enqueues via enqueueUploadJobs with the row's path as X-Folder; scoped folders also pin their own channel (folder.scope). Row highlights (dashed outline) during hover via sbRowStyle; ev.sidebarDropped flag stops section-level onFilesDrop from opening the dialog; toast reports target folder; filesFolderDraft follows the drop target.
 - Gotcha: SIDEBAR_ROOT key ("__root__") distinguishes no-hover from hovering the root row (null is a valid folder id).
