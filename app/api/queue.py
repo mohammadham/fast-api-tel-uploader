@@ -41,7 +41,81 @@ async def pressure(_: str = Depends(get_current_admin), db=Depends(get_db)):
 
 @router.get("/jobs")
 async def jobs(limit: int = 100, _: str = Depends(get_current_admin), db=Depends(get_db)):
-    return {"items": await state.queue.jobs.recent(min(limit, 500)), "paused": state.queue.paused()}
+    """List queue jobs, including the upload payload + the last resumed offset."""
+    rows = await state.queue.jobs.recent(min(limit, 500))
+    items = []
+    for r in rows:
+        item = dict(r)
+        payload = r.get("payload")
+        if payload:
+            try:
+                import json
+
+                item["payload"] = json.loads(payload) if isinstance(payload, str) else dict(payload)
+            except Exception:
+                item["payload"] = None
+        else:
+            item["payload"] = None
+        items.append(item)
+    return {"items": items, "paused": state.queue.paused()}
+
+
+@router.post("/resume/{job_id}")
+async def resume_job(job_id: str, _: str = Depends(get_current_admin), db=Depends(get_db)):
+    """Resume a durable upload job from the server's stored upload-session offset.
+
+    Re-enqueues a failed/paused/completed upload job with `next_run_at=0` so a
+    worker picks it up immediately, and continues the upload from the offset the
+    upload session has already written to (`upload_sessions.offset`). Jobs that
+    are already durable (pending/running/retry) and not paused are accepted;
+    deleted/trashed/failed jobs are rejected.
+    """
+    from ..core.models import UploadSessionRepo
+
+    row = await state.queue.jobs.fetch(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    # only durable upload jobs may be resumed from offset
+    if row["kind"] != "upload":
+        raise HTTPException(status_code=409, detail="only upload jobs can be resumed")
+    if row["status"] not in ("pending", "running", "retry"):
+        raise HTTPException(status_code=409, detail=f"job is not resumable (status={row['status']})")
+    if row["id"] in state.queue._paused_kinds:
+        raise HTTPException(status_code=409, detail="job is paused, use /api/v1/queue/pause first")
+
+    # resume the upload session from its stored offset (if it still exists)
+    payload = dict(row.get("payload") or {})
+    session_id = payload.get("session_id")
+    resumed_offset = 0
+    if session_id:
+        sess = await UploadSessionRepo(db).get(session_id)
+        if sess:
+            resumed_offset = int(sess.get("offset") or 0)
+        else:
+            # dangling session: drop it so a fresh upload starts at 0
+            payload.pop("session_id", None)
+
+    await state.queue.jobs.update_fields(
+        job_id,
+        status="pending",
+        attempts=0,
+        next_run_at=0,
+        error="",
+    )
+    # keep the session pointer + resumed offset on the job payload
+    payload.setdefault("session_id", session_id)
+    payload.setdefault("resumed_offset", resumed_offset)
+    await state.queue.jobs.update_payload(job_id, payload)
+
+    state.queue._wake.set()
+    return {
+        "job_id": job_id,
+        "status": "pending",
+        "resumed_offset": resumed_offset,
+        "session_id": session_id,
+        "msg": "آپلود از offset ریستور شد" if resumed_offset else "آپلود شروع به‌صورت تازه شد",
+    }
 
 
 @router.get("/transfer-progress")

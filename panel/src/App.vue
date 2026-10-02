@@ -486,7 +486,13 @@
                 <td dir="ltr"><code>{{ j.id }}</code></td><td>{{ j.kind }}</td><td>{{ j.priority }}</td>
                 <td><span class="badge" :class="j.status">{{ j.status }}</span></td>
                 <td>{{ j.attempts }}</td><td class="muted">{{ j.error }}</td>
-                <td><button v-if="j.status === 'failed'" @click="qRetry(j)">تلاش مجدد</button></td>
+                <td>
+                  <button v-if="j.status === 'failed'" @click="qRetry(j)">تلاش مجدد</button>
+                  <template v-else-if="j.kind === 'upload' && !j.paused && (j.status === 'pending' || j.status === 'running' || j.status === 'retry')">
+                    <button @click="qResumeJob(j)">Continue from offset {{ j.resumed_offset || 0 }}</button>
+                  </template>
+                  <template v-else><span class="muted" style="font-size:12px">—</span></template>
+                </td>
               </tr>
               <tr v-if="!jobs.length"><td colspan="7" class="muted">جابی نیست</td></tr>
             </tbody>
@@ -2523,6 +2529,7 @@ const doLogin = submitLogin;
     /* ---------- queue ---------- */
     async function qPause() { await api("/api/v1/queue/pause", { method: "POST", json: { kind: "upload" } }); showToast("آپلود متوقف شد"); loaders.queue(); }
     async function qResume() { await api("/api/v1/queue/resume", { method: "POST", json: { kind: "upload" } }); showToast("آپلود ادامه یافت"); loaders.queue(); }
+    async function qResumeJob(j) { await api(`/api/v1/queue/resume/${j.id}`, { method: "POST" }); showToast(j.resumed_offset ? `آپلود از offset ${j.resumed_offset} ادامه یافت` : `آپلود ادامه یافت`); loaders.queue(); }
     async function qPurge() { await api("/api/v1/queue/purge", { method: "POST" }); loaders.queue(); }
     async function backupDB() {
       try {

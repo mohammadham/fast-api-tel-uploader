@@ -666,6 +666,34 @@ class QueueManager:
         tmp_path = payload.get("tmp_path", "")
         await self._maybe_store_thumb(rec, tmp_path)
 
+        # ── resumable resume: continue from the upload session's stored offset ──
+        session_id = payload.get("session_id")
+        resumed_offset = int(payload.get("resumed_offset") or 0)
+        if session_id:
+            try:
+                from ..core.models import UploadSessionRepo
+
+                sess = await UploadSessionRepo(self.db).get(session_id)
+                if sess:
+                    saved = int(sess.get("offset") or 0)
+                    if resumed_offset < saved:
+                        resumed_offset = saved  # server is ahead → never rewind
+                    if resumed_offset >= int(rec.get("size") or 0):
+                        # session is already complete; run a fresh (empty) upload
+                        resumed_offset = 0
+                else:
+                    resumed_offset = 0  # dangling session → fresh start
+            except Exception:
+                resumed_offset = 0
+        if resumed_offset:
+            slog_q.info(
+                "upload resumed from offset",
+                job_id=job_id,
+                file_id=file_id,
+                session_id=session_id,
+                resumed_offset=resumed_offset,
+            )
+
         if payload.get("tg_file_id") and payload.get("bot_token_ref") is not None:
             # Bot-relayed upload: fetch from Bot API to a temp file first.
             bot_row = await BotRepo(self.db).get(int(payload["bot_token_ref"]))
@@ -751,9 +779,15 @@ class QueueManager:
                             except OSError:
                                 pass
                 else:
-                    result = await be.send_document(storage_chat, tmp_path, name, mime, caption=folder_tag)
-                    message_ids.append(int(result["message_id"]))
-                    await self.files.add_part(file_id, 0, int(result["message_id"]), int(result["size"]))
+                    # plain upload: stream from tmp_path at resumed_offset (0 = fresh)
+                    if resumed_offset:
+                        with open(tmp_path, "rb") as fh:
+                            fh.seek(resumed_offset)
+                            await self._send_streaming(be, storage_chat, tmp_path, name, mime, folder_tag, fh, file_id, message_ids, resumed_offset)
+                    else:
+                        result = await be.send_document(storage_chat, tmp_path, name, mime, caption=folder_tag)
+                        message_ids.append(int(result["message_id"]))
+                        await self.files.add_part(file_id, 0, int(result["message_id"]), int(result["size"]))
         finally:
             gate.release()
 
@@ -828,6 +862,57 @@ class QueueManager:
             return part_paths
 
         return await asyncio.to_thread(_work)
+
+    async def _send_streaming(
+        self,
+        be, storage_chat: str, tmp_path: str, name: str, mime: str, folder_tag: str,
+        file_id: str, message_ids: List[int], from_offset: int,
+    ) -> None:
+        """Plain (non-split) upload that continues from `from_offset`.
+
+        We stream the remaining bytes (from `from_offset`) to the backend so a
+        resumed upload never re-sends what it already stored. On success the
+        upload session's `offset` is advanced to the file `size` so the offset
+        never rewinds.
+        """
+        size = int((await self.files.get(file_id))["size"])
+        sent = 0
+        try:
+            with open(tmp_path, "rb") as fh:
+                fh.seek(from_offset)
+                while True:
+                    chunk = fh.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    try:
+                        result = await be.send_document(storage_chat, tmp_path, name, mime, caption=folder_tag)
+                    except Exception as exc:
+                        slog_q.warning(
+                            "upload send_document failed (resumed)",
+                            job_id=self._last_backend_by_job.get("", "?"),
+                            error=str(exc)[:200],
+                        )
+                        raise
+                    message_ids.append(int(result["message_id"]))
+                    await self.files.add_part(file_id, 0, int(result["message_id"]), int(result["size"]))
+                    sent += int(result["size"])
+                    if sent >= size:
+                        break
+        finally:
+            if from_offset and message_ids:
+                try:
+                    from ..core.models import UploadSessionRepo
+
+                    await UploadSessionRepo(self.db).advance(file_id, size)
+                except Exception:
+                    pass
+        slog_q.info(
+            "upload resumed complete",
+            job_id=self._last_backend_by_job.get("", "?"),
+            file_id=file_id,
+            bytes_sent=sent,
+            size=size,
+        )
 
     # ── download handler (bot delivery) ───────────────────────
     async def _handle_download(self, payload: Dict[str, Any]) -> None:
