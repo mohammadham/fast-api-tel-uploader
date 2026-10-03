@@ -157,6 +157,26 @@ async def test_permanent_error_disables_account(client, token):
         await state.manager.acquire("acc", timeout=1.0)
 
 
+async def test_login_rate_limit_blocks_brute_force(client):
+    """Panel login: 10 wrong attempts/min/IP → 429 with Retry-After; even the
+    correct password is refused while the IP bucket is empty (no brute force)."""
+    from app.core.rate_limit import limiter
+
+    limiter._buckets.clear()  # other tests in this module may have warmed login:<ip>
+
+    for _ in range(10):
+        r = await client.post("/api/v1/auth/login", json={"username": "admin", "password": "nope"})
+        assert r.status_code == 401, r.status_code
+
+    r = await client.post("/api/v1/auth/login", json={"username": "admin", "password": "nope"})
+    assert r.status_code == 429, r.status_code
+    assert r.headers.get("retry-after"), "429 must carry Retry-After"
+
+    # lockout semantics: the right password from the same IP is throttled too
+    r = await client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"})
+    assert r.status_code == 429, r.status_code
+
+
 async def test_rate_limiter_gc_removes_idle_buckets(client):
     from app.core.rate_limit import limiter
 
