@@ -1,2 +1,0 @@
-{"ts": 1790575438.347, "level": "INFO", "logger": "tgdrive.queue", "msg": "queue recovered 0 pending jobs (SQLite primary)"}
-{"ts": 1790575438.349, "level": "INFO", "logger": "tgdrive.queue", "msg": "queue started (node=DESKTOP-4BTGFDE) with 6 workers"}

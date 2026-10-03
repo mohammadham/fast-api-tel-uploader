@@ -36,3 +36,6 @@ data-e2e/
 data-live/
 data-livepanel/
 data-e2e/
+# freebuff agent runtime logs (never commit)
+.freebuff/*.log
+.freebuff/*.err
