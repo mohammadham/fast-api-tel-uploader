@@ -85,6 +85,37 @@ async def test_share_link_max_downloads(client, api_key):
     assert "سقف دانلود" in r.text
 
 
+async def test_thumb_served_with_file_mime(client, api_key):
+    """An image upload gets a thumbnail message; /{slug}/thumb must serve it with
+    the FILE's mime (it streams the stored document bytes), not a hardcoded type."""
+    import struct
+    import zlib
+
+    def _chunk(tag, data):
+        c = struct.pack(">I", len(data)) + tag + data
+        return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    png = (b"\x89PNG\r\n\x1a\n"
+           + _chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
+           + _chunk(b"IDAT", zlib.compress(b"\x00" + b"\x80\x40\x20" * 4))
+           + _chunk(b"IEND", b""))
+    fid = await _upload_and_wait(client, api_key, png, "pic.png", "image/png")
+    H = {"Authorization": f"Bearer {api_key}"}
+
+    info = (await client.get(f"/api/v1/files/{fid}", headers=H)).json()
+    assert info["thumb_message_id"], "image upload must create a thumbnail message"
+
+    r = await client.post(f"/api/v1/files/{fid}/share", headers=H, json={"slug": "pic-thumb"})
+    assert r.status_code == 200
+    page = await client.get("/pic-thumb")
+    assert "/pic-thumb/thumb" in page.text  # page links the thumb
+
+    r = await client.get("/pic-thumb/thumb")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "image/png"  # NOT hardcoded image/jpeg
+    assert r.content == png  # the thumb message holds the exact bytes
+
+
 async def test_invalid_slug_rejected(client, api_key):
     fid = await _upload_and_wait(client, api_key, b"x")
     H = {"Authorization": f"Bearer {api_key}"}

@@ -836,7 +836,7 @@ async def slug_thumb(slug: str, request: Request, db=Depends(get_db)):
 
     from fastapi.responses import StreamingResponse
 
-    return StreamingResponse(gen(), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+    return StreamingResponse(gen(), media_type=(rec.get("mime") or "image/jpeg"), headers={"Cache-Control": "public, max-age=86400"})
 
 
 @public.get("/{slug}/qr")
