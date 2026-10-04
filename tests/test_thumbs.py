@@ -192,6 +192,46 @@ async def test_uploaded_image_thumbnail_is_not_a_second_copy(client, api_key):
         assert max(im.size) <= 320
 
 
+async def test_runtime_settings_drive_the_thumbnail_size(client, api_key, token):
+    """PUT /admin/settings must actually change what newly uploaded media gets."""
+    from PIL import Image
+    from io import BytesIO
+
+    src = make_png(1400, 1000)
+    H = {"Authorization": f"Bearer {api_key}"}
+    AUTH = {"Authorization": "Bearer " + token}
+    before = (await client.get("/api/v1/admin/settings", headers=AUTH)).json()["items"]
+    prev = {i["key"]: i["current"] for i in before}
+    assert {"thumb_max_px", "thumb_quality"} <= prev.keys(), "both settings must be exposed"
+    try:
+        r = await client.put("/api/v1/admin/settings", headers=AUTH,
+                             json={"thumb_max_px": 128, "thumb_quality": 95})
+        assert r.status_code == 200, r.text
+        assert "thumb_max_px" in r.json()["applied"], r.text
+
+        info = await _upload_and_wait(client, api_key, src, "sized.png", "image/png")
+        slug = (await client.post(f"/api/v1/files/{info['id']}/share", headers=H,
+                                  json={"slug": "thumb-sized"})).json()["slug"]
+        r = await client.get(f"/{slug}/thumb")
+        assert r.status_code == 200, r.text
+        with Image.open(BytesIO(r.content)) as im:
+            assert max(im.size) <= 128, f"runtime thumb_max_px ignored: {im.size}"
+    finally:
+        restore = {k: prev[k] for k in ("thumb_max_px", "thumb_quality")
+                   if prev[k] not in ("", None)}
+        if restore:
+            await client.put("/api/v1/admin/settings", headers=AUTH, json=restore)
+
+
+async def test_thumbnail_settings_are_validated(client, token):
+    """Out-of-range values must be rejected instead of silently accepted."""
+    AUTH = {"Authorization": "Bearer " + token}
+    for bad in ({"thumb_max_px": 32}, {"thumb_max_px": 4000}, {"thumb_quality": 5}, {"thumb_quality": 100}):
+        r = await client.put("/api/v1/admin/settings", headers=AUTH, json=bad)
+        assert r.status_code == 400, f"{bad} should be rejected, got {r.status_code}: {r.text}"
+        assert "64" in r.text or "1280" in r.text or "40" in r.text or "95" in r.text, r.text
+
+
 async def test_uploaded_video_thumbnail_is_one_frame(client, api_key):
     tmpdir = tempfile.mkdtemp(prefix="tgdrive-thumb-")
     tmp = os.path.join(tmpdir, "clip.mp4")

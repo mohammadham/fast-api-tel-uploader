@@ -1944,6 +1944,8 @@ const doLogin = submitLogin;
         if (Number(value) < 0) return "باید ≥ 0 باشد";
         const mustBePositive = ["max_upload_size", "split_threshold", "default_key_rpm", "presigned_ttl", "upload_session_ttl_minutes", "download_workers", "upload_workers", "max_concurrent_downloads", "max_concurrent_uploads"];
         if (mustBePositive.includes(it.key) && Number(value) < 1) return "باید ≥ 1 باشد";
+        if (it.key === "thumb_max_px") { const n = Number(value); if (!(n >= 64 && n <= 1280)) return "بین ۶۴ تا ۱۲۸۰ پیکسل"; }
+        if (it.key === "thumb_quality") { const n = Number(value); if (!(n >= 40 && n <= 95)) return "بین ۴۰ تا ۹۵"; }
       } else if (it.key === "default_backend") {
         if (!["telegram", "eitaa"].includes(value)) return "تلگرام یا ایتا";
       } else if (it.key === "proxy_strategy") {
@@ -1979,6 +1981,8 @@ const doLogin = submitLogin;
       default_key_rpm: "RPM پیش‌فرض کلیدها",
       default_key_daily_quota: "سهمیه روزانه پیش‌فرض (بایت)",
       blocked_extensions: "پسوندهای مسدود",
+      thumb_max_px: "اندازه تامب‌نیل (پیکسل بلندترین ضلع)",
+      thumb_quality: "کیفیت JPEG تامب‌نیل",
       presigned_ttl: "TTL لینک امضاشده (ثانیه)",
       upload_session_ttl_minutes: "TTL سشن آپلود (دقیقه)",
       job_max_retries: "حداکثر تلاش مجدد جاب",

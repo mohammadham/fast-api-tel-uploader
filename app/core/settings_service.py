@@ -39,6 +39,18 @@ def _int_flag(v: int) -> str:
     return "" if v in (0, 1) else "must be 0 or 1"
 
 
+def _thumb_px_ok(v: int) -> str:
+    """Long side of a generated thumbnail: too small is useless, huge is a
+    storage cost again (the whole point is to keep thumbs tiny)."""
+    return "" if 64 <= v <= 1280 else "must be between 64 and 1280 pixels"
+
+
+def _thumb_quality_ok(v: int) -> str:
+    """Below ~40 JPEG artefacts get obvious, above ~95 the bytes grow for
+    nothing (a 320px thumb is invisible at q95)."""
+    return "" if 40 <= v <= 95 else "must be between 40 and 95"
+
+
 def _proxy_monitor_interval(v: int) -> str:
     return "" if v in (0, *range(2, 24 * 60)) else "0 = off, or 2..1440 minutes"
 
@@ -67,6 +79,9 @@ EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     "default_key_rpm": (int, _positive_int, "default RPM for new API keys"),
     "default_key_daily_quota": (int, _non_negative_int, "default daily quota (bytes)"),
     "blocked_extensions": (str, _str_ok, "blocked extensions (comma separated)"),
+    # thumbnails generated for image/video uploads
+    "thumb_max_px": (int, _thumb_px_ok, "thumbnail long side in pixels (64-1280)"),
+    "thumb_quality": (int, _thumb_quality_ok, "thumbnail JPEG quality (40-95)"),
     # links & expiry
     "presigned_ttl": (int, _positive_int, "presigned link TTL (seconds)"),
     "upload_session_ttl_minutes": (int, _positive_int, "upload session TTL (minutes)"),
@@ -106,6 +121,8 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "default_key_rpm",
         "default_key_daily_quota",
         "blocked_extensions",
+        "thumb_max_px",
+        "thumb_quality",
     ],
     "links": ["presigned_ttl", "upload_session_ttl_minutes", "job_max_retries"],
     "queue": [

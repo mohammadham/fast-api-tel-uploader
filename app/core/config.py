@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     default_key_rpm: int = 120            # requests per minute per API key
     default_key_daily_quota: int = 100 * 1024 * 1024 * 1024  # 100GB/day
     blocked_extensions: str = ".exe,.bat,.cmd,.msi,.scr,.com"
+    # thumbnails generated for media uploads (see app/services/thumbs.py)
+    thumb_max_px: int = 320          # long side of the generated thumbnail
+    thumb_quality: int = 80          # JPEG quality of the generated thumbnail
 
     # ── web ──
     log_level: str = "INFO"  # DEBUG | INFO | WARNING | ERROR (JSON logs)

@@ -855,10 +855,20 @@ class QueueManager:
             return  # telegram-only feature
         from ..services.thumbs import THUMB_MAX_PX, THUMB_QUALITY, build_thumbnail
 
+        # thumbnail geometry is operator-configurable (settings tab); runtime
+        # value wins, then the env/default from config, then the module constant
+        s = get_settings()
+        try:
+            max_px = int(await get_runtime(self.db, "thumb_max_px") or s.thumb_max_px or THUMB_MAX_PX)
+        except Exception:
+            max_px = int(s.thumb_max_px or THUMB_MAX_PX)
+        try:
+            quality = int(await get_runtime(self.db, "thumb_quality") or s.thumb_quality or THUMB_QUALITY)
+        except Exception:
+            quality = int(s.thumb_quality or THUMB_QUALITY)
         try:
             thumb = await asyncio.to_thread(
-                build_thumbnail, tmp_path, mime, int(rec.get("size") or 0),
-                max_px=THUMB_MAX_PX, quality=THUMB_QUALITY,
+                build_thumbnail, tmp_path, mime, int(rec.get("size") or 0), max_px=max_px, quality=quality
             )
         except Exception as exc:
             slog_q.warning("thumbnail build failed", file_id=rec["id"], error=str(exc)[:120])
