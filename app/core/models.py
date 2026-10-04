@@ -747,8 +747,10 @@ class FileRepo:
     async def trashed(self, older_than: float) -> List[Dict[str, Any]]:
         return await self.db.fetch_all("SELECT id, name FROM files WHERE deleted_at IS NOT NULL AND deleted_at < ?", (older_than,))
 
-    async def set_thumb(self, file_id: str, message_id: int) -> None:
-        await self.db.execute("UPDATE files SET thumb_message_id=? WHERE id=?", (message_id, file_id))
+    async def set_thumb(self, file_id: str, message_id: int, mime: str = "") -> None:
+        await self.db.execute(
+            "UPDATE files SET thumb_message_id=?, thumb_mime=? WHERE id=?", (message_id, mime, file_id)
+        )
 
     async def set_folder(self, file_id: str, folder_id: Optional[int]) -> None:
         await self.db.execute("UPDATE files SET folder_id=? WHERE id=?", (folder_id, file_id))

@@ -297,6 +297,7 @@ CREATE TABLE IF NOT EXISTS files (
   error TEXT NOT NULL DEFAULT '',
   deleted_at DOUBLE PRECISION,
   thumb_message_id INTEGER,
+  thumb_mime TEXT NOT NULL DEFAULT '',
   backend TEXT NOT NULL DEFAULT '',
   folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL,
   blocked INTEGER NOT NULL DEFAULT 0
@@ -463,6 +464,7 @@ class Database:
             "ALTER TABLE jobs ADD COLUMN origin_node TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE files ADD COLUMN deleted_at REAL",
             "ALTER TABLE files ADD COLUMN thumb_message_id INTEGER",
+            "ALTER TABLE files ADD COLUMN thumb_mime TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE files ADD COLUMN backend TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE api_keys ADD COLUMN backend TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE api_keys ADD COLUMN storage_chat TEXT NOT NULL DEFAULT ''",

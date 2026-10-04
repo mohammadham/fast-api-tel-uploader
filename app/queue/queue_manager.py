@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import socket
+import tempfile
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -51,7 +52,6 @@ slog_q = slog("tgdrive.queue")
 
 RETRY_BASE_DELAY = 2.0
 RETRY_MAX_DELAY = 60.0
-
 
 class QueueManager:
     def __init__(self, db: Database, manager: TGManager, bot_service=None, node_id: str = "") -> None:
@@ -821,27 +821,53 @@ class QueueManager:
                 slog_q.warning("webhook delivery failed", file_id=file_id, webhook=webhook[:120])
 
     async def _maybe_store_thumb(self, rec: Dict[str, Any], tmp_path: str) -> None:
-        """Best-effort: if telegram derives a thumbnail for this media type, keep it
-        as a separate one-message doc so the public page can show it."""
-        import struct
+        """Best-effort: build a REAL thumbnail for this media type and keep it as a
+        separate one-message doc so the public page can show it.
 
+        The source file is never re-uploaded: images are scaled with Pillow and
+        videos are sampled to a single frame with ffmpeg (see app/services/thumbs.py),
+        which is what makes thumbnails cheap instead of doubling storage. Types we
+        cannot decode (PDF) simply get no thumbnail — still cheaper than a copy.
+        """
         mime = (rec.get("mime") or "").lower()
-        if not (mime.startswith("image/") or mime.startswith("video/") or mime == "application/pdf"):
-            return
         if rec.get("backend") == "eitaa":
             return  # telegram-only feature
+        from ..services.thumbs import THUMB_MAX_PX, THUMB_QUALITY, build_thumbnail
+
         try:
-            # only bother for files telegram actually thumbnails (jpeg/png/webp source)
-            if mime.startswith("image/") and not mime.startswith(("image/jpeg", "image/png", "image/webp")):
-                return
+            thumb = await asyncio.to_thread(
+                build_thumbnail, tmp_path, mime, int(rec.get("size") or 0),
+                max_px=THUMB_MAX_PX, quality=THUMB_QUALITY,
+            )
+        except Exception as exc:
+            slog_q.warning("thumbnail build failed", file_id=rec["id"], error=str(exc)[:120])
+            return
+        if thumb is None:
+            return  # unsupported/undecodable → store nothing
+        fd, thumb_path = tempfile.mkstemp(suffix=thumb.ext)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(thumb.data)
             borrowed = await self.manager.acquire("acc")
             async with borrowed as backend:
                 storage_chat = getattr(backend, "storage_chat", "me")
-                name = f"thumb_{rec['id']}"
-                result = await backend.send_document(storage_chat, tmp_path, name, mime)
-                await self.files.set_thumb(rec["id"], int(result["message_id"]))
+                name = f"thumb_{rec['id']}{thumb.ext}"
+                result = await backend.send_document(storage_chat, thumb_path, name, thumb.mime)
+                await self.files.set_thumb(rec["id"], int(result["message_id"]), thumb.mime)
+            slog_q.info(
+                "thumbnail stored",
+                file_id=rec["id"],
+                thumb_bytes=thumb.size,
+                source_bytes=int(rec.get("size") or 0),
+                dims=f"{thumb.width}x{thumb.height}",
+            )
         except Exception as exc:
             slog_q.warning("thumbnail store skipped", file_id=rec["id"], error=str(exc)[:120])
+        finally:
+            try:
+                os.remove(thumb_path)
+            except OSError:
+                pass
 
     @staticmethod
     async def _split_file(tmp_path: str, part_size: int) -> List[str]:
