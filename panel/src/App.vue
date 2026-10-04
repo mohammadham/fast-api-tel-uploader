@@ -78,6 +78,29 @@
           </p>
         </div>
         <p class="muted" v-else style="font-size:13px">هیچ پراکسی‌ای ثبت نشده است.</p>
+        <h3 style="font-size:16px">سلامت سیستم (هلت-چک)</h3>
+        <div class="card wide" v-if="healthRep">
+          <div class="cards" style="margin:0">
+            <div class="stat"><div class="lbl">سرور</div><div class="num" :style="{color: healthRep.server.ok ? 'var(--ok,#22C55E)' : 'var(--err,#EF4444)'}">{{ healthRep.server.ok ? "سالم" : "مشکل" }}</div></div>
+            <div class="stat"><div class="lbl">آپ‌تایم</div><div class="num">{{ fmtUptime(healthRep.server.uptime_s) }}</div></div>
+            <div class="stat"><div class="lbl">حالت تلگرام</div><div class="num">{{ healthRep.server.fake_tg ? "شبیه‌سازی (fake)" : "واقعی" }}</div></div>
+            <div class="stat"><div class="lbl">جاب‌های شکست‌خورده</div><div class="num" :style="{color: healthRep.server.queue.failed ? 'var(--err,#EF4444)' : 'var(--ok,#22C55E)'}">{{ healthRep.server.queue.failed }}</div></div>
+            <div class="stat"><div class="lbl">سشن اکانت‌ها</div><div class="num" :style="{color: hRepSessionsOk ? 'var(--ok,#22C55E)' : 'var(--warn,#F59E0B)'}">{{ healthRep.sessions.accounts_ok }} / {{ healthRep.sessions.accounts.length }}</div></div>
+            <div class="stat"><div class="lbl">رمزگشایی سشن‌ها</div><div class="num" :style="{color: healthRep.sessions.all_ok ? 'var(--ok,#22C55E)' : 'var(--err,#EF4444)'}">{{ healthRep.sessions.all_ok ? "OK" : "شکسته" }}</div></div>
+            <div class="stat"><div class="lbl">ربات‌های سالم</div><div class="num">{{ healthRep.sessions.bots_ok }} / {{ healthRep.sessions.bots.length }}</div></div>
+            <div class="stat"><div class="lbl">یکپارچگی DB</div><div class="num" :style="{color: healthRep.database.integrity === 'ok' ? 'var(--ok,#22C55E)' : 'var(--warn,#F59E0B)'}">{{ healthRep.database.integrity }}</div></div>
+            <div class="stat"><div class="lbl">حجم دیتابیس</div><div class="num">{{ fmtBytes(healthRep.database.size_bytes) }}</div></div>
+          </div>
+          <p class="muted" style="font-size:12px;margin:10px 0 0" dir="ltr">{{ healthRep.database.engine }}{{ healthRep.database.path ? " · " + healthRep.database.path : "" }} · workers dl={{ healthRep.server.workers.download }}/ul={{ healthRep.server.workers.upload }} · storage {{ healthRep.server.storage_chat || "—" }}</p>
+          <div v-if="brokenSessions.length" class="err" style="font-size:12px;margin-top:8px">
+            <div v-for="b in brokenSessions" :key="b.key">⚠ {{ b.key }}: {{ b.reason }}</div>
+          </div>
+          <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+            <button @click="loaders.health()">بروزرسانی</button>
+            <span class="muted" style="font-size:12px">آخرین بررسی: {{ fmtTime(healthRep.ts) }}</span>
+          </div>
+        </div>
+        <p class="muted" v-else style="font-size:13px">گزارش سلامت در حال بارگیری…</p>
         <h3 style="font-size:16px">وضعیت اکانت‌ها</h3>
         <div class="health-grid">
           <div v-for="a in health" :key="a.id" class="health-item" :class="{bad: a.status !== 'ready'}">
@@ -1526,7 +1549,36 @@ const doLogin = submitLogin;
         overview.value = ov;
         health.value = accs.items || [];
       } catch (e) { showToast("خطا: " + e.message, 4000, true); }
+      loaders.health(); // fire-and-forget: the integrity check must not block the dash
     };
+    /* ---------- health report (سلامت سیستم card + scripts/healthcheck.py) ---------- */
+    const healthRep = ref(null);
+    loaders.health = async () => {
+      try { healthRep.value = await api("/api/v1/admin/health-report"); }
+      catch (e) { showToast("هلت-چک: " + e.message, 4000, true); }
+    };
+    const hRepSessionsOk = computed(() => {
+      const r = healthRep.value;
+      return !!r && r.sessions.accounts_ok === r.sessions.accounts.length && r.sessions.accounts.length > 0;
+    });
+    const brokenSessions = computed(() => {
+      const r = healthRep.value;
+      if (!r) return [];
+      const out = [];
+      for (const a of r.sessions.accounts) {
+        if (!a.session_ok) out.push({ key: "acc:" + a.id, reason: "سشن رمزگشایی نمی‌شود (TGDRIVE_SECRET عوض شده؟)" });
+        else if (a.enabled && a.status !== "ready") out.push({ key: "acc:" + a.id, reason: "وضعیت " + a.status + (a.last_error ? " — " + a.last_error : "") });
+      }
+      for (const b of r.sessions.bots) {
+        if (!b.token_ok) out.push({ key: "bot:" + b.id, reason: "توکن رمزگشایی نمی‌شود" });
+        else if (b.enabled && b.status !== "ready") out.push({ key: "bot:" + b.id, reason: "وضعیت " + b.status + (b.last_error ? " — " + b.last_error : "") });
+      }
+      return out;
+    });
+    function fmtUptime(sec) {
+      const s = Math.max(0, Math.round(sec || 0)), m = Math.floor(s / 60), h = Math.floor(m / 60);
+      return h ? `${h}س ${m % 60}د ${s % 60}ث` : (m ? `${m}د ${s % 60}ث` : `${s}ث`);
+    }
     const proxyLastFallback = computed(() => {
       const lf = overview.value?.proxies?.last_fallback;
       if (!lf) return "رخ نداده";
@@ -2305,7 +2357,7 @@ const doLogin = submitLogin;
             const jr = await r.json();
             const freed = Number(jr.bytes_freed ?? jr.part_bytes?.length ?? 0) || 0;
             if (Number.isFinite(freed)) totalFreedBytes += freed;
-            showToast(`فایل موقت حذف شد: ${freed > 0 ? fmtBytes(freed) : "هیچ»}`);
+            showToast(`فایل موقت حذف شد: ${freed > 0 ? fmtBytes(freed) : "هیچ"}`);
           })
           .catch(() => {});
       }

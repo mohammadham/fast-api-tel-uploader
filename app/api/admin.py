@@ -23,6 +23,16 @@ from .deps import get_current_admin
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 
+@router.get("/health-report")
+async def health_report(_: str = Depends(get_current_admin), db=Depends(get_db)):
+    """One-shot health check: server (uptime/mode/queue) + session decrypt
+    status for every account/bot + database counts/integrity. Rendered by the
+    dashboard's سلامت سیستم card; same builder powers scripts/healthcheck.py."""
+    from ..services.health_report import build_health_report
+
+    return await build_health_report(db)
+
+
 @router.get("/overview")
 async def overview(_: str = Depends(get_current_admin), db=Depends(get_db)):
     files_total = await db.scalar("SELECT COUNT(*) FROM files") or 0
