@@ -53,6 +53,19 @@ slog_q = slog("tgdrive.queue")
 RETRY_BASE_DELAY = 2.0
 RETRY_MAX_DELAY = 60.0
 
+#: read size for the content digest (1 MiB keeps memory flat on huge files)
+SHA256_CHUNK = 1024 * 1024
+
+
+def sha256_file(path: str, chunk: int = SHA256_CHUNK) -> str:
+    """Hex sha256 of a file, read in chunks so a multi-GB upload never lands in RAM."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while blk := fh.read(chunk):
+            h.update(blk)
+    return h.hexdigest()
+
+
 class QueueManager:
     def __init__(self, db: Database, manager: TGManager, bot_service=None, node_id: str = "") -> None:
         self.db = db
@@ -797,6 +810,14 @@ class QueueManager:
             gate.release()
 
         await self.files.set_stored(file_id, storage_chat, message_ids, len(message_ids))
+        # Content digest of the WHOLE source file. tmp_path is still intact here and
+        # always holds every byte (a resumed upload only affects what was *sent*), so
+        # one sequential read is enough — no per-part or per-chunk state to merge.
+        try:
+            digest = await asyncio.to_thread(sha256_file, tmp_path)
+            await self.files.set_sha256(file_id, digest)
+        except Exception as exc:  # never fail a stored upload over a digest
+            slog_q.warning("sha256 not stored", file_id=file_id, error=str(exc)[:120])
         try:
             os.remove(tmp_path)
         except OSError:

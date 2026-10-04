@@ -752,6 +752,9 @@ class FileRepo:
             "UPDATE files SET thumb_message_id=?, thumb_mime=? WHERE id=?", (message_id, mime, file_id)
         )
 
+    async def set_sha256(self, file_id: str, digest: str) -> None:
+        await self.db.execute("UPDATE files SET sha256=? WHERE id=?", (digest, file_id))
+
     async def set_folder(self, file_id: str, folder_id: Optional[int]) -> None:
         await self.db.execute("UPDATE files SET folder_id=? WHERE id=?", (folder_id, file_id))
 
