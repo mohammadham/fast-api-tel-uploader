@@ -1,12 +1,15 @@
 # Railway config for TelegramDrive
-# Docs: https://docs.railway.app/reference/config-as-code
+# Docs: https://docs.railway.com/config-as-code/reference
+# Keys are validated against https://railway.com/railway.schema.json —
+# only $schema/build/deploy/environments exist at top level, and the build
+# key for a non-standard Dockerfile is `dockerfilePath` (NOT `dockerfile`,
+# which Railway silently ignores; with 6 Dockerfiles at the repo root it
+# then fails the deploy at the source stage because it can't pick one).
 [build]
-  # Quoted on purpose: TOML string *values* must be quoted. The unquoted form
-  # that was here before is invalid TOML, so Railway rejected the whole file.
-  dockerfile = "Dockerfile.railway"
+  builder = "DOCKERFILE"
+  dockerfilePath = "Dockerfile.railway"
 
 [deploy]
-  strategy = "continuous"
   # Railway injects PORT; the image's CMD expands it via `sh -c`.
   # Health check mirrors the container HEALTHCHECK in Dockerfile.railway.
   healthcheckPath = "/api/v1/admin/readyz"
@@ -34,5 +37,9 @@
 #
 # The data directory is an ephemeral Railway volume: attach one to
 # TGDRIVE_DATA_DIR, or point at Postgres, or the SQLite DB is lost on redeploy.
-[env]
-  TGDRIVE_DATA_DIR = "/app/data"
+#
+# TGDRIVE_DATA_DIR has no [env] section here on purpose: there is no env key in
+# the config-as-code schema (top level is only $schema/build/deploy/environments),
+# so the old [env] block was silently ignored. The Dockerfile already sets
+# ENV TGDRIVE_DATA_DIR=/app/data; override it from the dashboard if you mount
+# a volume somewhere else.
