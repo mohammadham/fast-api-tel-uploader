@@ -1,10 +1,25 @@
+# Build context: only app/, static/, scripts/ and requirements.txt are needed.
+# Everything below used to be shipped to the daemon on every build.
 __pycache__
 *.py[cod]
 .venv
 venv
 .env
+.env.bak.*
 data
+data-*
+graphify-out
 .git
 .pytest_cache
+.pytest_cache/
 tests
+e2e
+panel
+node_modules
+.freebuff
 *.md
+*.log
+*.err
+*.db
+*.db-shm
+*.db-wal

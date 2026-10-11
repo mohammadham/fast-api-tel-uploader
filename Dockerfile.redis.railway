@@ -5,12 +5,11 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PORT=8000
 
-# --- Redis optional dependency ---
-# Install redis-py always; the app checks TGDRIVE_REDIS_ENABLED at startup
+# redis-py is already pinned in requirements.txt, so there is nothing extra to
+# install here - the app only talks to Redis when TGDRIVE_REDIS_ENABLED=1.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc libffi-dev && \
-    rm -rf /var/lib/apt/lists/* && \
-    pip install redis
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -21,31 +20,25 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY app ./app
 COPY static ./static
+COPY scripts ./scripts
 
-# Copy .env (Railway will inject vars, but we need a base)
-COPY .env.example .env
-
-# Create data directory and non-root user
-RUN mkdir -p /app/data && \
-    useradd -m -u 1000 appuser && \
-    chown -R appuser /app/data && \
-    chown -R appuser /app/logs
+# Create data directory and non-root user (/app/logs never existed - chowning it
+# here made every build of this image fail)
+RUN useradd -m -u 1000 appuser && \
+    mkdir -p /app/data && \
+    chown -R appuser:appuser /app/data
 
 USER appuser
 
-# Environment defaults (overridden by Railway vars)
-# TGDRIVE_REDIS_ENABLED=1 at runtime enables Redis backend
-ENV TGDRIVE_DATA_DIR=/app/data \
-    TGDRIVE_FAKE_TG=1 \
-    TGDRIVE_SECRET=dev-secret-change-me-please-32-chars!
+# TGDRIVE_REDIS_ENABLED=1 at runtime enables the Redis-backed queue.
+# Secret and fake-TG mode are intentionally left to the platform's env vars.
+ENV TGDRIVE_DATA_DIR=/app/data
 
-# Expose port (Railway will set PORT env var)
 EXPOSE 8000
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
-  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/admin/healthz').status==200 else 1)"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/admin/readyz').status==200 else 1)"
 
-# Start command - Railway sets PORT env var
-# If TGDRIVE_REDIS_ENABLED=1, the app will connect to Redis for queue scaling
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "${PORT:-8000}", "--workers", "1"]
+# sh -c is required: the previous exec-form CMD passed the literal string
+# "${PORT:-8000}" to uvicorn, so the container never started on Railway.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port \"${PORT:-8000}\" --workers 1"]

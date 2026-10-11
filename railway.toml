@@ -1,17 +1,38 @@
-[express]
-  port = 8000
-
+# Railway config for TelegramDrive
+# Docs: https://docs.railway.app/reference/config-as-code
 [build]
-  dockerfile = Dockerfile.railway
+  # Quoted on purpose: TOML string *values* must be quoted. The unquoted form
+  # that was here before is invalid TOML, so Railway rejected the whole file.
+  dockerfile = "Dockerfile.railway"
 
 [deploy]
   strategy = "continuous"
+  # Railway injects PORT; the image's CMD expands it via `sh -c`.
+  # Health check mirrors the container HEALTHCHECK in Dockerfile.railway.
+  healthcheckPath = "/api/v1/admin/readyz"
+  healthcheckTimeout = 30
+  restartPolicyType = "ON_FAILURE"
+  restartPolicyMaxRetries = 3
+  # Single replica on purpose: the priority queue is in-process and SQLite-backed.
+  # Scaling out needs the queue moved to Redis/Postgres first.
+  numReplicas = 1
 
+# NOTE: no secrets here on purpose.
+# Set these in the Railway dashboard (or `railway variables`), never in git:
+#   TGDRIVE_SECRET            random 32+ chars - signs JWTs, presigned links,
+#                             and derives the Fernet key for stored sessions
+#   TGDRIVE_FERNET_KEY        optional, explicit instead of derived
+#   TGDRIVE_ADMIN_USERNAME    default admin
+#   TGDRIVE_ADMIN_PASSWORD    leave empty -> generated on first start and stored
+#                             in $TGDRIVE_DATA_DIR/initial_admin_password.txt
+#   TGDRIVE_FAKE_TG=0         must be explicit; the image no longer defaults it,
+#                             because an unset value silently runs the fake
+#                             Telegram backend instead of failing
+#   TGDRIVE_DATABASE_URL      postgres://... - optional, falls back to SQLite
+#   TGDRIVE_API_ID / _API_HASH  needed for real Telegram uploads
+#   TGDRIVE_REDIS_URL / TGDRIVE_REDIS_ENABLED=true  optional queue scaling
+#
+# The data directory is an ephemeral Railway volume: attach one to
+# TGDRIVE_DATA_DIR, or point at Postgres, or the SQLite DB is lost on redeploy.
 [env]
-  # Railway will inject these automatically, but we set defaults:
-  TGDRIVE_FAKE_TG = "1"
   TGDRIVE_DATA_DIR = "/app/data"
-  TGDRIVE_SECRET = "dev-secret-change-me-please-32-chars!"
-
-[[plugins]]
-  # Optional: add any Railway plugins here

@@ -212,3 +212,211 @@ powershell -NoProfile -Command '$env:TGDRIVE_FAKE_TG="1"; $env:TGDRIVE_DATA_DIR=
   under «آپلودها (N) فعال… / M، فضا آزاد شده: …».
 - `cancelUploadJob` robust read: `.then(async (r) => { const jr = await r.json(); const freed = Number(jr.bytes_freed ?? jr.part_bytes?.length ?? 0) || 0; ... })`; alias `bytesToString = fmtBytes`.
 - Tests `tests/test_upload_cancel.py` green (full suite EXIT:0).
+
+
+## Health report (round 19) — server + sessions + database in one place
+- **Shared module** `app/services/health_report.py::build_health_report(db, with_integrity=True)` is the single
+  source of truth for "healthy". Returns `{ts, server, sessions, database}`:
+  - `server`: `in_app` (True when read inside the live app), uptime from `metrics._start`, EFFECTIVE `fake_tg`,
+    workers, storage chat, queue `{pending,running,retry,failed,done}` from `state.queue.stats()`.
+  - `sessions`: every `tg_accounts` + `bot_tokens` row with a **cheap decrypt check** of the stored
+    `session_enc`/`token_enc` (`decrypt_str` under the CURRENT `TGDRIVE_SECRET`) — proves rows are usable
+    without touching Telegram. `accounts_ok`/`bots_ok` count enabled+ready+decryptable; `all_ok` = every decrypt ok.
+  - `database`: engine, sqlite path + file size, `PRAGMA quick_check` integrity, file/folder/key/channel counts,
+    trashed files, failed jobs.
+  - Overlay: `fake_tg`, worker counts and `tg_storage_chat` are read from the `settings` TABLE (same precedence as
+    `TGManager._settings` — runtime beats env), so a standalone run reports the mode the server would really pick.
+- **Endpoint** `GET /api/v1/admin/health-report` (admin JWT) in `app/api/admin.py` — opens the app's own
+  `Database`, so it reflects live queue/uptime. Tests: `tests/test_health_report.py` (shape + 401 unauth) → **180 pytest**.
+- **Standalone script** `scripts/healthcheck.py`: layers it so it still works when the API is down —
+  (1) pings `/healthz` + `/readyz`, (2) logs in (password auto-read from `<data-dir>/initial_admin_password.txt`)
+  and pulls the API report, (3) ALWAYS opens the DB locally through the same `build_health_report`. Prefers the
+  API report for live numbers, falls back to local with a note. Flags: `--base --data-dir --username --password
+  --no-server --json --no-integrity`. Exit 0 = ALL GREEN, 1 = problems (cron/CI friendly).
+  - **Gotcha:** `PRAGMA quick_check` returns a column-keyed dict, NOT an indexable tuple → read `list(row.values())[0]`.
+  - **Gotcha:** `Database.close()`, not `disconnect()`; `sys.stdout.reconfigure(encoding="utf-8")` is REQUIRED —
+    Windows consoles are cp1252 and the Persian last_error text raises UnicodeEncodeError without it.
+  - **Gotcha:** a standalone run has no queue/uptime of its own, so `in_app=False` and it prints the mode from the
+    DB instead of pretending to have live numbers.
+- **Panel** (`panel/src/App.vue`): new «سلامت سیستم (هلت-چک)» card on the dashboard, fed by the same endpoint —
+  server status / uptime / telegram mode / failed jobs, sessions (accounts ok, decrypt verdict, healthy bots),
+  DB integrity + size, plus a footnote with `sqlite · path · workers · storage chat`, a «بروزرسانی» button and
+  the last-check timestamp (Jalali via the existing formatter). Loaded with the dashboard, no polling.
+- **Pre-existing bug fixed along the way:** `panel/src/App.vue` line ~2360 had an unterminated string
+  (`"هیچ»"` instead of `"هیچ"`), so `npm run build` FAILED on HEAD — the panel could not be rebuilt at all.
+  Fixed → build works, bundle `index-CI1g_hT1.js`.
+- **Live (8765, data-livepanel):** script prints `RESULT: ALL GREEN` — healthz/readyz OK, uptime 1h58m, FAKE-TG,
+  acc:3 +989150971570 session_decrypt OK, @f_api_BOT token_decrypt OK, integrity ok, 54/60 ready files, 0 failed
+  jobs. Panel card renders the same numbers in the browser.
+
+
+## Real-mode proof run (round 20) — actual Telegram upload+download, then back to fake
+Live-verified on the 8765 server with the user's real account (+989150971570) and real storage channel.
+**The DB overlay wins over env**: flipping only `TGDRIVE_FAKE_TG=0` does NOTHING while the settings table
+still holds `fake_tg=1` (same precedence as `TGManager._settings`). Real mode needs BOTH:
+`UPDATE settings SET value='0' WHERE key='fake_tg'` (or `PUT /api/v1/admin/settings {"fake_tg":0}`)
+**and** the env var. Verify with `GET /admin/health-report` → `server.fake_tg === false`, never with the env.
+- **Result:** upload `POST /api/v1/files/upload` (280,023 B) → queue → **Telethon real upload** →
+  `ready` in ~5s with `storage_chat=-1002546879743` and a REAL `message_id=5581` in the real channel.
+  Server log proves it is not the fake path: `logger=telethon.client.uploads "Uploading file of 280023
+  bytes in 3 chunks"`, then `"upload complete" account=acc:3 duration_ms=1983`; the download side logs
+  `telethon.client.downloads "Starting direct file download in chunks of 524288"`. Presigned GET returned
+  all 280,023 bytes with an **identical sha256**.
+- **Back to fake:** set the settings row back to 1 + restart with `TGDRIVE_FAKE_TG=1`. Proof the flip really
+  took effect: the next identical upload lands with `storage_chat=me` and `message_id=1` (the fake store),
+  not a Telegram message id — a 1-second round trip instead of 5. `scripts/healthcheck.py` → ALL GREEN.
+- **Gotchas hit:** (1) `POST /api/v1/files` is **405** — the multipart route is `POST /api/v1/files/upload`
+  (field name `file`); (2) presigned links are minted with `POST /files/{id}/link` + JSON body (`LinkIn`),
+  not GET; (3) `POST /api/v1/keys` needs `{"name": ...}` (not `label`) and its response has NO `id` and NO
+  `prefix` in the LIST endpoint (`GET /keys` items expose neither) — to revoke you must read
+  `api_keys.key_prefix`/`name` from the DB; two leftover test keys survived exactly this way (11 active
+  instead of 9) and were revoked by id; (4) `file_parts` has no `storage_chat` column (it lives on `files`);
+  (5) `api_keys` columns are `key_hash`/`key_prefix` — there is no `key` column; (6) health-report
+  `files.ready` counts trashed-but-ready rows too (it matches the dashboard overview's «فایل‌های آماده»
+  semantics — `ready` does NOT exclude trash, so ready+trash can overlap).
+- **Powershell gotcha:** `Start-Process ... -RedirectStandardOutput` inside Git Bash makes the powershell
+  call itself hang until timeout while the server starts fine — issue the start in its own short command
+  (no polling loop after it) and poll healthz separately. DB backup taken before the flip:
+  `data-livepanel/db-backup-realmode-*.db` (gitignored).
+
+
+## Real thumbnails instead of a second copy of the file (round 21)
+**Before:** `QueueManager._maybe_store_thumb` uploaded `tmp_path` — the WHOLE file — as a second message, so every
+image/video/PDF doubled its storage cost (a 500 MB video occupied 1 GB).
+**Now:** `app/services/thumbs.py::build_thumbnail(path, mime, size)` builds an actual thumbnail and the source is
+never re-sent:
+- images (jpeg/png/webp/gif/bmp/tiff): Pillow `exif_transpose` + `thumbnail(320px)` + JPEG q80
+- videos: one frame at ~1s via ffmpeg → JPEG ≤320px (`-ss 1` first, retry `-ss 0`; `-2` forces even height)
+- PDFs: **nothing** — no rasterizer, and an `<img>` pointing at PDF bytes never rendered anyway, so PDFs now
+  cost half instead of double
+- images ≤ `SMALL_IMAGE_BYTES` (256 KB) keep their original bytes/mime: re-encoding there only loses quality
+  (this also keeps every pre-existing thumbnail valid)
+- **undecodable/corrupt input → `None` → nothing is stored.** Never fall back to "store the original", that is
+  exactly the duplication we are removing (the test caught this: my first version did fall back).
+**Live numbers on 8765** (log `"thumbnail stored" thumb_bytes=… source_bytes=… dims=…`):
+`photo.png 4,202,343 B → 17,298 B (320x229 JPEG) = 0.41%` · `movie.mp4 14,544,647 B → 5,734 B (320x180) = 0.04%`.
+- **Schema:** new `files.thumb_mime TEXT` (SCHEMA + ALTER migration); `FileRepo.set_thumb(file_id, message_id, mime="")`;
+  `/{slug}/thumb` now serves `thumb_mime or mime or image/jpeg` — the thumb has its OWN type now that it is no
+  longer a byte-copy of the file. Legacy rows have empty `thumb_mime` and still serve the file mime.
+- **Deps:** `Pillow>=10.4` + `imageio-ffmpeg>=0.5` (requirements.txt + pyproject). ffmpeg is resolved
+  `imageio_ffmpeg.get_ffmpeg_exe()` first (bundled static binary → works on CI/Linux), then `shutil.which("ffmpeg")`,
+  else video thumbnails are disabled with one warning (no hard system dependency).
+- `build_thumbnail` is blocking (decode + subprocess) → called as `await asyncio.to_thread(...)` from the queue so
+  the worker loop is never blocked.
+- **Gotcha:** hand-rolled multipart must put ALL headers before the blank line. My first live script emitted
+  `Content-Disposition…
+
+Content-Type:…
+
+`, so 27 header bytes were prepended to the stored file
+  (4,202,370 vs 4,202,343 recorded) and no decoder could read it. Symptom: `image thumbnail failed: cannot identify
+  image file` — check the recorded size against the payload before blaming the thumbnail code.
+- **Tests:** `tests/test_thumbs.py` (8) — scaled+re-encoded image, small image keeps bytes/mime, video frame is a
+  real JPEG ≪ source, PDF/zip → none, undecodable large image → none, missing file → none, plus API tests that
+  upload a 3 MB PNG and a real MP4 and assert the served thumb is a decodable ≤320px JPEG and **< 25 % of the
+  source**. Fixtures must be realistically sized (per-row noise for the PNG, noise filter for the MP4) — a flat
+  PNG compresses to 18 KB and would silently take the "small image" path.
+- Suite: **188 pytest** + **21 e2e** (green twice in a row).
+
+
+## sha256 of every upload (round 22)
+`files.sha256` existed in the SCHEMA since day one but **nothing ever wrote it** — every stored file had an
+empty digest. Now the upload worker records it.
+- `sha256_file(path, chunk=1 MiB)` in `app/queue/queue_manager.py` — chunked read so a multi-GB upload never
+  lands in RAM; `FileRepo.set_sha256(file_id, digest)` writes it.
+- Called in `_handle_upload` right after `set_stored()` and **before** the tmp file is unlinked.
+- **Resume-safe by construction:** the digest is taken from `tmp_path`, which always holds *every* byte
+  (a resumed upload only changes how much was already *sent*), so there is no per-chunk/per-part state to
+  merge and no way to hash only a suffix.
+- Runs as `await asyncio.to_thread(...)` (a multi-GB read must not block the queue loop) and is wrapped in
+  try/except: a digest failure logs `sha256 not stored` and never fails an already-stored upload.
+- **Live (8765):** direct multipart 3,145,728 B → digest identical to `hashlib.sha256`; chunked session
+  (4 × 900 KB, auto-finalized by the last PATCH) → **the same** digest. Both files trashed afterwards.
+- **Gotcha:** there is NO `/upload/session/finalize` endpoint — the session finalizes itself when the
+  accumulated offset reaches the declared size and that PATCH response carries `completed: true` +
+  `file_id`. (I wrote a finalize call first and got a 405.)
+- **Tests:** `tests/test_upload_sha256.py` (5) — chunked reader == hashlib across chunk boundaries (10.24 MB)
+  + empty file; direct upload digest; chunked upload digest over the whole file; a **split** upload
+  (`split_threshold` forced to 64 KB → ≥2 parts) still hashes the single source file; and a monkeypatched
+  hashing failure must leave `status=ready` with an empty digest rather than failing the job.
+  Suite: **193 pytest**, **21 e2e**.
+- **e2e fragility fixed (unrelated to this change):** "drop onto the upload tray…" asserted
+  `expect(.toast).toContainText("فایل با تنظیمات آخرین جاب")`, but the panel shows that confirmation and then
+  «صف شد: <id>» in the **same** toast slot, so the assertion only passed while the box was slow (it failed
+  3/3 once the disk was no longer full). The test now records every toast the page renders (MutationObserver)
+  and asserts the confirmation is among them — strictly stronger and race-free.
+- Existing files keep an empty digest; only new uploads are hashed (backfill would mean re-downloading every
+  file from the storage channel).
+
+
+## Configurable thumbnail size/quality (round 23)
+`thumbs.py` used module constants (320px / q80). Both are now operator-configurable runtime settings and are
+honoured for every NEW upload (existing thumbs keep the geometry they were built with).
+- `app/core/config.py`: `thumb_max_px: int = 320`, `thumb_quality: int = 80` (env/defaults).
+- `app/core/settings_service.py`: `EDITABLE_SETTINGS` entries with range validators
+  (`_thumb_px_ok` 64..1280 — below 64 a thumb is useless, above 1280 the storage saving is gone again;
+  `_thumb_quality_ok` 40..95 — under 40 JPEG artefacts show, over 95 only inflates bytes), plus both keys in the
+  `limits` group so they render in the settings tab.
+- `QueueManager._maybe_store_thumb`: reads `get_runtime(db, "thumb_max_px"/"thumb_quality")` and falls back to
+  config then to the module constants, passing them as `build_thumbnail(..., max_px=, quality=)`. Reads are
+  try/except-wrapped so a bad row can never break an upload.
+- **Panel** (`panel/src/App.vue`): Persian labels («اندازه تامب‌نیل (پیکسل بلندترین ضلع)», «کیفیت JPEG تامب‌نیل») —
+  they render through the existing int/number-input branch, plus client-side range validation
+  («بین ۶۴ تا ۱۲۸۰ پیکسل» / «بین ۴۰ تا ۹۵») before the save button enables. Bundle `index-BXkNFPru.js`.
+- **Measured live (8765), same 4,202,343 B source PNG (1400x1000):**
+  | thumb_max_px / quality | thumb | bytes | share of source |
+  |---|---|---|---|
+  | 160 / 45 | 160x114 | 910 | 0.02 % |
+  | 320 / 80 (default) | 320x229 | 17,237 | 0.41 % |
+  | 640 / 92 | 640x457 | 191,888 | 4.57 % |
+  So the operator really trades sharpness for storage, and both keys survive `POST /settings/reset`
+  (rows deleted → env defaults 320/80 again).
+- **Tests** (`tests/test_thumbs.py`, 12 total): `test_max_px_is_honoured` (96px box is smaller than 640px and keeps
+  the 4:3 ratio), `test_quality_is_honoured` (same dims, q40 < q95 bytes),
+  `test_runtime_settings_drive_the_thumbnail_size` (PUT 128 → upload → served thumb ≤128px, settings restored),
+  `test_thumbnail_settings_are_validated` (32/4000/5/100 → 400 with the range in the message).
+- Suite: **193 pytest + 21 e2e**, bundle rebuilt and served.
+- Gotcha hit: `PUT /admin/settings` returns `applied` as a **list** of keys (not a dict) — `reset_runtime_settings`
+  is a separate `POST /admin/settings/reset`. Writing "reset" as `POST /settings` 405s.
+
+## Round 24 — TEMP leak fully closed: 0 dirs/run (was ~146, then 2)
+
+**Goal:** the test suite must never grow the user's TEMP again. It used to create one `tgdrive-test-*`
+dir per test with no cleanup at all; 22,335 dirs (~3.4 GB) later C: was 100 % full and the suite died with
+`sqlite3.OperationalError: database or disk is full` plus bogus multipart body-parse errors.
+
+**What round 24 changed on top of the first pass (which got 146 → 2):**
+
+- **`purge_dir` is now actually reliable.** `shutil.rmtree(onerror=_force_rm)` clears read-only bits before
+  retrying (Windows marks freshly closed sqlite files read-only), and the retry loop went 3 → 6 attempts with
+  a growing sleep, because aiosqlite releases its WAL handle on a worker thread a moment after `close()`.
+- **The ledger no longer lies.** `_USED_TMPDIRS` only drops an entry once the dir is *really* gone. The old
+  `_USED_TMPDIRS.remove(tmpdir)` ran unconditionally — even when the purge had failed — so a failed purge
+  silently vanished from the accounting and the session assert could never see it. Failures are now recorded
+  as `_PURGE_FAILURES[(nodeid, dir)]` and named in the failure message.
+- **Root cause of the last 2 dirs/run (found with a throwaway `_dbg_leakplugin.py`, since deleted):**
+  a *late* `state.db_instance()` — a stray task or a lazy dependency — ran **after** the fixture deleted the
+  dir. `Database.connect()` starts with `os.makedirs(os.path.dirname(self.path))`, so the purge was undone:
+  the folder came straight back containing only a fresh `test.sqlite3` and no `tmp/` subdir. That is exactly
+  the shape of the two stragglers (`test.sqlite3`, 172,032 B, nothing else). Because `get_settings()` is an
+  `lru_cache` that the `client` fixture mutates in place, app code still held the old Settings pointing at
+  the doomed path.
+- **Fix:** teardown now closes the DB, then calls `_park_settings()` — it re-points **every** Settings
+  instance the suite handed out at one per-session scratch dir (`_session_scratch()`, prefix
+  `tgdrive-test-session-`, purged at session end and covered by the same assert). A late connect now lands
+  there instead of resurrecting a purged dir. `state.db = None` etc. moved *before* the purge for the same
+  reason.
+- **The guard can no longer be fooled:** the session fixture also globs TEMP for `tgdrive-test-*` and fails on
+  dirs it never tracked, so a leak from *any* source (not just this fixture) fails the run.
+
+**`tests/test_tmp_cleanup.py` (7 tests).** New: `test_late_db_connect_cannot_resurrect_a_purged_dir` (drives a
+real `state.db_instance()` at a doomed dir, purges it, parks, then connects again and asserts the dir stayed
+dead), `test_purge_handles_read_only_files`. Verified the resurrection test **fails on a mutant** with the
+parking disabled (`scratch = old_dir`) and passes on the real code.
+
+**Measured:** 3 consecutive full runs — `204 passed` (2:30 each), exit 0, and `ls -d "$TEMP"/tgdrive-test-*`
+= **0** every time. No skips, so the venv is the right one. e2e: **21 passed**. pytest's own `tmp_path` tree
+is 67 MB and is not the problem; the remaining TEMP bulk (`0atmlaiz` 1.3 GB, vscode/Roslyn) is unrelated.
+
+- Gotcha: `addopts = "-q"` in `pyproject.toml` plus a command-line `-q` becomes `-qq`, which hides the
+  `N passed` summary line. Use `-o addopts=` to see counts.

@@ -6,13 +6,23 @@ services:
     ports:
       - "8000:8000"
     environment:
-      TGDRIVE_FAKE_TG: "1"
+      # Same two fixes as docker-compose.railway.yml: "${RAILWAY TGDRIVE_SECRET}"
+      # was not valid Compose interpolation (a space inside the variable name) and
+      # reached the container as a literal signing secret, and fake Telegram must
+      # be an explicit choice rather than a baked-in default.
+      TGDRIVE_SECRET: "${TGDRIVE_SECRET:?set TGDRIVE_SECRET in your shell or .env before deploying}"
+      TGDRIVE_FAKE_TG: "${TGDRIVE_FAKE_TG:-0}"
       TGDRIVE_DATA_DIR: "/app/data"
-      TGDRIVE_SECRET: "${RAILWAY TGDRIVE_SECRET}"
       # Redis configuration - enable with TGDRIVE_REDIS_ENABLED=1
       # and set TGDRIVE_REDIS_URL to point to the Redis service below
       TGDRIVE_REDIS_ENABLED: "0"
       TGDRIVE_REDIS_URL: "redis://redis:6379/0"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/admin/readyz').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     volumes:
       - ./data:/app/data:cached
     restart: unless-stopped

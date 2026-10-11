@@ -7,7 +7,9 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install minimal system dependencies
+# Build deps only (no runtime libs needed: every wheel in requirements.txt ships
+# its own). ffmpeg is NOT installed here on purpose - imageio-ffmpeg carries a
+# static binary, so video thumbnails work without a 100 MB apt package.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         gcc \
@@ -18,32 +20,35 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code. scripts/ ships too so `python scripts/healthcheck.py`
+# can be run inside the container (Railway shell or a one-off job).
 COPY app ./app
 COPY static ./static
+COPY scripts ./scripts
 
-# Copy .env (Railway will inject vars, but we need a base)
-COPY .env.example .env
+# No .env is baked into the image: pydantic-settings reads /app/.env if it
+# exists, and a committed file would silently out-rank the vars Railway
+# injects at deploy time. Secrets must come from the platform.
 
-# Create data directory and non-root user
-RUN mkdir -p /app/data && \
-    useradd -m -u 1000 appuser && \
-    chown -R appuser /app/data && \
-    chown -R appuser /app/logs
+# Create the data directory and a non-root user. Only /app/data is writable at
+# runtime - nothing else needs to be, so nothing else is chowned.
+RUN useradd -m -u 1000 appuser && \
+    mkdir -p /app/data && \
+    chown -R appuser:appuser /app/data
 
 USER appuser
 
-# Environment defaults (overridden by Railway vars)
-ENV TGDRIVE_DATA_DIR=/app/data \
-    TGDRIVE_FAKE_TG=1 \
-    TGDRIVE_SECRET=dev-secret-change-me-please-32-chars!
+# Data dir only. TGDRIVE_SECRET / TGDRIVE_FAKE_TG are deliberately NOT defaulted
+# here: an image that silently starts in fake-Telegram mode, or with the
+# well-known dev secret, fails quietly in production instead of loudly.
+ENV TGDRIVE_DATA_DIR=/app/data
 
-# Expose port (Railway will set PORT env var)
 EXPOSE 8000
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
-  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/admin/healthz').status==200 else 1)"
+# Probe /readyz, not /healthz: healthz only proves the DB answers, readyz also
+# requires the queue and the account pool to have finished starting.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/admin/readyz').status==200 else 1)"
 
-# Start command - Railway/Render inject PORT env var (sh -c expands it)
+# sh -c so ${PORT} expands (Railway injects it)
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port \"${PORT:-8000}\" --workers 1"]

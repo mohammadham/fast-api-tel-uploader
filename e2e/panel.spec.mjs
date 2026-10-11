@@ -360,6 +360,18 @@ test.describe.serial("panel smoke", () => {
     const payload = Buffer.from("traydrop second " + Date.now());
     await tray.dispatchEvent("dragenter", { dataTransfer: await page.evaluateHandle(() => new DataTransfer()) });
     await expect(tray.getByText("فایل‌ها را همین‌جا رها کنید")).toBeVisible();
+    // the panel shows the enqueue confirmation and then «صف شد: <id>» in the SAME
+    // toast slot, so the confirmation can be replaced before we read it. Record every
+    // toast the page renders instead of racing that (this asserts strictly more).
+    await page.evaluate(() => {
+      window.__toasts = [];
+      const el = document.querySelector(".toast");
+      if (!el) return;
+      new MutationObserver(() => {
+        const t = (el.textContent || "").trim();
+        if (t && window.__toasts[window.__toasts.length - 1] !== t) window.__toasts.push(t);
+      }).observe(el, { childList: true, characterData: true, subtree: true });
+    });
     await tray.dispatchEvent("drop", {
       dataTransfer: await page.evaluateHandle((buf) => {
         const dt = new DataTransfer();
@@ -367,7 +379,9 @@ test.describe.serial("panel smoke", () => {
         return dt;
       }, payload),
     });
-    await expect(page.locator(".toast")).toContainText("فایل با تنظیمات آخرین جاب"); // enqueue confirmation
+    await expect
+      .poll(() => page.evaluate(() => (window.__toasts || []).join(" | ")))
+      .toContain("فایل با تنظیمات آخرین جاب"); // enqueue confirmation was shown
     await expect(page.locator("dialog:visible")).toHaveCount(0); // dialog never opened
     await expect(tray).toBeVisible();
     await expect(tray.getByText("e2e-traydrop-2.txt")).toBeVisible();

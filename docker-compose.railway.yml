@@ -6,9 +6,20 @@ services:
     ports:
       - "8000:8000"
     environment:
-      TGDRIVE_FAKE_TG: "1"
+      # NOTE: the previous value, "${RAILWAY TGDRIVE_SECRET}", was not valid
+      # Compose interpolation (a space inside the variable name) - it reached the
+      # container as a literal string and became the signing secret.
+      # ${VAR:?message} fails loudly when the host env var is missing instead.
+      TGDRIVE_SECRET: "${TGDRIVE_SECRET:?set TGDRIVE_SECRET in your shell or .env before deploying}"
       TGDRIVE_DATA_DIR: "/app/data"
-      TGDRIVE_SECRET: "${RAILWAY TGDRIVE_SECRET}"
+      # Fake Telegram must be an explicit choice, never a default.
+      TGDRIVE_FAKE_TG: "${TGDRIVE_FAKE_TG:-0}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/admin/readyz').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     volumes:
       - ./data:/app/data:cached
     restart: unless-stopped
@@ -19,7 +30,7 @@ services:
   # Enable with: docker compose -f docker-compose.yml -f docker-compose.railway.yml up -d --profile localbot
   # botapi:
   #   image: aiogram/telegram-bot-api:latest
-  #   profiles: [localbot]
+  #   profiles: ["localbot"]
   #   environment:
   #     TELEGRAM_API_ID: ${TGDRIVE_TG_API_ID}
   #     TELEGRAM_API_HASH: ${TGDRIVE_TG_API_HASH}
