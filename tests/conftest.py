@@ -20,6 +20,12 @@ os.environ.setdefault("TGDRIVE_ADMIN_USERNAME", "admin")
 os.environ.setdefault("TGDRIVE_ADMIN_PASSWORD", "admin123")
 os.environ.setdefault("TGDRIVE_DOWNLOAD_WORKERS", "2")
 os.environ.setdefault("TGDRIVE_UPLOAD_WORKERS", "1")
+# tests must never touch a live/shared Redis: the .env (picked up by
+# pydantic-settings even in tests) now points at the user's REAL Railway
+# instance, so a parallel run while the live server is up would race it and
+# every test's shutdown would hang waiting on the shared connection.
+os.environ.setdefault("TGDRIVE_REDIS_ENABLED", "0")
+os.environ.setdefault("TGDRIVE_REDIS_URL", "")
 
 #: every per-test data dir this session created that is STILL on disk. A dir only
 #: leaves this list once it is really gone, so the session fixture's assert cannot

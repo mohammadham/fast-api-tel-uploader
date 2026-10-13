@@ -249,28 +249,33 @@ class QueueManager:
             await asyncio.sleep(30)
 
     async def _recover(self) -> None:
-        # Recover from Redis if enabled, otherwise SQLite
+        # Recover from Redis if enabled, otherwise SQLite.
+        # Must _ensure_redis() first: the connection is lazy and self._redis is
+        # still None at this point (startup), so smembers() raised
+        # AttributeError NoneType -> every boot logged "Redis recovery failed".
         if self._redis_enabled:
             try:
-                job_ids = await self._redis.smembers("queue:ids")
-                for job_id in job_ids:
-                    data = await self._redis.hgetall(f"queue:job:{job_id}")
-                    if not data:
-                        continue
-                    status = data.get("status", "pending")
-                    self._rows[job_id] = {
-                        "id": data.get("id", job_id),
-                        "kind": data.get("kind"),
-                        "priority": int(data.get("priority", 0)),
-                        "seq": int(data.get("seq", 0)),
-                        "correlation_id": data.get("correlation_id", ""),
-                        "status": status,
-                        "payload": data.get("payload", "{}"),
-                        "attempts": int(data.get("attempts", 0)),
-                        "max_retries": int(data.get("max_retries", 5)),
-                    }
-                    heapq.heappush(self._heap, (-self._rows[job_id]["priority"], self._rows[job_id]["seq"], job_id))
-                log.info("queue recovered %s pending jobs from Redis", len(job_ids))
+                await self._ensure_redis()
+                if self._redis_enabled:  # False when the ping failed -> SQLite fallback
+                    job_ids = await self._redis.smembers("queue:ids")
+                    for job_id in job_ids:
+                        data = await self._redis.hgetall(f"queue:job:{job_id}")
+                        if not data:
+                            continue
+                        status = data.get("status", "pending")
+                        self._rows[job_id] = {
+                            "id": data.get("id", job_id),
+                            "kind": data.get("kind"),
+                            "priority": int(data.get("priority", 0)),
+                            "seq": int(data.get("seq", 0)),
+                            "correlation_id": data.get("correlation_id", ""),
+                            "status": status,
+                            "payload": data.get("payload", "{}"),
+                            "attempts": int(data.get("attempts", 0)),
+                            "max_retries": int(data.get("max_retries", 5)),
+                        }
+                        heapq.heappush(self._heap, (-self._rows[job_id]["priority"], self._rows[job_id]["seq"], job_id))
+                    log.info("queue recovered %s pending jobs from Redis", len(job_ids))
             except Exception as e:
                 log.warning("Redis recovery failed, falling back to SQLite: %s", e)
 
