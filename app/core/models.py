@@ -204,11 +204,7 @@ class AccountRepo:
             " VALUES(?,?,?,?, 'pending', ?)"
         )
         params = (label, phone, session_enc, int(is_premium), now())
-        if self.db.is_sqlite:
-            await self.db.execute(sql, params)
-            return await self.db.last_insert_rowid()
-        row = await self.db.fetch_one(sql + " RETURNING id", params)
-        return int(row["id"]) if row else 0
+        return await self.db.insert(sql, params)
 
     async def list(self) -> List[Dict[str, Any]]:
         return await self.db.fetch_all(
@@ -292,11 +288,7 @@ class BotRepo:
     async def create(self, label: str, token_enc: str) -> int:
         sql = "INSERT INTO bot_tokens(label, token_enc, status, created_at) VALUES(?,?, 'pending', ?)"
         params = (label, token_enc, now())
-        if self.db.is_sqlite:
-            await self.db.execute(sql, params)
-            return await self.db.last_insert_rowid()
-        row = await self.db.fetch_one(sql + " RETURNING id", params)
-        return int(row["id"]) if row else 0
+        return await self.db.insert(sql, params)
 
     async def list(self) -> List[Dict[str, Any]]:
         return await self.db.fetch_all(
@@ -325,11 +317,7 @@ class EitaaAccountRepo:
     async def create(self, label: str, token_enc: str, chat_id: str) -> int:
         sql = "INSERT INTO eitaa_accounts(label, token_enc, chat_id, status, created_at) VALUES(?,?,?, 'pending', ?)"
         params = (label, token_enc, chat_id, now())
-        if self.db.is_sqlite:
-            await self.db.execute(sql, params)
-            return await self.db.last_insert_rowid()
-        row = await self.db.fetch_one(sql + " RETURNING id", params)
-        return int(row["id"]) if row else 0
+        return await self.db.insert(sql, params)
 
     async def list(self) -> List[Dict[str, Any]]:
         return await self.db.fetch_all(
@@ -366,11 +354,7 @@ class ChannelRepo:
     async def create(self, chat: str, label: str = "", kind: str = "storage") -> int:
         sql = "INSERT INTO channels(chat, label, kind, created_at) VALUES(?,?,?,?)"
         params = (chat, label, kind, now())
-        if self.db.is_sqlite:
-            await self.db.execute(sql, params)
-            return await self.db.last_insert_rowid()
-        row = await self.db.fetch_one(sql + " RETURNING id", params)
-        return int(row["id"]) if row else 0
+        return await self.db.insert(sql, params)
 
     async def list(self) -> List[Dict[str, Any]]:
         return await self.db.fetch_all(
@@ -491,11 +475,10 @@ class FolderRepo:
         )
 
     async def create(self, name: str, parent_id: Optional[int] = None, scope: str = "") -> int:
-        await self.db.execute(
+        return await self.db.insert(
             "INSERT INTO folders(name, parent_id, created_at, scope) VALUES(?,?,?,?)",
             (name, parent_id, now(), scope),
         )
-        return await self.db.last_insert_rowid()
 
     async def rename(self, folder_id: int, name: str) -> None:
         await self.db.execute("UPDATE folders SET name=? WHERE id=?", (name, folder_id))
@@ -929,18 +912,11 @@ class ProxyRepo:
         kind = kind.strip().lower()
         if kind not in self.VALID_KINDS:
             raise ValueError(f"unsupported proxy kind: {kind}")
-        await self.db.execute(
+        return await self.db.insert(
             "INSERT INTO proxies(label, kind, host, port, username, password_enc, secret_hex, created_at)"
             " VALUES(?,?,?,?,?,?,?,?)",
             (label[:100], kind, host.strip(), int(port), username, encrypt_str(password) if password else "", secret_hex.strip().lower(), now()),
         )
-        if self.db.is_sqlite:
-            return await self.db.last_insert_rowid()
-        row = await self.db.fetch_one(
-            "SELECT id FROM proxies WHERE host=? AND port=? AND kind=? ORDER BY id DESC LIMIT 1",
-            (host.strip(), int(port), kind),
-        )
-        return int(row["id"]) if row else 0
 
     async def list(self, only_enabled: bool = False) -> List[Dict[str, Any]]:
         sql = (

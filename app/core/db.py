@@ -437,12 +437,248 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status_nextrun ON jobs(status, next_run_at);
 """
 
 
+# MySQL / MariaDB equivalents (used when TGDRIVE_DATABASE_URL points at mysql)
+# Notes: no RETURNING (auto ids use LAST_INSERT_ID), TEXT/BLOB columns cannot
+# carry a literal DEFAULT on MySQL, and identifiers are stored lowercase.
+# `key` (settings/system_meta) is reserved in MySQL — queries quote it.
+SCHEMA_MYSQL = """
+CREATE TABLE IF NOT EXISTS users (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(255) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  role VARCHAR(32) NOT NULL DEFAULT 'admin',
+  created_at DOUBLE NOT NULL
+);
+CREATE TABLE IF NOT EXISTS api_keys (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  key_hash VARCHAR(128) UNIQUE NOT NULL,
+  key_prefix VARCHAR(64) NOT NULL,
+  scopes VARCHAR(255) NOT NULL DEFAULT 'read,write',
+  rpm INT NOT NULL DEFAULT 120,
+  daily_quota_bytes BIGINT NOT NULL DEFAULT 0,
+  used_bytes_today DOUBLE NOT NULL DEFAULT 0,
+  quota_day VARCHAR(16) NOT NULL DEFAULT '',
+  expires_at DOUBLE NULL,
+  revoked INT NOT NULL DEFAULT 0,
+  created_at DOUBLE NOT NULL,
+  last_used_at DOUBLE NULL,
+  backend VARCHAR(32) NOT NULL DEFAULT '',
+  storage_chat VARCHAR(255) NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS tg_accounts (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  label VARCHAR(255) NOT NULL,
+  phone VARCHAR(64) NOT NULL DEFAULT '',
+  session_enc MEDIUMTEXT NOT NULL,
+  is_premium INT NOT NULL DEFAULT 0,
+  enabled INT NOT NULL DEFAULT 1,
+  storage_chat_id VARCHAR(255) NOT NULL DEFAULT 'me',
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  flood_until DOUBLE NOT NULL DEFAULT 0,
+  circuit_open_until DOUBLE NOT NULL DEFAULT 0,
+  error_count INT NOT NULL DEFAULT 0,
+  uploads_done INT NOT NULL DEFAULT 0,
+  downloads_done INT NOT NULL DEFAULT 0,
+  bytes_up BIGINT NOT NULL DEFAULT 0,
+  bytes_down BIGINT NOT NULL DEFAULT 0,
+  last_error VARCHAR(2000) NOT NULL DEFAULT '',
+  created_at DOUBLE NOT NULL
+);
+CREATE TABLE IF NOT EXISTS bot_tokens (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  label VARCHAR(255) NOT NULL,
+  token_enc MEDIUMTEXT NOT NULL,
+  enabled INT NOT NULL DEFAULT 1,
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  last_error VARCHAR(2000) NOT NULL DEFAULT '',
+  created_at DOUBLE NOT NULL
+);
+CREATE TABLE IF NOT EXISTS folders (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(512) NOT NULL,
+  parent_id INT NULL,
+  created_at DOUBLE NOT NULL,
+  scope VARCHAR(255) NOT NULL DEFAULT '',
+  CONSTRAINT fk_folders_parent FOREIGN KEY (parent_id) REFERENCES folders(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS files (
+  id VARCHAR(64) PRIMARY KEY,
+  name VARCHAR(512) NOT NULL,
+  size BIGINT NOT NULL,
+  mime VARCHAR(255) NOT NULL DEFAULT 'application/octet-stream',
+  sha256 VARCHAR(128) NOT NULL DEFAULT '',
+  uploader VARCHAR(255) NOT NULL DEFAULT '',
+  source VARCHAR(32) NOT NULL DEFAULT 'api',
+  status VARCHAR(32) NOT NULL DEFAULT 'queued',
+  parts INT NOT NULL DEFAULT 1,
+  storage_chat VARCHAR(255) NOT NULL DEFAULT '',
+  message_ids VARCHAR(2000) NOT NULL DEFAULT '[]',
+  downloads INT NOT NULL DEFAULT 0,
+  bytes_served BIGINT NOT NULL DEFAULT 0,
+  created_at DOUBLE NOT NULL,
+  ready_at DOUBLE NULL,
+  error VARCHAR(2000) NOT NULL DEFAULT '',
+  deleted_at DOUBLE NULL,
+  thumb_message_id INT NULL,
+  thumb_mime VARCHAR(128) NOT NULL DEFAULT '',
+  backend VARCHAR(32) NOT NULL DEFAULT '',
+  folder_id INT NULL,
+  blocked INT NOT NULL DEFAULT 0,
+  CONSTRAINT fk_files_folder FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS file_parts (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  file_id VARCHAR(64) NOT NULL,
+  idx INT NOT NULL,
+  message_id BIGINT NOT NULL,
+  size BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS jobs (
+  id VARCHAR(64) PRIMARY KEY,
+  kind VARCHAR(64) NOT NULL,
+  priority INT NOT NULL,
+  seq BIGINT NOT NULL,
+  correlation_id VARCHAR(128) NOT NULL DEFAULT '',
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  payload LONGTEXT NOT NULL,
+  attempts INT NOT NULL DEFAULT 0,
+  max_retries INT NOT NULL DEFAULT 5,
+  next_run_at DOUBLE NOT NULL DEFAULT 0,
+  lease_until DOUBLE NOT NULL DEFAULT 0,
+  lease_owner VARCHAR(255) NOT NULL DEFAULT '',
+  origin_node VARCHAR(128) NOT NULL DEFAULT '',
+  created_at DOUBLE NOT NULL,
+  updated_at DOUBLE NOT NULL,
+  finished_at DOUBLE NULL,
+  error VARCHAR(2000) NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  ts DOUBLE NOT NULL,
+  actor VARCHAR(255) NOT NULL,
+  action VARCHAR(128) NOT NULL,
+  target VARCHAR(255) NOT NULL DEFAULT '',
+  ip VARCHAR(64) NOT NULL DEFAULT '',
+  details LONGTEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS upload_sessions (
+  id VARCHAR(64) PRIMARY KEY,
+  name VARCHAR(512) NOT NULL,
+  size BIGINT NOT NULL,
+  mime VARCHAR(255) NOT NULL DEFAULT 'application/octet-stream',
+  offset BIGINT NOT NULL DEFAULT 0,
+  folder_path VARCHAR(1024) NOT NULL DEFAULT '',
+  storage_chat VARCHAR(255) NOT NULL DEFAULT '',
+  uploader VARCHAR(255) NOT NULL DEFAULT '',
+  created_at DOUBLE NOT NULL
+);
+CREATE TABLE IF NOT EXISTS eitaa_accounts (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  label VARCHAR(255) NOT NULL,
+  token_enc MEDIUMTEXT NOT NULL,
+  chat_id VARCHAR(255) NOT NULL DEFAULT '',
+  enabled INT NOT NULL DEFAULT 1,
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  last_error VARCHAR(2000) NOT NULL DEFAULT '',
+  created_at DOUBLE NOT NULL
+);
+CREATE TABLE IF NOT EXISTS revoked_tokens (
+  jti VARCHAR(64) PRIMARY KEY,
+  expires_at DOUBLE NOT NULL
+);
+CREATE TABLE IF NOT EXISTS links (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  file_id VARCHAR(64) NOT NULL,
+  slug VARCHAR(255) UNIQUE NOT NULL,
+  pwd_hash VARCHAR(255) NOT NULL DEFAULT '',
+  max_downloads INT NOT NULL DEFAULT 0,
+  hits INT NOT NULL DEFAULT 0,
+  disabled INT NOT NULL DEFAULT 0,
+  created_at DOUBLE NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settings (
+  `key` VARCHAR(128) PRIMARY KEY,
+  value VARCHAR(4096) NOT NULL DEFAULT '',
+  updated_at DOUBLE NOT NULL DEFAULT 0,
+  updated_by VARCHAR(255) NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS system_meta (
+  `key` VARCHAR(128) PRIMARY KEY,
+  value VARCHAR(4096) NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS nodes (
+  node_id VARCHAR(128) PRIMARY KEY,
+  hostname VARCHAR(255) NOT NULL DEFAULT '',
+  version VARCHAR(64) NOT NULL DEFAULT '',
+  started_at DOUBLE NOT NULL DEFAULT 0,
+  last_heartbeat DOUBLE NOT NULL DEFAULT 0,
+  workers_dl INT NOT NULL DEFAULT 0,
+  workers_ul INT NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS proxies (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  label VARCHAR(255) NOT NULL DEFAULT '',
+  kind VARCHAR(32) NOT NULL DEFAULT 'socks5',
+  host VARCHAR(255) NOT NULL,
+  port INT NOT NULL,
+  username VARCHAR(255) NOT NULL DEFAULT '',
+  password_enc VARCHAR(4096) NOT NULL DEFAULT '',
+  secret_hex VARCHAR(255) NOT NULL DEFAULT '',
+  enabled INT NOT NULL DEFAULT 1,
+  status VARCHAR(32) NOT NULL DEFAULT 'unknown',
+  latency_ms DOUBLE NOT NULL DEFAULT -1,
+  last_checked_at DOUBLE NOT NULL DEFAULT 0,
+  last_error VARCHAR(2000) NOT NULL DEFAULT '',
+  created_at DOUBLE NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS channels (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  chat VARCHAR(255) NOT NULL UNIQUE,
+  label VARCHAR(255) NOT NULL DEFAULT '',
+  kind VARCHAR(32) NOT NULL DEFAULT 'storage',
+  enabled INT NOT NULL DEFAULT 1,
+  status VARCHAR(32) NOT NULL DEFAULT 'unknown',
+  last_error VARCHAR(2000) NOT NULL DEFAULT '',
+  last_backup_message_id BIGINT NULL,
+  last_backup_at DOUBLE NULL,
+  last_backup_bytes BIGINT NOT NULL DEFAULT 0,
+  last_backup_files INT NOT NULL DEFAULT 0,
+  created_at DOUBLE NOT NULL DEFAULT 0
+);
+"""
+
+# CREATE INDEX IF NOT EXISTS is not portable to MySQL: indexes are created
+# individually and a duplicate-key error just means "already present".
+SCHEMA_MYSQL_INDEXES = (
+    "CREATE INDEX idx_folders_parent ON folders(parent_id)",
+    "CREATE INDEX idx_files_storage_chat_created ON files(storage_chat, created_at)",
+    "CREATE INDEX idx_files_folder_created ON files(folder_id, created_at)",
+    "CREATE INDEX idx_files_created ON files(created_at)",
+    "CREATE INDEX idx_file_parts_file ON file_parts(file_id, idx)",
+    "CREATE INDEX idx_audit_ts ON audit_log(ts)",
+    "CREATE INDEX idx_jobs_status ON jobs(status, priority, seq)",
+    "CREATE INDEX idx_jobs_status_nextrun ON jobs(status, next_run_at)",
+    "CREATE INDEX idx_files_status ON files(status)",
+)
+
+
+def _schema_statements(schema: str) -> List[str]:
+    """Split a DDL batch into single statements.
+
+    MySQL's wire protocol rejects multi-statement batches unless the client
+    opts in, and none of our DDL carries a ``;`` inside a literal.
+    """
+    return [s.strip() for s in schema.split(";") if s.strip()]
+
+
 def _now() -> float:
     return time.time()
 
 
 class Database:
     is_sqlite = True
+    dialect = "sqlite"
 
     def __init__(self, path: str) -> None:
         self.path = path
@@ -530,6 +766,11 @@ class Database:
         await cur.close()
         return row[0] if row else None
 
+    async def insert(self, sql: str, params: Iterable[Any] = ()) -> int:
+        """Run an INSERT and return its generated id."""
+        await self.execute(sql, params)
+        return await self.last_insert_rowid()
+
     # ---------- SQLite-specific helpers (no-op / error on PG) ----------
     async def last_insert_rowid(self) -> int:
         return int(await self.scalar("SELECT last_insert_rowid()") or 0)
@@ -556,6 +797,7 @@ class PgDatabase:
     """
 
     is_sqlite = False
+    dialect = "postgres"
 
     def __init__(self, url: str) -> None:
         self.url = url
@@ -649,9 +891,14 @@ class PgDatabase:
         rows = await self.fetch_all(sql, params)
         return list(rows[0].values())[0] if rows else None
 
+    async def insert(self, sql: str, params: Iterable[Any] = ()) -> int:
+        """Run an INSERT and return its generated id via RETURNING."""
+        row = await self.fetch_one(sql + " RETURNING id", params)
+        return int(row["id"]) if row else 0
+
     async def last_insert_rowid(self) -> int:
-        # PG uses RETURNING id; repos use that branch via is_sqlite check
-        raise NotImplementedError("use RETURNING id on PostgreSQL")
+        # PG uses RETURNING id; repos call insert() instead
+        raise NotImplementedError("use insert() / RETURNING id on PostgreSQL")
 
     @asynccontextmanager
     async def tx(self):
@@ -670,6 +917,163 @@ class PgDatabase:
     async def audit_row(self, action: str) -> Optional[dict]:
         row = await self.fetch_one("SELECT * FROM audit_log WHERE action=? ORDER BY id DESC LIMIT 1", (action,))
         return dict(row) if row else None
+
+
+
+class MysqlDatabase:
+    """MySQL / MariaDB backend with the same interface as Database.
+
+    Activated when TGDRIVE_DATABASE_URL is a mysql:// / mariadb:// URL.
+    SQL strings across the codebase use SQLite ``?`` placeholders; they are
+    translated to SQLAlchemy named parameters transparently. Row results are
+    plain dicts (matching aiosqlite Row -> dict conversion upstream).
+
+    Differences from PostgreSQL worth knowing:
+    - no ``RETURNING``: generated ids come from ``insert()`` (lastrowid)
+    - ``ON CONFLICT`` is ``ON DUPLICATE KEY UPDATE`` (see settings_service)
+    - ``key`` is a reserved word, so settings/system_meta quote it
+    """
+
+    is_sqlite = False
+    is_mysql = True
+    dialect = "mysql"
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self._engine = None
+
+    @staticmethod
+    def normalize_url(url: str) -> tuple:
+        """mysql:// / mariadb:// URL -> SQLAlchemy async (aiomysql) URL."""
+        if url.startswith("mysql://"):
+            url = url.replace("mysql://", "mysql+aiomysql://", 1)
+        elif url.startswith("mariadb://"):
+            url = url.replace("mariadb://", "mysql+aiomysql://", 1)
+        connect_args = {"charset": "utf8mb4", "connect_timeout": 10}
+        return url, connect_args
+
+    async def connect(self) -> None:
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        engine_url, connect_args = self.normalize_url(self.url)
+        self._engine = create_async_engine(
+            engine_url, pool_pre_ping=True, pool_size=10, max_overflow=20,
+            connect_args=connect_args,
+        )
+        async with self._engine.begin() as conn:
+            for stmt in _schema_statements(SCHEMA_MYSQL):
+                await conn.execute(text(stmt))
+        # one transaction per index: MySQL has no CREATE INDEX IF NOT EXISTS,
+        # so an existing index raises 1061 and must not poison the batch
+        for stmt in SCHEMA_MYSQL_INDEXES:
+            try:
+                async with self._engine.begin() as conn:
+                    await conn.execute(text(stmt))
+            except Exception:
+                pass
+
+    async def close(self) -> None:
+        if self._engine:
+            await self._engine.dispose()
+            self._engine = None
+
+    # ---------- SQL translation ----------
+    @staticmethod
+    def _mysql_sql(sql: str, params: Iterable[Any]) -> tuple[str, dict]:
+        from sqlalchemy import text
+
+        parts: list[str] = []
+        names: list[str] = []
+        idx = 0
+        sql_out: list[str] = []
+        i = 0
+        while i < len(sql):
+            ch = sql[i]
+            if ch == "?":
+                name = f"p{idx}"
+                names.append(name)
+                sql_out.append(f":{name}")
+                idx += 1
+            else:
+                sql_out.append(ch)
+            i += 1
+        translated = "".join(sql_out)
+        plist = list(params)
+        if len(plist) != idx:
+            raise ValueError(f"placeholder mismatch: {idx} params expected, {len(plist)} given: {translated[:120]}")
+        return text(translated), {f"p{k}": v for k, v in enumerate(plist)}
+
+    async def execute(self, sql: str, params: Iterable[Any] = ()) -> int:
+        q, p = self._mysql_sql(sql, params)
+        async with self._engine.begin() as conn:
+            result = await conn.execute(q, p)
+            return result.rowcount
+
+    async def fetch_all(self, sql: str, params: Iterable[Any] = ()) -> List[Dict[str, Any]]:
+        q, p = self._mysql_sql(sql, params)
+        async with self._engine.connect() as conn:
+            result = await conn.execute(q, p)
+            return [dict(zip(result.keys(), row)) for row in result.fetchall()]
+
+    async def fetch_one(self, sql: str, params: Iterable[Any] = ()) -> Optional[Dict[str, Any]]:
+        rows = await self.fetch_all(sql, params)
+        return rows[0] if rows else None
+
+    async def scalar(self, sql: str, params: Iterable[Any] = ()) -> Any:
+        rows = await self.fetch_all(sql, params)
+        return list(rows[0].values())[0] if rows else None
+
+    async def insert(self, sql: str, params: Iterable[Any] = ()) -> int:
+        """Run an INSERT and return its generated id (MySQL has no RETURNING)."""
+        q, p = self._mysql_sql(sql, params)
+        async with self._engine.begin() as conn:
+            result = await conn.execute(q, p)
+            return int(result.lastrowid or 0)
+
+    async def last_insert_rowid(self) -> int:
+        # per-connection state: only correct right after an INSERT on a pooled
+        # connection, so repos use insert() instead of execute()+this.
+        return int(await self.scalar("SELECT LAST_INSERT_ID()") or 0)
+
+    @asynccontextmanager
+    async def tx(self):
+        """Transaction scope: yields a proxy for SKIP LOCKED claims."""
+        async with self._engine.begin() as conn:
+            yield _MysqlTxProxy(conn, self._mysql_sql)
+
+    async def audit(self, actor: str, action: str, target: str = "", ip: str = "", details: str = "") -> None:
+        await self.execute(
+            "INSERT INTO audit_log(ts, actor, action, target, ip, details) VALUES(?,?,?,?,?,?)",
+            (_now(), actor, action, target, ip, details),
+        )
+
+    async def audit_row(self, action: str) -> Optional[dict]:
+        row = await self.fetch_one("SELECT * FROM audit_log WHERE action=? ORDER BY id DESC LIMIT 1", (action,))
+        return dict(row) if row else None
+
+
+class _MysqlTxProxy:
+    """Minimal proxy handed to `async with db.tx()` blocks on MySQL."""
+
+    def __init__(self, conn: Any, translator) -> None:
+        self._conn = conn
+        self._translate = translator
+
+    async def execute(self, sql: str, params: Iterable[Any] = ()) -> Any:
+        q, p = self._translate(sql, params)
+        return await self._conn.execute(q, p)
+
+    async def fetch_one(self, sql: str, params: Iterable[Any] = ()) -> Optional[dict]:
+        q, p = self._translate(sql, params)
+        result = await self._conn.execute(q, p)
+        row = result.mappings().first()
+        return dict(row) if row else None
+
+    async def fetch_all(self, sql: str, params: Iterable[Any] = ()) -> List[dict]:
+        q, p = self._translate(sql, params)
+        result = await self._conn.execute(q, p)
+        return [dict(r) for r in result.mappings().all()]
 
 
 class _PgTxProxy:

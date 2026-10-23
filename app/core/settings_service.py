@@ -55,6 +55,18 @@ def _proxy_monitor_interval(v: int) -> str:
     return "" if v in (0, *range(2, 24 * 60)) else "0 = off, or 2..1440 minutes"
 
 
+def _redis_url_ok(v: str) -> str:
+    """Empty (SQLite queue) or a redis:// / rediss:// / unix://% URL."""
+    s = str(v).strip()
+    if not s:
+        return ""
+    if s.startswith(("redis://", "rediss://", "unix://")):
+        if ":" not in s.split("://", 1)[-1].split("?", 1)[0]:
+            return "needs host:port"
+        return ""
+    return "must be redis://host:port or empty"
+
+
 def _eitaa_mode_ok(v: int) -> str:
     return "" if v in (0, 1) else "must be 0 or 1"
 
@@ -112,6 +124,9 @@ EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     "proxy_enabled": (int, _int_flag, "use telegram proxy pool (0/1)"),
     "proxy_strategy": (str, _proxy_strategy_ok, "proxy selection: speed | rr"),
     "proxy_monitor_interval": (int, _proxy_monitor_interval, "periodic proxy health-test interval (minutes; 0=off)"),
+    # redis-backed distributed queue (0/1 + URL); applied on next job (no restart)
+    "redis_enabled": (int, _int_flag, "use Redis as the queue backend (0=SQLite, 1=Redis)"),
+    "redis_url": (str, _redis_url_ok, "Redis URL for the queue backend (redis://host:port/db; empty=SQLite)"),
 }
 
 _SETTING_GROUPS: dict[str, list[str]] = {
@@ -138,9 +153,15 @@ _SETTING_GROUPS: dict[str, list[str]] = {
     "backend": ["default_backend"],
     "telegram_api": ["fake_tg", "eitaa_mode", "tg_api_id", "tg_api_hash", "tg_storage_chat", "transfer_delete_source"],
     "proxy": ["proxy_enabled", "proxy_strategy", "proxy_monitor_interval"],
+    "redis": ["redis_enabled", "redis_url"],
 }
 
 CACHE_TTL = 10.0  # seconds; cheap staleness window for multi-node convergence
+
+
+def _key_col(db) -> str:
+    """`key` is a reserved word on MySQL, so settings/system_meta quote it."""
+    return "`key`" if getattr(db, "is_mysql", False) else "key"
 
 
 class SettingsService:
@@ -159,7 +180,7 @@ class SettingsService:
         if not force and self._loaded_at and (time.time() - self._loaded_at) < CACHE_TTL:
             return self._cache
         s = get_settings()
-        rows = await db.fetch_all("SELECT key, value FROM settings")
+        rows = await db.fetch_all(f"SELECT {_key_col(db)}, value FROM settings")
         db_vals = {r["key"]: r["value"] for r in rows}
         out: Dict[str, Any] = {}
         for key in EDITABLE_SETTINGS:
@@ -245,12 +266,22 @@ async def save_runtime_settings(db, updates: dict, actor: str = "") -> list:
         err = validator(value)
         if err:
             raise ValueError(f"{key}: {err}")
-        await db.execute(
-            "INSERT INTO settings(key, value, updated_at, updated_by) VALUES(?,?,?,?)"
-            " ON CONFLICT(key) DO UPDATE SET value=excluded.value,"
-            " updated_at=excluded.updated_at, updated_by=excluded.updated_by",
-            (key, str(value), now(), actor),
-        )
+        if getattr(db, "is_mysql", False):
+            # MySQL has no ON CONFLICT; VALUES(col) is the closest thing to
+            # excluded.col (the row proposed for insert)
+            await db.execute(
+                "INSERT INTO settings(" + _key_col(db) + ", value, updated_at, updated_by) VALUES(?,?,?,?)"
+                " ON DUPLICATE KEY UPDATE value=VALUES(value),"
+                " updated_at=VALUES(updated_at), updated_by=VALUES(updated_by)",
+                (key, str(value), now(), actor),
+            )
+        else:
+            await db.execute(
+                "INSERT INTO settings(key, value, updated_at, updated_by) VALUES(?,?,?,?)"
+                " ON CONFLICT(key) DO UPDATE SET value=excluded.value,"
+                " updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+                (key, str(value), now(), actor),
+            )
         applied.append(key)
     if applied:
         await db.audit(actor, "settings.update", details=json.dumps(updates)[:300])
@@ -273,7 +304,7 @@ async def editable_settings_meta(db=None) -> list:
     s = get_settings()
     db_vals: Dict[str, str] = {}
     if db is not None:
-        rows = await db.fetch_all("SELECT key, value FROM settings")
+        rows = await db.fetch_all(f"SELECT {_key_col(db)}, value FROM settings")
         db_vals = {r["key"]: r["value"] for r in rows}
     out = []
     for gid, keys in _SETTING_GROUPS.items():
@@ -298,7 +329,7 @@ async def editable_settings_meta(db=None) -> list:
 
 # ── system_meta (starter flag etc.) ──────────────────────────────
 async def get_meta(db, key: str) -> str:
-    row = await db.fetch_one("SELECT value FROM system_meta WHERE key=?", (key,))
+    row = await db.fetch_one(f"SELECT value FROM system_meta WHERE {_key_col(db)}=?", (key,))
     return str(row["value"]) if row else ""
 
 
@@ -308,7 +339,7 @@ _engine_hint: Optional[str] = None
 
 
 def get_meta_sync_hint() -> Optional[str]:
-    """Last-known wizard engine choice without a DB handle ('sqlite'|'postgres'|None).
+    """Last-known wizard engine choice without a DB handle ('sqlite'|'postgres'|'mysql'|None).
 
     Seeded from TGDRIVE_DB_ENGINE env so a deliberate sqlite choice survives
     restarts even before system_meta can be read.
@@ -318,21 +349,28 @@ def get_meta_sync_hint() -> Optional[str]:
         import os
 
         env = (os.environ.get("TGDRIVE_DB_ENGINE") or "").strip().lower()
-        _engine_hint = env if env in ("sqlite", "postgres") else None
+        _engine_hint = env if env in ("sqlite", "postgres", "mysql") else None
     return _engine_hint
 
 
 def set_engine_hint(value: Optional[str]) -> None:
     global _engine_hint
-    _engine_hint = value if value in ("sqlite", "postgres") else None
+    _engine_hint = value if value in ("sqlite", "postgres", "mysql") else None
 
 
 async def set_meta(db, key: str, value: str) -> None:
-    await db.execute(
-        "INSERT INTO system_meta(key, value) VALUES(?,?)"
-        " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (key, value),
-    )
+    if getattr(db, "is_mysql", False):
+        await db.execute(
+            "INSERT INTO system_meta(" + _key_col(db) + ", value) VALUES(?,?)"
+            " ON DUPLICATE KEY UPDATE value=VALUES(value)",
+            (key, value),
+        )
+    else:
+        await db.execute(
+            "INSERT INTO system_meta(key, value) VALUES(?,?)"
+            " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
     if key == "db_engine":
         set_engine_hint(value or None)
 

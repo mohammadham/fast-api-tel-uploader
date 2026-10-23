@@ -97,28 +97,77 @@ class QueueManager:
         # global upload gate (they are status=running but stuck behind the cap)
         self._gate_waiters: Dict[str, float] = {}
         self._redis: Optional[redis.Redis] = None
-        self._redis_enabled = self.settings.redis_enabled and self.settings.redis_url
-        # Redis connection is initialized lazily on first use to avoid blocking startup
+        self._redis_url: Optional[str] = None
         self._redis_ping_done = False
+        # a dead Redis must not stall every enqueue: remember the last failure
+        # and skip re-pinging the same URL for a short cooldown
+        self._redis_failed_url: str = ""
+        self._redis_failed_at: float = 0.0
         self._lease_task: Optional[asyncio.Task] = None
         self._hb_task: Optional[asyncio.Task] = None
         self._stall_task: Optional[asyncio.Task] = None
 
-    async def _ensure_redis(self) -> None:
-        """Initialize Redis connection if not yet done."""
-        if self._redis_ping_done or not self._redis_enabled:
-            return
+    async def _redis_settings(self) -> Tuple[bool, str]:
+        """(enabled, url) from runtime DB settings, falling back to env.
+
+        The Redis queue backend is runtime-configurable (not env-only), so the
+        panel can enable/disable/repoint Redis without a restart. TTL-cached via
+        runtime_settings() so this stays cheap on every enqueue.
+        """
+        from ..core.settings_service import runtime_settings
+
+        enabled = bool(self.settings.redis_enabled)
+        url = (self.settings.redis_url or "").strip()
         try:
-            if self._redis is None:
-                self._redis = redis.from_url(self.settings.redis_url, decode_responses=True)
+            vals = await runtime_settings().get_all(self.db, force=False)
+            if "redis_enabled" in vals:
+                enabled = bool(int(vals.get("redis_enabled") or 0))
+            if str(vals.get("redis_url") or "").strip():
+                url = str(vals.get("redis_url")).strip()
+        except Exception:
+            pass
+        return enabled, url
+
+    async def _redis_active(self) -> bool:
+        enabled, url = await self._redis_settings()
+        return bool(enabled and url)
+
+    async def _ensure_redis(self) -> None:
+        """(Re)connect to Redis when current runtime settings enable it.
+
+        Re-reads enabled/URL from the settings table each call so panel changes
+        take effect without a restart; falls back to SQLite on any failure.
+        """
+        enabled, url = await self._redis_settings()
+        if not enabled or not url:
+            self._redis = None
+            self._redis_url = None
+            self._redis_ping_done = True
+            return
+        if self._redis is None or self._redis_url != url:
+            # down Redis: don't pay a connect timeout on every single job
+            if (
+                self._redis_failed_url == url
+                and (time.time() - self._redis_failed_at) < 30
+            ):
+                return
+            self._redis = redis.from_url(
+                url, decode_responses=True,
+                socket_connect_timeout=2, socket_timeout=2,
+            )
+            self._redis_url = url
+            self._redis_ping_done = False
+        try:
             await self._redis.ping()
             self._redis_ping_done = True
-            log.info("Redis queue backend enabled at %s", self.settings.redis_url)
+            self._redis_failed_url = ""
+            log.info("Redis queue backend enabled at %s", url)
         except Exception as e:
             log.warning("Redis unavailable (%s), falling back to SQLite only", e)
             self._redis = None
-            self._redis_enabled = False
             self._redis_ping_done = True
+            self._redis_failed_url = url
+            self._redis_failed_at = time.time()
 
     # ── lifecycle ──────────────────────────────────────────────
     async def start(self) -> None:
@@ -229,11 +278,24 @@ class QueueManager:
             pass
         while not self._stopped:
             try:
-                await self.db.execute(
+                insert_sql = (
                     "INSERT INTO nodes(node_id, hostname, version, started_at, last_heartbeat, workers_dl, workers_ul)"
                     " VALUES(?,?,?,?,?,?,?)"
-                    " ON CONFLICT(node_id) DO UPDATE SET hostname=excluded.hostname, version=excluded.version,"
-                    " last_heartbeat=excluded.last_heartbeat, workers_dl=excluded.workers_dl, workers_ul=excluded.workers_ul",
+                )
+                if getattr(self.db, "is_mysql", False):
+                    insert_sql += (
+                        " ON DUPLICATE KEY UPDATE hostname=VALUES(hostname), version=VALUES(version),"
+                        " last_heartbeat=VALUES(last_heartbeat), workers_dl=VALUES(workers_dl),"
+                        " workers_ul=VALUES(workers_ul)"
+                    )
+                else:
+                    insert_sql += (
+                        " ON CONFLICT(node_id) DO UPDATE SET hostname=excluded.hostname, version=excluded.version,"
+                        " last_heartbeat=excluded.last_heartbeat, workers_dl=excluded.workers_dl,"
+                        " workers_ul=excluded.workers_ul"
+                    )
+                await self.db.execute(
+                    insert_sql,
                     (
                         self.node_id,
                         socket.gethostname(),
@@ -253,10 +315,10 @@ class QueueManager:
         # Must _ensure_redis() first: the connection is lazy and self._redis is
         # still None at this point (startup), so smembers() raised
         # AttributeError NoneType -> every boot logged "Redis recovery failed".
-        if self._redis_enabled:
+        if await self._redis_active():
             try:
                 await self._ensure_redis()
-                if self._redis_enabled:  # False when the ping failed -> SQLite fallback
+                if self._redis_ping_done and self._redis is not None:  # None when ping failed
                     job_ids = await self._redis.smembers("queue:ids")
                     for job_id in job_ids:
                         data = await self._redis.hgetall(f"queue:job:{job_id}")
@@ -323,9 +385,11 @@ class QueueManager:
         self._wake.set()
         metrics.inc(f"queue.enqueued.{kind}")
         # Also store in Redis for scaling if enabled (lazy init)
-        if self._redis_enabled:
+        if await self._redis_active():
             try:
                 await self._ensure_redis()
+                if self._redis is None:  # unreachable (cooldown) → SQLite only
+                    raise RuntimeError("redis unavailable")
                 key = f"queue:job:{job.id}"
                 await self._redis.hset_mapping(key, mapping={
                     "id": job.id, "kind": kind, "priority": priority, "seq": seq,
@@ -366,7 +430,9 @@ class QueueManager:
         while not self._stopped:
             if name.startswith("stop-"):
                 return  # worker retired by set_worker_counts
-            if not self.db.is_sqlite:
+            if getattr(self.db, "is_mysql", False):
+                row = await self._next_job_mysql(worker_kind)
+            elif not self.db.is_sqlite:
                 row = await self._next_job_pg(worker_kind)
             else:
                 row = await self._next_job(worker_kind)
@@ -417,6 +483,71 @@ class QueueManager:
                 row = await self.db.fetch_one(sql, full_params)
             except Exception as exc:
                 log.debug("pg claim failed: %s", exc)
+                row = None
+            if row:
+                self._rows[row["id"]] = dict(row)
+                return dict(row)
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
+            self._wake.clear()
+        return None
+
+    async def _next_job_mysql(self, worker_kind: str) -> Optional[Dict[str, Any]]:
+        """Multi-node claim path for MySQL: lock a row, then update it.
+
+        MySQL has no ``UPDATE ... RETURNING``, so the candidate is selected
+        ``FOR UPDATE SKIP LOCKED`` and updated inside the same transaction.
+        MySQL < 8 / MariaDB < 10.6 lack SKIP LOCKED: the claim falls back to a
+        plain ``FOR UPDATE`` (more contention, same correctness).
+        """
+        from ..core.models import KIND_DOWNLOAD, KIND_UPLOAD, now as _now
+
+        prefix = "dl" if worker_kind == "download" else "ul"
+        lock = " FOR UPDATE SKIP LOCKED"
+        while not self._stopped:
+            conds = [
+                "(status IN ('pending','retry') AND next_run_at <= ?)",
+                "(status IN ('running','lease') AND lease_until < ?)",
+            ]
+            params: List[Any] = [now(), now()]
+            if worker_kind == "upload":
+                # uploads + transfers share the upload worker pool (same
+                # telegram pressure profile)
+                conds.append("kind IN (?, ?)")
+                params.extend([KIND_UPLOAD, KIND_TRANSFER])
+            else:
+                conds.append("kind != ?")
+                params.append("__none__")
+            if self._paused_kinds:
+                ph = ",".join("?" for _ in self._paused_kinds)
+                conds.append(f"kind NOT IN ({ph})")
+                params.extend(sorted(self._paused_kinds))
+            if prefix == "ul":
+                conds.append("(origin_node = ? OR origin_node = '')")
+                params.append(self.node_id)
+            select_sql = (
+                "SELECT * FROM jobs WHERE " + " OR ".join(conds) +
+                " ORDER BY priority DESC, seq LIMIT 1" + lock
+            )
+            update_sql = (
+                "UPDATE jobs SET status='running', lease_owner=?, lease_until=?, updated_at=? WHERE id=?"
+            )
+            row: Optional[Dict[str, Any]] = None
+            try:
+                async with self.db.tx() as tx:
+                    row = await tx.fetch_one(select_sql, params)
+                    if row:
+                        lease_owner = f"{self.node_id}/{prefix}"
+                        lease_until = now() + 1800
+                        await tx.execute(update_sql, [lease_owner, lease_until, now(), row["id"]])
+                        row = {**row, "status": "running",
+                               "lease_owner": lease_owner, "lease_until": lease_until}
+            except Exception as exc:
+                log.debug("mysql claim failed: %s", exc)
+                if lock and "syntax" in str(exc).lower():
+                    lock = ""
                 row = None
             if row:
                 self._rows[row["id"]] = dict(row)

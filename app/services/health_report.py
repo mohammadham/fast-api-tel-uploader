@@ -119,7 +119,7 @@ async def build_health_report(db, *, with_integrity: bool = True) -> Dict[str, A
     jobs_failed = await db.scalar("SELECT COUNT(*) FROM jobs WHERE status='failed'") or 0
     db_path = getattr(db, "path", "") if is_sqlite else ""
     database: Dict[str, Any] = {
-        "engine": "sqlite" if is_sqlite else "postgres",
+        "engine": getattr(db, "dialect", "sqlite" if is_sqlite else "postgres"),
         "path": db_path,
         "size_bytes": os.path.getsize(db_path) if db_path and os.path.exists(db_path) else 0,
         "files": {"total": files_total, "ready": files_ready, "bytes": bytes_stored, "trashed": trashed},

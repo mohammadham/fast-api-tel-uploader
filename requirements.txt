@@ -3,6 +3,7 @@ uvicorn[standard]>=0.30
 sqlalchemy[asyncio]>=2.0.30
 aiosqlite>=0.20
 asyncpg>=0.29
+aiomysql>=0.2
 greenlet>=3.0
 telethon>=1.36,<2.0
 python-socks[asyncio]>=2.4

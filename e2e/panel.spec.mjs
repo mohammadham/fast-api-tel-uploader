@@ -1163,14 +1163,29 @@ test.describe.serial("panel smoke", () => {
   });
 });
 
+let cachedToken = null;
 async function login(page) {
   await page.goto("/");
+  // every test starts with an empty localStorage, but the app rate-limits form
+  // logins to 10/min per IP; reuse the first token so a fast suite can't trip
+  // its own brute-force guard (logout only blacklists the refresh token)
+  if (cachedToken) {
+    await page.evaluate((t) => localStorage.setItem("td_token", t), cachedToken);
+    await page.reload();
+  }
+  await page.waitForFunction(
+    () => document.querySelector("header #tabs") || document.querySelector("#lg-user"),
+    null,
+    { timeout: 15000 },
+  );
   if (await page.locator("#lg-user").count()) {
     await page.fill("#lg-user", ADMIN_USER);
     await page.fill("#lg-pass", ADMIN_PASS);
     await page.getByRole("button", { name: "ورود به پنل" }).click();
   }
   await expect(page.locator("header #tabs")).toBeVisible();
+  const token = await page.evaluate(() => localStorage.getItem("td_token"));
+  if (token) cachedToken = token;
 }
 
 // --- proxy seeding for the ops-tab assertions (admin API, page's own token) ---

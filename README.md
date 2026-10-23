@@ -180,8 +180,8 @@ pytest -v
 | `TGDRIVE_MAX_UPLOAD_SIZE` | 2.1GB | سقف آپلود |
 | `TGDRIVE_SPLIT_THRESHOLD` | 1.9GB | آستانه پارت‌بندی |
 | `TGDRIVE_PRESIGNED_TTL` | 3600 | عمر پیش‌فرض لینک |
-| `TGDRIVE_DATABASE_URL` | — | پستگرس (خالی → SQLite محلی؛ قطع بودن PG → fallback خودکار به SQLite) |
-| `TGDRIVE_DB_ENGINE` | — | تحمیل موتور دیتابیس (`sqlite`) — انتخاب صریح sqlite حتی با وجود URL پستگرس |
+| `TGDRIVE_DATABASE_URL` | — | URL دیتابیس: `postgres://…` یا `mysql://…` / `mariadb://…` (خالی → SQLite محلی؛ قطع بودن سرور → fallback خودکار به SQLite) |
+| `TGDRIVE_DB_ENGINE` | — | تحمیل موتور دیتابیس (`sqlite` / `postgres` / `mysql`) — انتخاب صریح sqlite حتی با وجود URL سرور |
 
 ## محدودیت‌های سرویس حرفه‌ای اعمال‌شده
 

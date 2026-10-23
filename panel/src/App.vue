@@ -610,6 +610,21 @@
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">
             <div class="field" v-for="it in g.items" :key="it.key">
               <label>{{ settingLabels[it.key] || it.key }} <span class="muted" style="font-size:11px">{{ fmtSettingHint(it) }} ({{ it.source === 'db' ? 'ذخیره‌شده' : 'پیش‌فرض env' }})</span></label>
+              <template v-if="it.key === 'redis_url'">
+                <div style="display:flex;gap:6px">
+                  <input v-model="settingsDraft[it.key]" dir="ltr" autocomplete="off"
+                    placeholder="redis://localhost:6379/0"
+                    :class="{ invalid: settingsErrors[it.key] }"
+                    :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''"
+                    @input="onSettingInput(it)" style="flex:1">
+                  <button type="button" :disabled="redisTesting" @click="testRedis">{{ redisTesting ? '…' : 'تست اتصال' }}</button>
+                </div>
+                <p v-if="redisStatus" class="muted" style="font-size:12px;margin:6px 0 0" dir="ltr">
+                  <span :style="{ color: redisStatus.ok ? 'var(--ok,#22C55E)' : 'var(--err,#EF4444)' }">
+                    {{ redisStatus.ok ? '● وصل شد — نسخه ' + redisStatus.server : '✗ ' + redisStatus.error }}
+                  </span>
+                </p>
+              </template>
               <select v-if="it.key === 'default_backend'" v-model="settingsDraft[it.key]"
                 :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''">
                 <option value="telegram">تلگرام</option>
@@ -646,17 +661,48 @@
                 <option value="speed">سریع‌ترین (بر اساس تست سرعت)</option>
                 <option value="rr">چرخشی (Round-Robin)</option>
               </select>
+              <select v-else-if="it.key === 'redis_enabled'" v-model="settingsDraft[it.key]">
+                <option value="0">غیرفعال — صف در SQLite (پیش‌فرض)</option>
+                <option value="1">فعال — از Redis به‌عنوان صف استفاده شود</option>
+              </select>
               <select v-else-if="it.key === 'proxy_enabled'" v-model="settingsDraft[it.key]">
                 <option value="0">غیرفعال — اتصال مستقیم</option>
                 <option value="1">فعال — از پراکسی‌ها استفاده شود</option>
               </select>
-              <input v-else v-model="settingsDraft[it.key]" :type="it.type === 'int' ? 'number' : 'text'"
+              <input v-else-if="it.key !== 'redis_url'" v-model="settingsDraft[it.key]" :type="it.type === 'int' ? 'number' : 'text'"
                 :class="{ invalid: settingsErrors[it.key] }"
                 :style="settingsErrors[it.key] ? 'border-color:var(--err)' : ''"
                 @input="onSettingInput(it)">
               <p class="err" v-if="settingsErrors[it.key]" style="margin:4px 0 0;font-size:12px">{{ settingsErrors[it.key] }}</p>
             </div>
           </div>
+        </div>
+
+        <div class="card wide" style="margin-bottom:14px">
+          <h3 style="font-size:15px;margin:0 0 10px">دیتابیس MySQL / MariaDB</h3>
+          <p class="muted" style="font-size:12px;margin:0 0 10px">
+            پیش‌فرض SQLite محلی است. برای چندسروره یا حجم بالا، MySQL/MariaDB را وصل کنید؛ پس از ذخیره، سرویس باید ری‌استارت شود.
+          </p>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+            <div class="field"><label>هاست</label>
+              <input v-model="mysqlDlg.host" dir="ltr" autocomplete="off" placeholder="localhost"></div>
+            <div class="field"><label>پورت</label>
+              <input v-model="mysqlDlg.port" dir="ltr" type="number" placeholder="3306"></div>
+            <div class="field"><label>نام دیتابیس</label>
+              <input v-model="mysqlDlg.db" dir="ltr" autocomplete="off" placeholder="telegramdrive"></div>
+            <div class="field"><label>کاربر</label>
+              <input v-model="mysqlDlg.user" dir="ltr" autocomplete="off" placeholder="tgdrive"></div>
+            <div class="field"><label>رمز</label>
+              <input v-model="mysqlDlg.password" dir="ltr" type="password" autocomplete="new-password"></div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
+            <button class="ghost" :disabled="mysqlTesting" @click="testMysql">{{ mysqlTesting ? '…' : 'تست اتصال' }}</button>
+            <button class="primary" :disabled="mysqlSaving" @click="saveMysql">{{ mysqlSaving ? '…' : 'ذخیره در .env' }}</button>
+            <span class="muted" style="font-size:12px" dir="ltr">TGDRIVE_DATABASE_URL</span>
+          </div>
+          <p v-if="mysqlStatus" style="font-size:12px;margin:8px 0 0" :style="{ color: mysqlStatus.ok ? 'var(--ok,#22C55E)' : 'var(--err,#EF4444)' }">
+            {{ mysqlStatus.text }}
+          </p>
         </div>
 
         <div class="card wide" style="margin-bottom:14px">
@@ -1060,10 +1106,16 @@
               <option value="postgres" :disabled="!setupDlg.dbInfo || !setupDlg.dbInfo.pg_configured">
                 PostgreSQL {{ setupDlg.dbInfo && setupDlg.dbInfo.pg_configured ? (setupDlg.dbInfo.engine === 'postgres' ? '(فعال)' : '(از ری‌استارت بعدی)') : '(در .env تنظیم نشده)' }}
               </option>
+              <option value="mysql" :disabled="!setupDlg.dbInfo || !setupDlg.dbInfo.mysql_configured">
+                MySQL / MariaDB {{ setupDlg.dbInfo && setupDlg.dbInfo.mysql_configured ? (setupDlg.dbInfo.engine === 'mysql' ? '(فعال)' : '(از ری‌استارت بعدی)') : '(در .env تنظیم نشده)' }}
+              </option>
             </select>
           </div>
           <p v-if="setupDlg.dbInfo && setupDlg.dbInfo.pg_error" class="err" style="font-size:12px">
             Postgres در دسترس نیست: {{ setupDlg.dbInfo.pg_error }}
+          </p>
+          <p v-if="setupDlg.dbInfo && setupDlg.dbInfo.engine === 'sqlite' && setupDlg.dbInfo.mysql_configured && setupDlg.dbInfo.error" class="err" style="font-size:12px">
+            MySQL در دسترس نیست: {{ setupDlg.dbInfo.error }}
           </p>
           <p v-if="setupDlg.dbInfo && setupDlg.dbInfo.hint" class="muted" style="font-size:12px">{{ setupDlg.dbInfo.hint }}</p>
         </template>
@@ -1934,6 +1986,8 @@ const doLogin = submitLogin;
     const settingsDraft = reactive({});
     const settingsBusy = ref(false);
     const settingsErrors = reactive({}); // key → error message
+    const redisTesting = ref(false);
+    const redisStatus = ref(null); // {ok, error, server, db}
 
     const optionedSettings = ["fake_tg", "eitaa_mode", "transfer_delete_source"]; // int settings rendered as selects
     function validateSetting(it, value) {
@@ -1960,6 +2014,10 @@ const doLogin = submitLogin;
       } else if (it.key === "proxy_monitor_interval") {
         const n = Number(value);
         if (!(n === 0 || (n >= 2 && n <= 1440))) return "۰=خاموش یا ۲ تا ۱۴۴۰ دقیقه";
+      } else if (it.key === "redis_url") {
+        const u = String(value).trim();
+        if (!u) return "";
+        if (!/^redis(s)?:\/\//.test(u) && !u.startsWith("unix://")) return "باید redis://host:port باشد";
       }
       return "";
     }
@@ -2004,9 +2062,11 @@ const doLogin = submitLogin;
       proxy_enabled: "استفاده از پراکسی (۰=خیر، ۱=بله)",
       proxy_strategy: "استراتژی انتخاب پراکسی",
       proxy_monitor_interval: "بازه تست دوره‌ای پراکسی‌ها (دقیقه؛ ۰=خاموش)",
+      redis_enabled: "استفاده از Redis به‌عنوان صف (۰=SQLite، ۱=Redis)",
+      redis_url: "URL ردیس برای صف (redis://host:port/db — خالی = SQLite)",
     };
     const settingsGroups = computed(() => {
-      const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", backend: "بک‌اند", telegram_api: "تلگرام و ایتا — حالت تست و API", proxy: "پراکسی تلگرام" };
+      const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", backend: "بک‌اند", telegram_api: "تلگرام و ایتا — حالت تست و API", proxy: "پراکسی تلگرام", redis: "ردیس (صف توزیع‌شده — بدون ری‌استارت)" };
       const out = [];
       for (const [gid, title] of Object.entries(g)) {
         out.push({ id: gid, title, items: settingsItems.value.filter((x) => x.group === gid) });
@@ -2054,6 +2114,8 @@ const doLogin = submitLogin;
           await loaders.dash();
         } else if (res.applied?.includes("tg_api_id") || res.applied?.includes("tg_api_hash")) {
           showToast("اعتبارنامه‌ی API ذخیره و اتصال‌ها بازسازی شد", 5000, true);
+        } else if (res.applied?.includes("redis_enabled") || res.applied?.includes("redis_url")) {
+          showToast("تنظیمات ردیس ذخیره شد — از جاب بعدی در صف اعمال می‌شود", 6000, true);
         }
         showToast("تنظیمات ذخیره و اعمال شد");
         await loaders.settings();
@@ -2078,12 +2140,74 @@ const doLogin = submitLogin;
       const err = validateSetting(it, v);
       if (err) settingsErrors[it.key] = err; else delete settingsErrors[it.key];
     }
+    async function testRedis() {
+      redisTesting.value = true;
+      redisStatus.value = { ok: false, error: "در حال بررسی اتصال…" };
+      try {
+        const res = await api("/api/v1/admin/redis/test", { method: "POST", json: { url: settingsDraft["redis_url"] || "" } });
+        redisStatus.value = { ok: !!res.ok, error: res.error || "", server: res.server || "", db: res.db ?? "0" };
+        if (res.ok) showToast("اتصال به ردیس برقرار شد");
+        else showToast("اتصال به ردیس برقرار نشد: " + (res.error || ""), 4000, true);
+      } catch (e) {
+        redisStatus.value = { ok: false, error: e.message || "خطای شبکه" };
+      }
+      redisTesting.value = false;
+    }
     function fmtSettingHint(it) {
       if (it.type === "int" && (it.key.includes("size") || it.key.includes("quota"))) {
         const base = dirtySettings()[it.key] != null ? Number(dirtySettings()[it.key]) : it.current;
         return " (= " + fmtBytes(base) + ")";
       }
       return "";
+    }
+
+    /* ---------- MySQL / MariaDB connection (saved to .env) ---------- */
+    const mysqlDlg = reactive({ host: "localhost", port: 3306, db: "telegramdrive", user: "tgdrive", password: "" });
+    const mysqlTesting = ref(false);
+    const mysqlSaving = ref(false);
+    const mysqlStatus = ref(null); // { ok, text }
+    function mysqlUrl() {
+      const host = (mysqlDlg.host || "").trim();
+      const port = Number(mysqlDlg.port) || 3306;
+      const db = (mysqlDlg.db || "").trim();
+      const user = encodeURIComponent((mysqlDlg.user || "").trim());
+      const pass = mysqlDlg.password ? ":" + encodeURIComponent(mysqlDlg.password) : "";
+      return `mysql://${user}${pass}@${host}:${port}/${db}`;
+    }
+    async function testMysql() {
+      if (!(mysqlDlg.host || "").trim() || !(mysqlDlg.db || "").trim()) {
+        mysqlStatus.value = { ok: false, text: "هاست و نام دیتابیس الزامی است" };
+        return;
+      }
+      mysqlTesting.value = true;
+      mysqlStatus.value = { ok: false, text: "در حال بررسی اتصال…" };
+      try {
+        const res = await api("/api/v1/admin/db/test", { method: "POST", json: { url: mysqlUrl() } });
+        mysqlStatus.value = res.ok
+          ? { ok: true, text: "● وصل شد — نسخه " + (res.version || "?") }
+          : { ok: false, text: "✗ " + (res.error || "اتصال برقرار نشد") };
+      } catch (e) {
+        mysqlStatus.value = { ok: false, text: "✗ " + (e.message || "خطای شبکه") };
+      }
+      mysqlTesting.value = false;
+    }
+    async function saveMysql() {
+      if (!(mysqlDlg.host || "").trim() || !(mysqlDlg.db || "").trim() || !(mysqlDlg.user || "").trim()) {
+        mysqlStatus.value = { ok: false, text: "هاست، نام دیتابیس و کاربر الزامی است" };
+        return;
+      }
+      mysqlSaving.value = true;
+      try {
+        await api("/api/v1/admin/setup/env", { method: "PUT", json: { values: {
+          TGDRIVE_DATABASE_URL: mysqlUrl(),
+          TGDRIVE_DB_ENGINE: "mysql",
+        } } });
+        mysqlStatus.value = { ok: true, text: "● در .env ذخیره شد — پس از ری‌استارت سرویس اعمال می‌شود" };
+        showToast("URL دیتابیس ذخیره شد؛ برای اعمال، سرویس را ری‌استارت کنید", 6000, true);
+      } catch (e) {
+        mysqlStatus.value = { ok: false, text: "✗ " + (e.message || "ذخیره نشد") };
+      }
+      mysqlSaving.value = false;
     }
 
     /* ---------- setup wizard (starter) ---------- */
@@ -2110,7 +2234,9 @@ const doLogin = submitLogin;
           Object.assign(setupDlg, {
             open: true, step: 0, pass: "", pass2: "", backend: "telegram", msg: "", envGenerated: "",
             storageChat: String(stMap.tg_storage_chat ?? ""),
-            dbEngine: d.database?.engine === "postgres" ? "postgres" : (d.database?.pg_configured ? "" : "sqlite"),
+            dbEngine: ["postgres", "mysql"].includes(d.database?.engine)
+              ? d.database.engine
+              : ((d.database?.pg_configured || d.database?.mysql_configured) ? "" : "sqlite"),
             dbInfo: d.database || null,
           });
           await loadSetupEnv();
@@ -2160,6 +2286,7 @@ const doLogin = submitLogin;
           setupDlg.open = false; setupNeeded.value = false;
           showToast("راه‌اندازی اولیه کامل شد");
           if (setupDlg.dbEngine === "postgres") showToast("انتخاب Postgres در ری‌استارت بعدی اعمال می‌شود", 5000);
+          if (setupDlg.dbEngine === "mysql") showToast("انتخاب MySQL در ری‌استارت بعدی اعمال می‌شود", 5000);
         } catch (e) { setupDlg.msg = e.message; }
       }
     }

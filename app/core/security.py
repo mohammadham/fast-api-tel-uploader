@@ -55,10 +55,12 @@ async def blacklist_refresh(db, token: str) -> None:
     from .models import now
 
     ttl = get_settings().refresh_ttl_days * 86400
-    await db.execute(
-        "INSERT OR IGNORE INTO revoked_tokens(jti, expires_at) VALUES(?,?)",
-        (_token_jti(token), now() + ttl),
-    )
+    if getattr(db, "is_mysql", False):
+        # MySQL spells the idempotent insert "INSERT IGNORE"
+        sql = "INSERT IGNORE INTO revoked_tokens(jti, expires_at) VALUES(?,?)"
+    else:
+        sql = "INSERT OR IGNORE INTO revoked_tokens(jti, expires_at) VALUES(?,?)"
+    await db.execute(sql, (_token_jti(token), now() + ttl))
 
 
 async def refresh_blacklisted(db, token: str) -> bool:

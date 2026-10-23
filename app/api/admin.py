@@ -2,6 +2,7 @@
 runtime settings, setup wizard, node registry, backup/restore."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import csv
 import gzip
@@ -294,6 +295,99 @@ async def reset_settings(admin: str = Depends(get_current_admin), db=Depends(get
     return {"ok": True}
 
 
+# ── Redis queue backend (runtime-configured via settings tab) ───────────
+class RedisTestIn(BaseModel):
+    url: str = ""  # empty → test the currently configured URL; else test this one
+
+
+@router.post("/redis/test")
+async def redis_test(
+    body: RedisTestIn = RedisTestIn(),
+    _: str = Depends(get_current_admin),
+    db=Depends(get_db),
+):
+    """Ping the Redis server so the panel can show a live connection result.
+
+    Uses the URL the admin typed (body.url) when given, otherwise the currently
+    configured one (runtime DB settings → env). Reports server version + instance
+    when reachable; never persists anything (save is done via the settings PUT).
+    """
+    import redis.asyncio as redis
+
+    from ..core.config import get_settings
+    from ..core.settings_service import runtime_settings
+
+    s = get_settings()
+    url = (body.url or "").strip()
+    if not url:
+        try:
+            vals = await runtime_settings().get_all(db, force=True)
+            url = str(vals.get("redis_url") or "").strip()
+            if not url and not bool(int(vals.get("redis_enabled") or 0)):
+                url = (s.redis_url or "").strip()
+        except Exception:
+            url = (s.redis_url or "").strip()
+    if not url:
+        return {"ok": False, "error": "URL ردیس تنظیم نشده (خالی است)"}
+    try:
+        client = redis.from_url(url, decode_responses=True)
+        ping = await asyncio.wait_for(client.ping(), timeout=5)
+        info = await asyncio.wait_for(client.info("server"), timeout=5)
+        client.close()
+    except Exception as e:
+        return {"ok": False, "url": url, "error": str(e)[:300]}
+    return {
+        "ok": bool(ping),
+        "url": url,
+        "server": info.get("redis_version", "") if isinstance(info, dict) else "",
+        "instance": info.get("instance_name", "") if isinstance(info, dict) else "",
+        "db": str(url.split("/")[-1]).split("?")[0] or "0",
+    }
+
+
+# ── database connectivity test (MySQL / MariaDB / PostgreSQL) ──────────
+class DbTestIn(BaseModel):
+    url: str = ""  # mysql://user:pass@host:3306/db — nothing is persisted here
+
+
+@router.post("/db/test")
+async def db_test(body: DbTestIn, _: str = Depends(get_current_admin)):
+    """Open one connection to the given database URL and report its version.
+
+    Never creates tables and never saves the URL (the setup env endpoint does
+    that), so a wrong password or unreachable host is safe to try repeatedly.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from ..core.db import MysqlDatabase, PgDatabase
+
+    raw = (body.url or "").strip()
+    if not raw:
+        return {"ok": False, "error": "URL دیتابیس خالی است"}
+    if raw.startswith(("mysql://", "mariadb://", "mysql+aiomysql://")):
+        engine_name = "mysql"
+        url, connect_args = MysqlDatabase.normalize_url(raw)
+    elif raw.startswith(("postgres://", "postgresql://")):
+        engine_name = "postgres"
+        url, connect_args = PgDatabase.normalize_url(raw)
+    else:
+        return {"ok": False, "error": "only mysql:// / mariadb:// / postgres:// URLs are supported"}
+    engine = None
+    try:
+        engine = create_async_engine(url, pool_pre_ping=True, connect_args=connect_args)
+        async with engine.connect() as conn:
+            version = (await conn.execute(text("SELECT VERSION()"))).scalar()
+    except Exception as e:
+        err = str(e)[:300]
+        if raw in err:  # never echo credentials back to the browser
+            err = err.replace(raw, "<url>")
+        return {"ok": False, "engine": engine_name, "error": err}
+    finally:
+        if engine is not None:
+            await engine.dispose()
+    return {"ok": True, "engine": engine_name, "version": str(version or "")[:120]}
+
 # ── setup wizard: .env provisioning ──────────────────────────
 @router.get("/setup/env")
 async def setup_env_get(_: str = Depends(get_current_admin)):
@@ -339,19 +433,26 @@ async def setup_status(_: str = Depends(get_current_admin), db=Depends(get_db)):
     from ..core.settings_service import get_meta
 
     s = get_settings()
-    pg_configured = bool((s.database_url or "").strip().startswith(("postgres://", "postgresql://")))
-    engine = "postgres" if (db is not None and not getattr(db, "is_sqlite", True)) else "sqlite"
+    db_url = (s.database_url or "").strip()
+    pg_configured = db_url.startswith(("postgres://", "postgresql://"))
+    mysql_configured = db_url.startswith(("mysql://", "mariadb://"))
+    engine = getattr(db, "dialect", "sqlite") if db is not None else "sqlite"
+    remote_configured = pg_configured or mysql_configured
+    error = app_state.db_error if engine == "sqlite" and remote_configured else ""
     return {
         "initialized": (await get_meta(db, "initialized")) == "1",
         "initialized_at": float(await get_meta(db, "initialized_at") or 0),
         "database": {
             "engine": engine,
             "pg_configured": pg_configured,
-            "pg_error": app_state.db_error if engine == "sqlite" and pg_configured else "",
+            "mysql_configured": mysql_configured,
+            "pg_error": error if pg_configured else "",
+            "error": error,
             "hint": (
-                "postgres در .env تنظیم شده اما در دسترس نیست — سرویس با SQLite ادامه می‌دهد؛ "
+                ("MySQL" if mysql_configured and not pg_configured else "postgres")
+                + " در .env تنظیم شده اما در دسترس نیست — سرویس با SQLite ادامه می‌دهد؛ "
                 "URL/دسترسی را بررسی کنید یا SQLite را انتخاب کنید"
-                if engine == "sqlite" and pg_configured
+                if engine == "sqlite" and remote_configured
                 else ""
             ),
         },
@@ -380,9 +481,12 @@ async def setup_complete(
         await UserRepo(db).set_password(admin, body.new_password)
     if body.db_engine:
         engine = body.db_engine.strip().lower()
-        if engine not in ("sqlite", "postgres"):
-            raise HTTPException(status_code=400, detail="db_engine must be 'sqlite' or 'postgres'")
-        if engine == "postgres" and db.is_sqlite:
+        if engine == "mariadb":
+            engine = "mysql"
+        if engine not in ("sqlite", "postgres", "mysql"):
+            raise HTTPException(status_code=400, detail="db_engine must be 'sqlite', 'postgres' or 'mysql'")
+        active = getattr(db, "dialect", "sqlite")
+        if engine == "postgres" and active != "postgres":
             s = get_settings()
             if not (s.database_url or "").strip().startswith(("postgres://", "postgresql://")):
                 raise HTTPException(
@@ -393,6 +497,18 @@ async def setup_complete(
                 raise HTTPException(
                     status_code=409,
                     detail=f"postgres در دسترس نیست: {state.db_error[:200]} — اتصال را برقرار کنید یا sqlite را انتخاب کنید",
+                )
+        if engine == "mysql" and active != "mysql":
+            s = get_settings()
+            if not (s.database_url or "").strip().startswith(("mysql://", "mariadb://")):
+                raise HTTPException(
+                    status_code=400,
+                    detail="MySQL انتخاب شد اما TGDRIVE_DATABASE_URL در .env تنظیم نشده؛ ابتدا URL را تنظیم و سرویس را ری‌استارت کنید",
+                )
+            if state.db_error:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"MySQL در دسترس نیست: {state.db_error[:200]} — اتصال را برقرار کنید یا sqlite را انتخاب کنید",
                 )
         # persist the wizard's engine choice (honored on next restarts)
         await set_meta(db, "db_engine", engine)

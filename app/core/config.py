@@ -70,7 +70,8 @@ class Settings(BaseSettings):
     redis_enabled: bool = False
 
     # ── external database / multi-server ──
-    database_url: str = ""  # postgres://… (empty → local SQLite); MySQL not supported
+    database_url: str = ""  # postgres://… / mysql://… / mariadb://… (empty → local SQLite)
+    db_engine: str = "sqlite"  # sqlite | postgres | mysql; persisted in system_meta
     node_id: str = ""  # unique per server in multi-node deploys (default: hostname)
 
     @property
