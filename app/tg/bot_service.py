@@ -17,6 +17,10 @@ import httpx
 
 from ..core.config import get_settings
 from ..core.models import KIND_DOWNLOAD, KIND_UPLOAD, PRIO_DOWNLOAD, PRIO_UPLOAD
+from ..core.rate_limit import limiter as rate_limiter
+from ..core.settings_service import runtime_settings
+from .base import FloodWait, SendFailure
+from .limiter import SlotLimiter
 from .telethon_backend import BotBackend
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -34,6 +38,7 @@ class BotService:
         self.queue = queue
         self._tasks: Dict[int, asyncio.Task] = {}
         self._offsets: Dict[int, int] = {}
+        self._bot_limiters: Dict[int, SlotLimiter] = {}
         self._http = httpx.AsyncClient(timeout=65)
 
     # ---------- lifecycle ----------
@@ -228,6 +233,41 @@ class BotService:
             raise RuntimeError(f"bot {bot_id} not found")
         tok = decrypt_str(row["token_enc"])
         base = get_settings().bot_api_base.rstrip("/")
-        with open(local_path, "rb") as fh:
-            files = {"document": (name, fh, "application/octet-stream")}
-            await self._http.post(f"{base}/bot{tok}/sendDocument", data={"chat_id": chat_id}, files=files)
+        s = get_settings()
+        try:
+            cache = runtime_settings()._cache
+        except Exception:
+            cache = {}
+        cap = max(1, int(cache.get("bot_max_concurrent") or s.bot_max_concurrent or 2))
+        lim = self._bot_limiters.get(bot_id)
+        if lim is None:
+            lim = SlotLimiter(cap)
+            self._bot_limiters[bot_id] = lim
+        else:
+            lim.set_cap(cap)
+        if not await lim.acquire(timeout=30.0):
+            raise SendFailure("bot delivery slot timeout")
+        try:
+            rpm = int(cache.get("bot_max_rpm") or s.bot_max_rpm or 0)
+            if rpm > 0 and not await rate_limiter.allow(
+                f"bot:{bot_id}", capacity=rpm, per_minute=rpm
+            ):
+                raise FloodWait(60.0)
+            timeout = float(cache.get("bot_send_timeout_s") or 300)
+            with open(local_path, "rb") as fh:
+                files = {"document": (name, fh, "application/octet-stream")}
+                resp = await self._http.post(
+                    f"{base}/bot{tok}/sendDocument",
+                    data={"chat_id": chat_id}, files=files, timeout=timeout,
+                )
+            try:
+                data = resp.json()
+            except Exception:
+                raise SendFailure(f"bot api non-json response ({resp.status_code})")
+            if not data.get("ok"):
+                retry = resp.headers.get("retry-after") or (data.get("parameters") or {}).get("retry_after")
+                if retry:
+                    raise FloodWait(float(retry))
+                raise SendFailure(str(data.get("description") or f"bot api error {resp.status_code}"))
+        finally:
+            lim.release()

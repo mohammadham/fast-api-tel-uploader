@@ -12,7 +12,9 @@ from ..core.db import Database
 from ..core.settings_service import runtime_settings
 from ..core.models import AccountRepo, BotRepo, EitaaAccountRepo
 from ..core.metrics import metrics
+from ..core.rate_limit import limiter as rate_limiter
 from .base import BackendClient, FloodWait, SendFailure, TransferError
+from .limiter import SlotLimiter
 
 log = logging.getLogger("tgdrive.manager")
 
@@ -29,30 +31,52 @@ _PERMANENT_ERROR_NAMES = {
 
 
 class NoBackendAvailable(Exception):
-    pass
+    def __init__(
+        self, message: str, retry_after: float = 15.0, retryable: bool = True
+    ) -> None:
+        super().__init__(message)
+        self.retry_after = max(1.0, float(retry_after))
+        #: False for permanent configuration gaps (no eitaa/telegram backend);
+        #: the queue must burn attempts and fail loudly instead of waiting forever.
+        self.retryable = retryable
 
 
 class Borrowed:
-    def __init__(self, manager: "TGManager", backend: BackendClient, key: str) -> None:
+    def __init__(
+        self,
+        manager: "TGManager",
+        backend: BackendClient,
+        key: str,
+        direction: str = "download",
+        limiter: Optional[SlotLimiter] = None,
+    ) -> None:
         self._manager = manager
         self.backend = backend
         self.key = key
+        self.direction = direction
+        self.limiter = limiter
 
     async def __aenter__(self) -> BackendClient:
         return self.backend
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
-        await self._manager.release(self.key, exc)
+        await self._manager.release(self.key, exc, direction=self.direction)
 
 
 class TGManager:
     def __init__(self, db: Database) -> None:
         self.db = db
         self._backends: Dict[str, BackendClient] = {}
-        self._sems: Dict[str, asyncio.Semaphore] = {}
+        # one resizable limiter per (backend, direction): uploads and downloads
+        # must not share a cap, and bots/eitaa must not dilute account slots
+        self._limiters: Dict[Tuple[str, str], SlotLimiter] = {}
+        self._weights: Dict[str, float] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
         self._flood_until: Dict[str, float] = {}
         self._circuit_until: Dict[str, float] = {}
+        self._circuit_open: set[str] = set()
+        self._half_open: set[str] = set()
+        self._circuit_cooldown: Dict[str, float] = {}
         self._errors: Dict[str, int] = {}
         self._flood_counts: Dict[str, int] = {}
         # flood-burst tracker for admin alerts: key → {count, last_at, last_alert_at, seconds}
@@ -107,7 +131,10 @@ class TGManager:
             except Exception:
                 pass
         self._backends.clear()
-        self._sems.clear()
+        self._limiters.clear()
+        self._weights.clear()
+        self._circuit_open.clear()
+        self._half_open.clear()
         self._proxy_by_backend.clear()
         await self._spawn_all()
         log.info("telegram backends reloaded (%s live)", len(self._backends))
@@ -133,30 +160,47 @@ class TGManager:
             except Exception as exc:
                 log.warning("eitaa %s failed to load: %s", row["id"], exc)
 
-    def _sem(self, key: str) -> asyncio.Semaphore:
+    def _setting_int(self, name: str, default: int) -> int:
         s = self._settings()
-        # runtime override wins over env config (best-effort; sync context)
         try:
-            from ..core.settings_service import runtime_settings
-
             cache = runtime_settings()._cache
-            cap_dl = int(cache.get("max_concurrent_downloads") or s.max_concurrent_downloads)
+            if name in cache and cache[name] not in (None, ""):
+                return int(cache[name])
         except Exception:
-            cap_dl = s.max_concurrent_downloads
-        if key.startswith("acc:"):
-            cap = max(1, cap_dl // max(1, len(self._backends) or 1))
+            pass
+        return int(getattr(s, name, default) or default)
+
+    def _cap_for(self, key: str, direction: str) -> int:
+        """Per-backend cap by direction. Bots/eitaa never dilute account slots."""
+        if key.startswith("bot:"):
+            return max(1, self._setting_int("bot_max_concurrent", 2))
+        if direction == "upload":
+            return max(1, self._setting_int("max_concurrent_uploads_per_account", 2))
+        if direction == "download":
+            return max(1, self._setting_int("max_concurrent_downloads", 4))
+        return 2  # control / delete
+
+    def _limiter(self, key: str, direction: str = "download") -> SlotLimiter:
+        lk = (key, direction)
+        lim = self._limiters.get(lk)
+        if lim is None:
+            lim = SlotLimiter(self._cap_for(key, direction))
+            self._limiters[lk] = lim
         else:
-            cap = 2
-        if key not in self._sems:
-            self._sems[key] = asyncio.Semaphore(cap)
-        return self._sems[key]
+            lim.set_cap(self._cap_for(key, direction))
+        return lim
+
+    def _weight(self, key: str) -> float:
+        return max(0.1, float(self._weights.get(key, 1.0)))
 
     def _available(self, key: str) -> bool:
         now = time.time()
-        return (
-            self._flood_until.get(key, 0) < now
-            and self._circuit_until.get(key, 0) < now
-        )
+        if self._flood_until.get(key, 0) >= now:
+            return False
+        if self._circuit_until.get(key, 0) >= now:
+            return False
+        # after a cooldown the breaker is half-open: one probe at a time
+        return key not in self._half_open
 
     async def refresh_one_account(self, account_id: int) -> None:
         await self._ensure_account(account_id)
@@ -175,10 +219,16 @@ class TGManager:
                 await b.close()
             except Exception:
                 pass
-        self._sems.pop(key, None)
+        self._drop_limiters(key)
         self._errors.pop(key, None)
         self._flood_until.pop(key, None)
         self._circuit_until.pop(key, None)
+
+    def _drop_limiters(self, key: str) -> None:
+        for lk in [lk for lk in self._limiters if lk[0] == key]:
+            self._limiters.pop(lk, None)
+        self._weights.pop(key, None)
+        self._half_open.discard(key)
 
     async def _ensure_account(self, account_id: int) -> None:
         repo = AccountRepo(self.db)
@@ -212,6 +262,8 @@ class TGManager:
             )
             await backend.start()
             self._proxy_by_backend[key] = prow["id"] if prow else None
+        premium = bool(int(row.get("is_premium") or 0))
+        self._weights[key] = float(self._setting_int("premium_weight", 2)) if premium else 1.0
         self._backends[key] = backend
 
     def _fake_send_delay(self) -> float:
@@ -301,51 +353,85 @@ class TGManager:
             out.extend(bot_keys)
         return out
 
-    async def acquire(self, kind_hint: str = "acc", timeout: float = 30.0, backend: str = "") -> Borrowed:
-        """Borrow a healthy backend with free slot; waits if all busy/flooded.
+    async def acquire(
+        self,
+        kind_hint: str = "acc",
+        timeout: float = 30.0,
+        backend: str = "",
+        direction: str = "download",
+    ) -> Borrowed:
+        """Borrow a healthy backend with a free slot for ``direction``.
 
-        Selection is round-robin across eligible backends so uploads spread
-        evenly over the account pool instead of always loading the first one.
-        ``backend`` pins the pool: "eitaa" → eitaayar backends only; ""/"telegram"
-        → account pool as before.
-        Raises NoBackendAvailable when nothing is configured or the wait
-        deadline passes, so queue jobs fail loudly instead of hanging.
+        Selection is weighted least-loaded: ``(inflight+1)/weight`` with one
+        limiter per (backend, direction). Uploads and downloads therefore never
+        consume each other's slots, and bots/eitaa are absent from the account
+        denominator. ``NoBackendAvailable.retry_after`` tells the queue exactly
+        when a flooded/breaker-open backend becomes usable again.
         """
         deadline = time.time() + max(0.0, timeout)
+        rpm = self._setting_int("account_max_rpm", 0)
         while not self._stopped:
-            keys = [k for k in self._candidates(kind_hint, backend) if self._available(k)]
-            if keys:
-                self._rr += 1
-                ordered = keys[self._rr % len(keys) :] + keys[: self._rr % len(keys)]
-                for key in ordered:
-                    sem = self._sem(key)
-                    if sem._value > 0:  # free slot?
-                        await sem.acquire()
-                        if not self._available(key):
-                            sem.release()
-                            continue
-                        return Borrowed(self, self._backends[key], key)
-            if not self._candidates(kind_hint, backend) and not self._stopped:
-                # nothing configured at all → fail fast (caller will retry/fail)
-                raise NoBackendAvailable("no telegram backend configured")
+            all_keys = self._candidates(kind_hint, backend)
+            if not all_keys:
+                raise NoBackendAvailable(
+                    "no telegram backend configured", 15, retryable=False
+                )
+            available = [k for k in all_keys if self._available(k)]
+            # Rotate equal-load candidates so sequential acquire/release calls
+            # spread over the pool instead of stable-sorting to the first key.
+            self._rr += 1
+            if available:
+                off = self._rr % len(available)
+                available = available[off:] + available[:off]
+            available.sort(
+                key=lambda k: (self._limiter(k, direction).inflight + 1) / self._weight(k)
+            )
+            for key in available:
+                lim = self._limiter(key, direction)
+                if lim.free <= 0:
+                    continue
+                if key in self._circuit_open and key in self._half_open:
+                    continue
+                if not await lim.acquire(timeout=0):
+                    continue
+                if key in self._circuit_open:
+                    self._half_open.add(key)  # reserve the single half-open probe
+                if not self._available(key):
+                    lim.release()
+                    self._half_open.discard(key)
+                    continue
+                if rpm > 0 and key.startswith("acc:"):
+                    if not await rate_limiter.allow(
+                        f"tg:{key}:{direction}", capacity=rpm, per_minute=rpm
+                    ):
+                        lim.release()
+                        self._half_open.discard(key)
+                        continue
+                return Borrowed(self, self._backends[key], key, direction, lim)
             if time.time() >= deadline:
-                raise NoBackendAvailable("no available backend within timeout")
+                raise NoBackendAvailable(
+                    "no available backend within timeout", self._retry_after(all_keys)
+                )
             await asyncio.sleep(0.1)
+        raise NoBackendAvailable("manager stopped", 5)
 
-    async def acquire_key(self, key: str, timeout: float = 30.0) -> Borrowed:
+    def _retry_after(self, keys: List[str]) -> float:
+        t = time.time()
+        waits = [self._flood_until.get(k, 0) - t for k in keys]
+        waits += [self._circuit_until.get(k, 0) - t for k in keys]
+        waits = [w for w in waits if w > 0]
+        return min(waits) if waits else 1.0
+
+    async def acquire_key(
+        self, key: str, timeout: float = 30.0, direction: str = "control"
+    ) -> Borrowed:
         """Borrow one specific backend (health probes, targeted ops)."""
         if key not in self._backends:
-            raise NoBackendAvailable(f"backend {key} not loaded")
-        deadline = time.time() + max(0.0, timeout)
-        while not self._stopped:
-            sem = self._sem(key)
-            if sem._value > 0:
-                await sem.acquire()
-                return Borrowed(self, self._backends[key], key)
-            if time.time() >= deadline:
-                raise NoBackendAvailable(f"backend {key} busy")
-            await asyncio.sleep(0.1)
-        raise NoBackendAvailable("manager stopped")
+            raise NoBackendAvailable(f"backend {key} not loaded", 5)
+        lim = self._limiter(key, direction)
+        if not await lim.acquire(timeout=timeout):
+            raise NoBackendAvailable(f"backend {key} busy", 5)
+        return Borrowed(self, self._backends[key], key, direction, lim)
 
     def release_stats(self, key: str) -> None:
         """Reset transient error counter after a successful direct probe."""
@@ -387,8 +473,11 @@ class TGManager:
         notify_admins_bg(f"⚠ فشار تلگرام روی {key}: FloodWait مکرر (صبر {int(exc.seconds)} ثانیه). بک‌اند موقتاً از چرخش خارج است.")
         log.warning("flood burst on %s (wait %ss) — admin alerted", key, exc.seconds)
 
-    async def release(self, key: str, exc: Optional[BaseException]) -> None:
-        sem = self._sems.get(key)
+    async def release(
+        self, key: str, exc: Optional[BaseException], direction: str = "download"
+    ) -> None:
+        lim = self._limiters.get((key, direction))
+        was_half = key in self._half_open
         if exc is None:
             self._errors.pop(key, None)
             self._flood_counts.pop(key, None)
@@ -407,8 +496,12 @@ class TGManager:
                         proxy_selector.report_healthy(proxy_id)
                     except Exception:
                         pass
+            self._circuit_open.discard(key)
+            self._half_open.discard(key)
+            self._circuit_cooldown.pop(key, None)
             metrics.inc("backends.success")
         else:
+            self._half_open.discard(key)
             await self._note_account_failure(key, exc)
             if isinstance(exc, FloodWait):
                 self._flood_until[key] = time.time() + exc.seconds
@@ -438,9 +531,13 @@ class TGManager:
                     await self._rewire_backend(key)
                 except Exception as proxy_exc:
                     log.warning("proxy fallback failed for %s: %s", key, proxy_exc)
-            if self._errors.get(key, 0) >= CIRCUIT_THRESHOLD:
-                until = time.time() + CIRCUIT_COOLDOWN
+            if was_half or self._errors.get(key, 0) >= CIRCUIT_THRESHOLD:
+                base = self._circuit_cooldown.get(key, CIRCUIT_COOLDOWN)
+                cooldown = min(3600.0, base * (2.0 if was_half else 1.0))
+                self._circuit_cooldown[key] = cooldown
+                until = time.time() + cooldown
                 self._circuit_until[key] = until
+                self._circuit_open.add(key)
                 self._errors[key] = 0
                 try:
                     if key.startswith("acc:"):
@@ -448,8 +545,8 @@ class TGManager:
                 except Exception:
                     pass
                 metrics.inc("backends.circuit_open")
-        if sem:
-            sem.release()
+        if lim:
+            lim.release()
 
     async def _rewire_backend(self, key: str) -> None:
         """Drop and rebuild ONE backend with the current (fallback) proxy decision.
@@ -460,7 +557,7 @@ class TGManager:
                 await b.close()
             except Exception:
                 pass
-        self._sems.pop(key, None)
+        self._drop_limiters(key)
         try:
             if key.startswith("acc:"):
                 await self._ensure_account(int(key.split(":")[1]))
@@ -487,7 +584,7 @@ class TGManager:
                 metrics.inc("backends.disabled")
                 # remove from the live pool so it is never picked again
                 self._backends.pop(key, None)
-                self._sems.pop(key, None)
+                self._drop_limiters(key)
                 if isinstance(exc, FloodWait):
                     self._flood_until.pop(key, None)
             elif flood_until:
@@ -521,7 +618,13 @@ class TGManager:
                     "flood_until": self._flood_until.get(key, 0),
                     "circuit_until": self._circuit_until.get(key, 0),
                     "errors": self._errors.get(key, 0),
-                    "sem_free": self._sem(key)._value,
+                    "sem_free": self._limiter(key, "download").free,
+                    "download_free": self._limiter(key, "download").free,
+                    "upload_free": self._limiter(key, "upload").free,
+                    "inflight": self._limiter(key, "download").inflight
+                    + self._limiter(key, "upload").inflight,
+                    "weight": self._weight(key),
+                    "half_open": key in self._half_open,
                 }
             )
         return out
