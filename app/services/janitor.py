@@ -48,15 +48,30 @@ class Janitor:
     async def _sweep(self) -> None:
         s = get_settings()
         tmp_dir = s.final_tmp_dir()
-        cutoff = time.time() - 3600  # tmp files older than 1h
+        from ..core.models import JobRepo
+        from ..core.state import state
+
+        # Active jobs own their source files: a 10GB upload at ~2MB/s takes 85
+        # minutes, and a queued job can wait much longer. Never delete those.
+        try:
+            from ..core.settings_service import get_runtime
+
+            hours = int(await get_runtime(self.db, "tmp_retention_hours") or s.tmp_retention_hours or 24)
+        except Exception:
+            hours = int(getattr(s, "tmp_retention_hours", 24) or 24)
+        cutoff = time.time() - max(1, hours) * 3600
+        protected = await JobRepo(self.db).active_tmp_paths()
         removed = 0
         if os.path.isdir(tmp_dir):
             for name in os.listdir(tmp_dir):
                 path = os.path.join(tmp_dir, name)
                 try:
-                    if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
-                        os.remove(path)
-                        removed += 1
+                    if not os.path.isfile(path) or os.path.getmtime(path) >= cutoff:
+                        continue
+                    if os.path.normcase(os.path.abspath(path)) in protected:
+                        continue
+                    os.remove(path)
+                    removed += 1
                 except OSError:
                     pass
         # expired upload sessions (runtime TTL setting wins over env)

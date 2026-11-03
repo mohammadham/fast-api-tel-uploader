@@ -154,7 +154,9 @@ async def file_response(
     # released after the response completes via the background task.
     from ..tg.base import TransferError
     try:
-        borrowed = await manager.acquire("acc", backend=rec.get("backend") or "telegram")
+        borrowed = await manager.acquire(
+            "acc", backend=rec.get("backend") or "telegram", direction="download"
+        )
     except Exception as exc:
         from fastapi.responses import JSONResponse
 
@@ -256,7 +258,9 @@ async def zip_stream_response(
     from fastapi.responses import StreamingResponse
 
     # one backend for the whole archive (uploads/other jobs queue behind it)
-    borrowed = await manager.acquire("acc", backend=files[0].get("backend") or "telegram")
+    borrowed = await manager.acquire(
+        "acc", backend=files[0].get("backend") or "telegram", direction="download"
+    )
     backend = borrowed.backend
     chat = files[0]["storage_chat"] or getattr(backend, "storage_chat", "me")
     tmp_dir = _tmp_dir()

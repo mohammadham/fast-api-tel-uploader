@@ -37,6 +37,23 @@ def _ext_blocked(name: str, blocked: str = "") -> bool:
     return any(low.endswith(ext) for ext in exts)
 
 
+async def _admit_upload(db, size: int) -> None:
+    """Reject at ingest when the durable queue/disk cannot absorb the work."""
+    q = state.queue
+    if q is None or not hasattr(q, "admit"):
+        return
+    try:
+        ok, retry_after, reason = await q.admit(int(size or 0))
+    except Exception:
+        return  # admission is a guard, never a reason to break uploads
+    if not ok:
+        raise HTTPException(
+            status_code=429,
+            detail=f"upload rejected: {reason}",
+            headers={"Retry-After": str(max(1, int(retry_after)))},
+        )
+
+
 async def _resolve_folder(db, x_folder: Optional[str], q_folder: Optional[str]):
     """Resolve the upload folder from X-Folder header (path) or ?folder= query.
 
@@ -71,6 +88,7 @@ async def upload(
         raise HTTPException(status_code=415, detail="file type not allowed")
     mime = file.content_type or mimetypes.guess_type(name)[0] or "application/octet-stream"
 
+    await _admit_upload(db, int(getattr(file, "size", 0) or 0))
     os.makedirs(s.final_tmp_dir(), exist_ok=True)
     tmp_id = new_id("tmp")
     tmp_path = os.path.join(s.final_tmp_dir(), f"{tmp_id}.bin")
@@ -121,6 +139,7 @@ async def create_session(request: Request, body: SessionIn, key=Depends(get_api_
     name = _safe_name(body.name)
     if _ext_blocked(name, str(await get_runtime(db, "blocked_extensions") or "")):
         raise HTTPException(status_code=415, detail="file type not allowed")
+    await _admit_upload(db, int(body.size))
     folder_id, folder_path = await _resolve_folder(db, request.headers.get("x-folder"), request.query_params.get("folder"))
     # panel can pin the destination channel per-upload (X-Storage-Chat); the
     # key's own storage_chat stays the default when the header is absent
@@ -823,7 +842,7 @@ async def slug_thumb(slug: str, request: Request, db=Depends(get_db)):
     mid = rec.get("thumb_message_id")
     if not mid:
         raise HTTPException(status_code=404, detail="no thumbnail")
-    borrowed = await state.manager.acquire("acc")
+    borrowed = await state.manager.acquire("acc", direction="download")
     backend = borrowed.backend
     chat = rec["storage_chat"] or getattr(backend, "storage_chat", "me")
 

@@ -42,7 +42,14 @@ async def pressure(_: str = Depends(get_current_admin), db=Depends(get_db)):
 @router.get("/jobs")
 async def jobs(limit: int = 100, _: str = Depends(get_current_admin), db=Depends(get_db)):
     """List queue jobs, including the upload payload + the last resumed offset."""
+    import time
+
+    from ..core.settings_service import get_runtime
+    from ..queue.scheduler import job_size, lane_for
+
     rows = await state.queue.jobs.recent(min(limit, 500))
+    small_max = int(await get_runtime(db, "scheduler_small_max_bytes") or 64 * 1024 * 1024)
+    clock = time.time()
     items = []
     for r in rows:
         item = dict(r)
@@ -56,6 +63,10 @@ async def jobs(limit: int = 100, _: str = Depends(get_current_admin), db=Depends
                 item["payload"] = None
         else:
             item["payload"] = None
+        item["size_bytes"] = job_size(item)
+        item["lane"] = lane_for(item, small_max)
+        created = float(r.get("created_at") or clock)
+        item["wait_s"] = max(0, clock - created) if r.get("status") in ("pending", "retry") else 0
         items.append(item)
     return {"items": items, "paused": state.queue.paused()}
 
