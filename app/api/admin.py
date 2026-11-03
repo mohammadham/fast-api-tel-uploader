@@ -315,6 +315,7 @@ async def redis_test(
     import redis.asyncio as redis
 
     from ..core.config import get_settings
+    from ..core.distributed import redact_redis_url
     from ..core.settings_service import runtime_settings
 
     s = get_settings()
@@ -329,16 +330,22 @@ async def redis_test(
             url = (s.redis_url or "").strip()
     if not url:
         return {"ok": False, "error": "URL ردیس تنظیم نشده (خالی است)"}
+    client = None
     try:
         client = redis.from_url(url, decode_responses=True)
         ping = await asyncio.wait_for(client.ping(), timeout=5)
         info = await asyncio.wait_for(client.info("server"), timeout=5)
-        client.close()
     except Exception as e:
-        return {"ok": False, "url": url, "error": str(e)[:300]}
+        return {"ok": False, "url": redact_redis_url(url), "error": str(e)[:300]}
+    finally:
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
     return {
         "ok": bool(ping),
-        "url": url,
+        "url": redact_redis_url(url),
         "server": info.get("redis_version", "") if isinstance(info, dict) else "",
         "instance": info.get("instance_name", "") if isinstance(info, dict) else "",
         "db": str(url.split("/")[-1]).split("?")[0] or "0",
