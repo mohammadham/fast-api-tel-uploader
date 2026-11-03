@@ -41,9 +41,36 @@ class Settings(BaseSettings):
     # ── queue / workers ──
     download_workers: int = 4
     upload_workers: int = 2
+    #: per-account download slots (NOT divided by the pool size)
     max_concurrent_downloads: int = 4
+    #: global upload gate (all accounts together)
     max_concurrent_uploads: int = 2
+    #: per-account upload slots (separate from the global gate)
+    max_concurrent_uploads_per_account: int = 2
     job_max_retries: int = 5
+    job_lease_seconds: int = 1800
+
+    # ── scheduler (size + age aware) ──
+    #: uploads/transfers at or below this size use the "small" lane
+    scheduler_small_max_bytes: int = 64 * 1024 * 1024
+    #: a job waiting longer than this jumps ahead of every non-overdue job
+    scheduler_max_wait_s: int = 900
+    #: candidate window scanned per claim (bounded work per dispatch)
+    scheduler_scan_limit: int = 200
+
+    # ── admission control / disk safety ──
+    max_queue_jobs: int = 1000          # 0 = unlimited
+    max_inflight_bytes: int = 0         # 0 = unlimited; bytes of queued+running work
+    disk_watermark_pct: int = 90         # reject uploads that would leave less free space
+    tmp_retention_hours: int = 24        # janitor keeps inactive tmp files this long
+
+    # ── per-bot delivery limits (Bot API) ──
+    bot_max_concurrent: int = 2
+    bot_max_rpm: int = 60               # 0 = off
+
+    # ── per-account Telegram request budget (0 = off) ──
+    account_max_rpm: int = 0
+    premium_weight: int = 2             # account selection weight for premium accounts
 
     # ── limits ──
     max_upload_size: int = 2_100_000_000  # ~2GB

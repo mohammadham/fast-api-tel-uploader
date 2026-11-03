@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import time
 import uuid
@@ -801,6 +802,33 @@ class JobRepo:
             "SELECT * FROM jobs WHERE status IN ('pending','running','lease') ORDER BY priority DESC, seq LIMIT 500"
         )
 
+    async def active_tmp_paths(self) -> set[str]:
+        """Absolute tmp/download paths referenced by pending/running jobs.
+
+        The janitor must never delete the source file of a queued upload just
+        because it has been waiting (or transferring) for over an hour.
+        """
+        try:
+            rows = await self.db.fetch_all(
+                "SELECT payload FROM jobs WHERE status IN ('pending','retry','running')"
+            )
+        except Exception:
+            return set()
+        out: set[str] = set()
+        for row in rows:
+            raw = row.get("payload")
+            try:
+                payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            for key in ("tmp_path", "downloaded_path"):
+                value = payload.get(key)
+                if value:
+                    out.add(os.path.normcase(os.path.abspath(str(value))))
+        return out
+
     async def update_payload(self, job_id: str, payload: Dict[str, Any]) -> None:
         """Persist mutated payload (used for live transfer progress)."""
         await self.db.execute(
@@ -828,7 +856,7 @@ class JobRepo:
 
     async def recent(self, limit: int = 100) -> List[Dict[str, Any]]:
         return await self.db.fetch_all(
-            "SELECT id, kind, priority, seq, status, attempts, correlation_id, created_at, updated_at, finished_at, error"
+            "SELECT id, kind, priority, seq, status, attempts, correlation_id, created_at, updated_at, finished_at, error, payload"
             " FROM jobs ORDER BY created_at DESC LIMIT ?",
             (limit,),
         )

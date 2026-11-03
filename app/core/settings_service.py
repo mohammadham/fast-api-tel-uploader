@@ -55,6 +55,26 @@ def _proxy_monitor_interval(v: int) -> str:
     return "" if v in (0, *range(2, 24 * 60)) else "0 = off, or 2..1440 minutes"
 
 
+def _pct_ok(v: int) -> str:
+    return "" if 50 <= v <= 99 else "must be between 50 and 99 percent"
+
+
+def _hours_ok(v: int) -> str:
+    return "" if 1 <= v <= 720 else "must be between 1 and 720 hours"
+
+
+def _scan_limit_ok(v: int) -> str:
+    return "" if 20 <= v <= 5000 else "must be between 20 and 5000 rows"
+
+
+def _weight_ok(v: int) -> str:
+    return "" if 1 <= v <= 10 else "must be between 1 and 10"
+
+
+def _lease_ok(v: int) -> str:
+    return "" if 60 <= v <= 86400 else "must be between 60 and 86400 seconds"
+
+
 def _redis_url_ok(v: str) -> str:
     """Empty (SQLite queue) or a redis:// / rediss:// / unix://% URL."""
     s = str(v).strip()
@@ -106,7 +126,23 @@ EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     "download_workers": (int, _gt_one_int, "download workers (applied live)"),
     "upload_workers": (int, _gt_one_int, "upload workers (applied live)"),
     "max_concurrent_downloads": (int, _gt_one_int, "max concurrent downloads per account"),
-    "max_concurrent_uploads": (int, _gt_one_int, "max concurrent uploads"),
+    "max_concurrent_uploads": (int, _gt_one_int, "global concurrent uploads"),
+    "max_concurrent_uploads_per_account": (int, _gt_one_int, "per-account concurrent uploads"),
+    "job_lease_seconds": (int, _lease_ok, "job lease / stale-claim timeout (seconds)"),
+    # size + age aware scheduler
+    "scheduler_small_max_bytes": (int, _positive_int, "small-lane max size (bytes)"),
+    "scheduler_max_wait_s": (int, _non_negative_int, "starvation guard: max wait before promotion (seconds; 0=off)"),
+    "scheduler_scan_limit": (int, _scan_limit_ok, "candidate rows scanned per dispatch"),
+    # admission control / disk safety
+    "max_queue_jobs": (int, _non_negative_int, "max queued+running jobs (0=off)"),
+    "max_inflight_bytes": (int, _non_negative_int, "max queued+running bytes (0=off)"),
+    "disk_watermark_pct": (int, _pct_ok, "reject uploads that leave less free space than this %"),
+    "tmp_retention_hours": (int, _hours_ok, "inactive tmp retention (hours)"),
+    # per-bot / per-account pressure
+    "bot_max_concurrent": (int, _gt_one_int, "per-bot concurrent deliveries"),
+    "bot_max_rpm": (int, _non_negative_int, "per-bot requests/minute (0=off)"),
+    "account_max_rpm": (int, _non_negative_int, "per-account Telegram calls/minute (0=off)"),
+    "premium_weight": (int, _weight_ok, "premium account selection weight"),
     # backend
     "default_backend": (str, _backend_ok, "default storage backend"),
     # eitaa mode
@@ -138,6 +174,10 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "blocked_extensions",
         "thumb_max_px",
         "thumb_quality",
+        "max_queue_jobs",
+        "max_inflight_bytes",
+        "disk_watermark_pct",
+        "tmp_retention_hours",
     ],
     "links": ["presigned_ttl", "upload_session_ttl_minutes", "job_max_retries"],
     "queue": [
@@ -145,10 +185,21 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "upload_workers",
         "max_concurrent_downloads",
         "max_concurrent_uploads",
+        "max_concurrent_uploads_per_account",
+        "job_lease_seconds",
         "upload_stall_threshold_s",
         "fake_send_delay_s",
         "flood_alert_threshold",
         "flood_alert_cooldown_s",
+        "bot_max_concurrent",
+        "bot_max_rpm",
+        "account_max_rpm",
+        "premium_weight",
+    ],
+    "scheduler": [
+        "scheduler_small_max_bytes",
+        "scheduler_max_wait_s",
+        "scheduler_scan_limit",
     ],
     "backend": ["default_backend"],
     "telegram_api": ["fake_tg", "eitaa_mode", "tg_api_id", "tg_api_hash", "tg_storage_chat", "transfer_delete_source"],

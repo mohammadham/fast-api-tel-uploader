@@ -14,6 +14,7 @@ import heapq
 import json
 import logging
 import os
+import shutil
 import socket
 import tempfile
 import time
@@ -26,7 +27,7 @@ from ..core.config import get_settings
 from ..core.db import Database
 from ..core.metrics import metrics
 from ..core.obs import correlation_id as corr_var, job_id as job_var, slog
-from ..core.settings_service import get_runtime
+from ..core.settings_service import get_runtime, runtime_settings
 from ..core.models import (
     AccountRepo,
     BotRepo,
@@ -45,7 +46,8 @@ from ..core.models import (
     now,
 )
 from ..tg.base import FloodWait, SendFailure, TransferError
-from ..tg.manager import TGManager
+from ..tg.manager import NoBackendAvailable, TGManager
+from .scheduler import is_overdue, job_size, lane_for, pick_best
 
 log = logging.getLogger("tgdrive.queue")
 slog_q = slog("tgdrive.queue")
@@ -75,7 +77,10 @@ class QueueManager:
         self.node_id = node_id or os.environ.get("TGDRIVE_NODE_ID") or socket.gethostname()
         self.jobs = JobRepo(db)
         self.files = FileRepo(db)
+        # kept for compatibility with older tooling/tests; the live claim path
+        # no longer uses an in-process heap (one DB-backed path for every engine)
         self._heap: List[Tuple[int, int, str]] = []
+        self._seq_floor: int = 0
         self._rows: Dict[str, Dict[str, Any]] = {}  # job_id → latest row snapshot
         self._wake = asyncio.Event()
         self._paused_kinds: set[str] = set()
@@ -311,51 +316,64 @@ class QueueManager:
             await asyncio.sleep(30)
 
     async def _recover(self) -> None:
-        # Recover from Redis if enabled, otherwise SQLite.
-        # Must _ensure_redis() first: the connection is lazy and self._redis is
-        # still None at this point (startup), so smembers() raised
-        # AttributeError NoneType -> every boot logged "Redis recovery failed".
+        """Load durable jobs and release only leases this node owns/expired.
+
+        The DB is the single source of truth for claiming. Redis is a mirror:
+        stale ``queue:ids`` entries (completed/deleted jobs, or ids missing from
+        the DB) are cleaned instead of being resurrected as phantom pending
+        work. Multi-node restarts must never reset another node's live lease.
+        """
+        rows = await self.db.fetch_all(
+            "SELECT * FROM jobs WHERE status IN ('pending','retry','running','lease')"
+        )
+        db_ids = {str(r["id"]) for r in rows}
         if await self._redis_active():
             try:
                 await self._ensure_redis()
-                if self._redis_ping_done and self._redis is not None:  # None when ping failed
+                if self._redis_ping_done and self._redis is not None:
                     job_ids = await self._redis.smembers("queue:ids")
+                    cleaned = 0
                     for job_id in job_ids:
-                        data = await self._redis.hgetall(f"queue:job:{job_id}")
-                        if not data:
-                            continue
-                        status = data.get("status", "pending")
-                        self._rows[job_id] = {
-                            "id": data.get("id", job_id),
-                            "kind": data.get("kind"),
-                            "priority": int(data.get("priority", 0)),
-                            "seq": int(data.get("seq", 0)),
-                            "correlation_id": data.get("correlation_id", ""),
-                            "status": status,
-                            "payload": data.get("payload", "{}"),
-                            "attempts": int(data.get("attempts", 0)),
-                            "max_retries": int(data.get("max_retries", 5)),
-                        }
-                        heapq.heappush(self._heap, (-self._rows[job_id]["priority"], self._rows[job_id]["seq"], job_id))
-                    log.info("queue recovered %s pending jobs from Redis", len(job_ids))
+                        if str(job_id) not in db_ids:
+                            # job finished, was purged, or never reached the DB
+                            await self._redis.srem("queue:ids", job_id)
+                            await self._redis.delete(f"queue:job:{job_id}")
+                            cleaned += 1
+                    log.info(
+                        "queue redis mirror checked: %s ids, %s stale removed",
+                        len(job_ids), cleaned,
+                    )
             except Exception as e:
-                log.warning("Redis recovery failed, falling back to SQLite: %s", e)
+                log.warning("Redis recovery check failed (DB remains primary): %s", e)
 
-        # Always also recover from SQLite as primary source
-        rows = await self.db.fetch_all(
-            "SELECT * FROM jobs WHERE status IN ('pending','retry','running','lease') ORDER BY priority DESC, seq"
-        )
+        t = now()
+        recovered = 0
         for row in rows:
-            status = "pending" if row["status"] in ("running", "lease") else row["status"]
-            self._rows[row["id"]] = {**row, "status": status}
-            heapq.heappush(self._heap, (-int(row["priority"]), int(row["seq"]), row["id"]))
-            if status != row["status"]:
-                await self.jobs.update_fields(row["id"], status=status, lease_owner="")
-        log.info("queue recovered %s pending jobs (SQLite primary)", len(rows))
+            status = str(row["status"])
+            if status in ("running", "lease"):
+                owner = str(row.get("lease_owner") or "")
+                expired = float(row.get("lease_until") or 0) < t
+                mine = (not owner) or owner.startswith(f"{self.node_id}/")
+                if not (expired or mine):
+                    # another live node owns this job: observe, never re-queue
+                    self._rows[row["id"]] = {**row, "size_bytes": job_size(row)}
+                    continue
+                await self.jobs.update_fields(
+                    row["id"], status="pending", lease_owner="", lease_until=0
+                )
+                row = {**row, "status": "pending", "lease_owner": "", "lease_until": 0}
+            row["size_bytes"] = job_size(row)
+            self._rows[row["id"]] = row
+            recovered += 1
+        log.info("queue recovered %s runnable/observed jobs (DB primary)", recovered)
 
     # ── enqueue / control ──────────────────────────────────────
     async def enqueue(self, kind: str, payload: Dict[str, Any], priority: int, max_retries: Optional[int] = None) -> str:
-        seq = int(time.time() * 1000)  # ms seq keeps FIFO within same priority
+        # Monotonic per-process sequence: several enqueues in the same millisecond
+        # must never share seq (they would fall back to a random job-id tie-break).
+        seq = max(int(time.time() * 1000), self._seq_floor + 1)
+        self._seq_floor = seq
+        size_bytes = job_size({"payload": payload})
         corr = corr_var.get("")  # propagate caller's correlation-id into the job
         job = Job(
             id=new_id("j"),
@@ -380,8 +398,8 @@ class QueueManager:
             "id": job.id, "kind": kind, "priority": priority, "seq": seq, "correlation_id": corr,
             "status": "pending", "payload": json.dumps(payload), "attempts": 0,
             "max_retries": job.max_retries, "next_run_at": 0, "created_at": job.created_at,
+            "size_bytes": size_bytes, "lease_owner": "", "lease_until": 0.0,
         }
-        heapq.heappush(self._heap, (-priority, seq, job.id))
         self._wake.set()
         metrics.inc(f"queue.enqueued.{kind}")
         # Also store in Redis for scaling if enabled (lazy init)
@@ -422,23 +440,100 @@ class QueueManager:
     def unenqueue_deleted_job(self, job_id: str) -> None:
         """Remove a canceled upload's leftover job from the queue + jobs table."""
         self._rows.pop(job_id, None)
-        self._heap = [r for r in self._heap if r[2] != job_id]
-        heapq.heapify(self._heap)
 
     # ── worker loops ───────────────────────────────────────────
+    async def _policy(self) -> Tuple[int, int, int, int]:
+        """(small_max_bytes, max_wait_s, scan_limit, lease_s) from runtime DB."""
+        s = self.settings
+        try:
+            vals = await runtime_settings().get_all(self.db)
+        except Exception:
+            vals = {}
+        small = int(vals.get("scheduler_small_max_bytes") or s.scheduler_small_max_bytes or 0)
+        max_wait = int(vals.get("scheduler_max_wait_s") or s.scheduler_max_wait_s or 0)
+        scan = int(vals.get("scheduler_scan_limit") or s.scheduler_scan_limit or 200)
+        lease = int(vals.get("job_lease_seconds") or s.job_lease_seconds or 1800)
+        return max(0, small), max(0, max_wait), max(20, min(5000, scan)), max(60, lease)
+
+    async def _claim_next(self, worker_kind: str) -> Optional[Dict[str, Any]]:
+        """Claim one job, engine-agnostically, with size/age-aware ordering.
+
+        The candidate window is bounded by scheduler_scan_limit; the final
+        choice is made by app/queue/scheduler.py. The UPDATE is the atomic
+        compare-and-set, so two nodes may scan the same window but only one
+        wins a given job. A lost race retries instead of killing the worker.
+        """
+        while not self._stopped:
+            small, max_wait, scan, lease = await self._policy()
+            conds = [
+                "(status IN ('pending','retry') AND next_run_at <= ?)",
+                "(status IN ('running','lease') AND lease_until < ?)",
+            ]
+            params: List[Any] = [now(), now()]
+            filters: List[str] = []
+            if worker_kind == "upload":
+                filters.append("kind IN (?, ?)")
+                params.extend([KIND_UPLOAD, KIND_TRANSFER])
+            if self._paused_kinds:
+                ph = ",".join("?" for _ in self._paused_kinds)
+                filters.append(f"kind NOT IN ({ph})")
+                params.extend(sorted(self._paused_kinds))
+            if worker_kind == "upload":
+                filters.append("(origin_node = ? OR origin_node = '')")
+                params.append(self.node_id)
+            where = "(" + " OR ".join(conds) + ")"
+            if filters:
+                where += " AND " + " AND ".join(filters)
+            sql = f"SELECT * FROM jobs WHERE {where} ORDER BY priority DESC, seq LIMIT ?"
+            params.append(scan)
+            try:
+                rows = await self.db.fetch_all(sql, params)
+            except Exception as exc:
+                log.warning("job scan failed: %s", exc)
+                rows = []
+            if rows:
+                chosen = pick_best(
+                    rows, now=now(), max_wait_s=max_wait, small_max_bytes=small
+                )
+                if chosen is not None:
+                    owner = f"{self.node_id}/{worker_kind[:2]}"
+                    lease_until = now() + lease
+                    affected = await self.db.execute(
+                        "UPDATE jobs SET status='running', lease_owner=?, lease_until=?, updated_at=?"
+                        " WHERE id=? AND (status IN ('pending','retry')"
+                        " OR (status IN ('running','lease') AND lease_until < ?))",
+                        (owner, lease_until, now(), chosen["id"], now()),
+                    )
+                    if affected:
+                        claimed = {**chosen, "status": "running", "lease_owner": owner, "lease_until": lease_until}
+                        self._rows[chosen["id"]] = claimed
+                        return claimed
+                    continue  # another worker/node won this one
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=0.5)
+            except asyncio.TimeoutError:
+                pass
+            self._wake.clear()
+        return None
+
     async def _worker_loop(self, worker_kind: str, name: str) -> None:
         while not self._stopped:
             if name.startswith("stop-"):
                 return  # worker retired by set_worker_counts
-            if getattr(self.db, "is_mysql", False):
-                row = await self._next_job_mysql(worker_kind)
-            elif not self.db.is_sqlite:
-                row = await self._next_job_pg(worker_kind)
-            else:
-                row = await self._next_job(worker_kind)
-            if row is None:
-                return
-            await self._process(row, name)
+            try:
+                row = await self._claim_next(worker_kind)
+                if row is None:
+                    if self._stopped:
+                        return
+                    await asyncio.sleep(0.2)
+                    continue
+                await self._process(row, name)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # a single broken job/claim must never silently shrink the pool
+                log.exception("worker %s crashed, continuing: %s", name, exc)
+                await asyncio.sleep(1.0)
 
     async def _next_job_pg(self, worker_kind: str) -> Optional[Dict[str, Any]]:
         """Multi-node claim path: atomic SKIP-LOCKED-style UPDATE ... RETURNING.
@@ -457,24 +552,25 @@ class QueueManager:
                 "(status IN ('running','lease') AND lease_until < ?)",
             ]
             params: List[Any] = [now(), now()]
+            # Hard filters: AND'ed, never OR'ed — an OR-joined kind filter
+            # would make the WHERE unconditional and re-claim finished jobs.
+            filters: List[str] = []
             if worker_kind == "upload":
                 # uploads + transfers share the upload worker pool (same
                 # telegram pressure profile)
-                conds.append("kind IN (?, ?)")
+                filters.append("kind IN (?, ?)")
                 params.extend([KIND_UPLOAD, KIND_TRANSFER])
-            else:
-                conds.append("kind != ?")
-                params.append("__none__")
             if self._paused_kinds:
                 ph = ",".join("?" for _ in self._paused_kinds)
-                conds.append(f"kind NOT IN ({ph})")
+                filters.append(f"kind NOT IN ({ph})")
                 params.extend(sorted(self._paused_kinds))
             if prefix == "ul":
-                conds.append("(origin_node = ? OR origin_node = '')")
+                filters.append("(origin_node = ? OR origin_node = '')")
                 params.append(self.node_id)
+            where = " OR ".join(conds) + (" AND " + " AND ".join(filters) if filters else "")
             sql = (
                 "UPDATE jobs SET status='running', lease_owner=?, lease_until=?, updated_at=?"
-                " WHERE id = (SELECT id FROM jobs WHERE " + " OR ".join(conds) +
+                " WHERE id = (SELECT id FROM jobs WHERE " + where +
                 " ORDER BY priority DESC, seq LIMIT 1)"
                 " RETURNING *"
             )
@@ -512,23 +608,24 @@ class QueueManager:
                 "(status IN ('running','lease') AND lease_until < ?)",
             ]
             params: List[Any] = [now(), now()]
+            # Hard filters: AND'ed, never OR'ed — an OR-joined kind filter
+            # would make the WHERE unconditional and re-claim finished jobs.
+            filters: List[str] = []
             if worker_kind == "upload":
                 # uploads + transfers share the upload worker pool (same
                 # telegram pressure profile)
-                conds.append("kind IN (?, ?)")
+                filters.append("kind IN (?, ?)")
                 params.extend([KIND_UPLOAD, KIND_TRANSFER])
-            else:
-                conds.append("kind != ?")
-                params.append("__none__")
             if self._paused_kinds:
                 ph = ",".join("?" for _ in self._paused_kinds)
-                conds.append(f"kind NOT IN ({ph})")
+                filters.append(f"kind NOT IN ({ph})")
                 params.extend(sorted(self._paused_kinds))
             if prefix == "ul":
-                conds.append("(origin_node = ? OR origin_node = '')")
+                filters.append("(origin_node = ? OR origin_node = '')")
                 params.append(self.node_id)
+            where = " OR ".join(conds) + (" AND " + " AND ".join(filters) if filters else "")
             select_sql = (
-                "SELECT * FROM jobs WHERE " + " OR ".join(conds) +
+                "SELECT * FROM jobs WHERE " + where +
                 " ORDER BY priority DESC, seq LIMIT 1" + lock
             )
             update_sql = (
@@ -745,7 +842,22 @@ class QueueManager:
                 else:
                     raise TransferError(f"unknown job kind {kind}")
             except FloodWait as exc:
-                await self._retry(job_id, row, f"flood wait {exc.seconds}s", delay=min(exc.seconds, RETRY_MAX_DELAY))
+                # Telegram told us exactly how long to wait: honour the full
+                # delay and do NOT consume a retry attempt while waiting.
+                await self._retry(
+                    job_id, row, f"flood wait {exc.seconds}s",
+                    delay=exc.seconds, consume_attempt=False,
+                )
+            except NoBackendAvailable as exc:
+                if getattr(exc, "retryable", True):
+                    await self._defer(
+                        job_id, row, f"backend unavailable: {exc}",
+                        getattr(exc, "retry_after", 15.0),
+                    )
+                else:
+                    # Configuration gap (e.g. eitaa key with no eitaa account):
+                    # retry with backoff, then fail the file visibly.
+                    await self._retry(job_id, row, str(exc))
             except (SendFailure, TransferError) as exc:
                 slog_q.warning("job failed, retrying", kind=kind, error=str(exc)[:300], attempt=row.get("attempts", 0) + 1)
                 await self._retry(job_id, row, str(exc))
@@ -779,11 +891,18 @@ class QueueManager:
             job_var.reset(token)
             corr_var.reset(corr_token)
 
-    async def _retry(self, job_id: str, row: Dict[str, Any], error: str, delay: Optional[float] = None) -> None:
-        attempts = int(row.get("attempts", 0)) + 1
+    async def _retry(
+        self,
+        job_id: str,
+        row: Dict[str, Any],
+        error: str,
+        delay: Optional[float] = None,
+        consume_attempt: bool = True,
+    ) -> None:
+        attempts = int(row.get("attempts", 0)) + (1 if consume_attempt else 0)
         kind = row["kind"]
         payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else {}
-        if attempts > int(row.get("max_retries", 5)):
+        if consume_attempt and attempts > int(row.get("max_retries", 5)):
             await self.jobs.update_fields(job_id, status="failed", error=error[:500], finished_at=now(), attempts=attempts)
             if kind == KIND_UPLOAD and payload.get("file_id"):
                 await self.files.set_status(payload["file_id"], "failed", error)
@@ -797,19 +916,36 @@ class QueueManager:
             except Exception:
                 pass
             return
-        d = RETRY_BASE_DELAY * (2 ** (attempts - 1)) if delay is None else max(0.5, delay)
-        d = min(d, RETRY_MAX_DELAY)
+        if delay is None:
+            d = min(RETRY_BASE_DELAY * (2 ** max(0, attempts - 1)), RETRY_MAX_DELAY)
+        else:
+            d = max(0.5, float(delay))
+            if consume_attempt:  # transient errors keep the exponential cap
+                d = min(d, RETRY_MAX_DELAY)
         await self.jobs.update_fields(
-            job_id, status="retry", attempts=attempts, error=error[:500], next_run_at=now() + d, lease_owner=""
+            job_id, status="retry", attempts=attempts, error=error[:500],
+            next_run_at=now() + d, lease_owner="", lease_until=0,
         )
         refreshed = await self.jobs.fetch(job_id)
         if refreshed:
+            refreshed["size_bytes"] = job_size(refreshed)
             self._rows[job_id] = refreshed
-            heapq.heappush(self._heap, (-int(refreshed["priority"]), int(refreshed["seq"]), job_id))
-        metrics.inc("queue.retries")
+        metrics.inc("queue.retries" if consume_attempt else "queue.deferred")
         self._wake.set()
 
+    async def _defer(self, job_id: str, row: Dict[str, Any], error: str, delay: float) -> None:
+        """Wait for a backend/flood without burning an attempt."""
+        await self._retry(job_id, row, error, delay=delay, consume_attempt=False)
+
     # ── upload handler ─────────────────────────────────────────
+    async def _record_digest(self, file_id: str, tmp_path: str) -> None:
+        """Digest the source before status=ready so pollers never see an empty hash."""
+        try:
+            digest = await asyncio.to_thread(sha256_file, tmp_path)
+            await self.files.set_sha256(file_id, digest)
+        except Exception as exc:  # never fail a stored upload over a digest
+            slog_q.warning("sha256 not stored", file_id=file_id, error=str(exc)[:120])
+
     async def _handle_upload(self, payload: Dict[str, Any], job_id: str) -> None:
         from ..core.security import decrypt_str
 
@@ -818,6 +954,24 @@ class QueueManager:
         if not rec:
             raise TransferError(f"file {file_id} missing")
         tmp_path = payload.get("tmp_path", "")
+        # Idempotent retry: if a previous attempt already stored every part but
+        # crashed before marking the file ready, finish the bookkeeping instead
+        # of sending the whole file again to (possibly) another account.
+        existing_parts = await self.files.parts(file_id)
+        stored_bytes = sum(int(p.get("size") or 0) for p in existing_parts)
+        if existing_parts and stored_bytes >= int(rec.get("size") or 0):
+            ids = [int(p["message_id"]) for p in existing_parts]
+            await self._record_digest(file_id, tmp_path)
+            await self.files.set_stored(file_id, rec.get("storage_chat") or "", ids, len(ids))
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            slog_q.info("upload completed from existing parts", file_id=file_id, parts=len(ids))
+            return
+        if existing_parts and rec.get("status") != "ready":
+            # partial previous attempt: sequence/idx would collide with the fresh send
+            await self.db.execute("DELETE FROM file_parts WHERE file_id=?", (file_id,))
         await self._maybe_store_thumb(rec, tmp_path)
 
         # ── resumable resume: continue from the upload session's stored offset ──
@@ -909,7 +1063,7 @@ class QueueManager:
         finally:
             self._gate_waiters.pop(job_id, None)
         try:
-            borrowed = await self.manager.acquire("acc", backend=backend)
+            borrowed = await self.manager.acquire("acc", backend=backend, direction="upload")
             async with borrowed as be:
                 account_key = borrowed.key
                 self._last_backend_by_job[job_id] = borrowed.key
@@ -933,27 +1087,32 @@ class QueueManager:
                             except OSError:
                                 pass
                 else:
-                    # plain upload: stream from tmp_path at resumed_offset (0 = fresh)
+                    # Telethon's send_file has no byte-offset resume; a full send
+                    # is honest and correct. Advancing the session prevents a
+                    # later retry from claiming a bogus partial offset.
                     if resumed_offset:
-                        with open(tmp_path, "rb") as fh:
-                            fh.seek(resumed_offset)
-                            await self._send_streaming(be, storage_chat, tmp_path, name, mime, folder_tag, fh, file_id, message_ids, resumed_offset)
-                    else:
-                        result = await be.send_document(storage_chat, tmp_path, name, mime, caption=folder_tag)
-                        message_ids.append(int(result["message_id"]))
-                        await self.files.add_part(file_id, 0, int(result["message_id"]), int(result["size"]))
+                        slog_q.warning(
+                            "upload resume requested but backend sends full file",
+                            file_id=file_id, requested_offset=resumed_offset,
+                        )
+                    result = await be.send_document(storage_chat, tmp_path, name, mime, caption=folder_tag)
+                    message_ids.append(int(result["message_id"]))
+                    await self.files.add_part(file_id, 0, int(result["message_id"]), int(result["size"]))
+                    if session_id:
+                        try:
+                            from ..core.models import UploadSessionRepo
+
+                            await UploadSessionRepo(self.db).advance(session_id, size)
+                        except Exception:
+                            pass
         finally:
             gate.release()
 
+        # Content digest of the WHOLE source file, written before status=ready.
+        # tmp_path is still intact here and always holds every byte (a resumed
+        # upload only affects what was *sent*), so one sequential read is enough.
+        await self._record_digest(file_id, tmp_path)
         await self.files.set_stored(file_id, storage_chat, message_ids, len(message_ids))
-        # Content digest of the WHOLE source file. tmp_path is still intact here and
-        # always holds every byte (a resumed upload only affects what was *sent*), so
-        # one sequential read is enough — no per-part or per-chunk state to merge.
-        try:
-            digest = await asyncio.to_thread(sha256_file, tmp_path)
-            await self.files.set_sha256(file_id, digest)
-        except Exception as exc:  # never fail a stored upload over a digest
-            slog_q.warning("sha256 not stored", file_id=file_id, error=str(exc)[:120])
         try:
             os.remove(tmp_path)
         except OSError:
@@ -1015,7 +1174,7 @@ class QueueManager:
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(thumb.data)
-            borrowed = await self.manager.acquire("acc")
+            borrowed = await self.manager.acquire("acc", direction="upload")
             async with borrowed as backend:
                 storage_chat = getattr(backend, "storage_chat", "me")
                 name = f"thumb_{rec['id']}{thumb.ext}"
@@ -1122,29 +1281,45 @@ class QueueManager:
         if not deliver.get("bot"):
             raise TransferError("download job without delivery target")
 
+        job_id = str(payload.get("__job_id") or "")
         os.makedirs(get_settings().final_tmp_dir(), exist_ok=True)
-        tmp = f"{get_settings().final_tmp_dir()}/{file_id}.out"
-        parts = await self.files.parts(file_id)
-        total = 0
-        borrowed = await self.manager.acquire("acc", backend=rec.get("backend") or "telegram")
-        async with borrowed as backend:
-            account_key = borrowed.key
-            self._last_backend_by_job[payload.get("__job_id", "")] = borrowed.key
-            chat = rec["storage_chat"] or getattr(backend, "storage_chat", "me")
-            with open(tmp, "wb") as fh:
-                for part in parts:
-                    async for chunk in backend.iter_file(
-                        part["message_id"], chat, start=0, end=None, size=part["size"]
-                    ):
-                        fh.write(chunk)
-                        total += len(chunk)
+        tmp = str(payload.get("downloaded_path") or f"{get_settings().final_tmp_dir()}/{file_id}.out")
+        total = int(rec.get("size") or 0)
+        account_key = ""
+        if not (payload.get("downloaded_path") and os.path.exists(tmp)):
+            parts = await self.files.parts(file_id)
+            total = 0
+            borrowed = await self.manager.acquire(
+                "acc", backend=rec.get("backend") or "telegram", direction="download"
+            )
+            async with borrowed as backend:
+                account_key = borrowed.key
+                self._last_backend_by_job[job_id] = borrowed.key
+                chat = rec["storage_chat"] or getattr(backend, "storage_chat", "me")
+                with open(tmp, "wb") as fh:
+                    for part in parts:
+                        async for chunk in backend.iter_file(
+                            part["message_id"], chat, start=0, end=None, size=part["size"]
+                        ):
+                            fh.write(chunk)
+                            total += len(chunk)
+            # Keep the download for delivery retries: a bot 429 must not force a
+            # second multi-GB transfer from Telegram.
+            payload["downloaded_path"] = tmp
+            if job_id:
+                try:
+                    await self.jobs.update_payload(job_id, payload)
+                except Exception:
+                    pass
         try:
             await self.bot_service.deliver_download(deliver["bot"], deliver["chat_id"], tmp, rec["name"])
-        finally:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+        except Exception:
+            # leave tmp in place; _retry reuses downloaded_path
+            raise
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
         await self.files.count_download(file_id, total)
         metrics.inc("download.bytes", total)
         slog_q.info("bot download complete", file_id=file_id, bytes=total, account=account_key)
@@ -1157,7 +1332,9 @@ class QueueManager:
             return
         parts = await self.files.parts(file_id)
         if parts:
-            borrowed = await self.manager.acquire("acc", backend=rec.get("backend") or "telegram")
+            borrowed = await self.manager.acquire(
+                "acc", backend=rec.get("backend") or "telegram", direction="control"
+            )
             async with borrowed as backend:
                 self._last_backend_by_job[payload.get("__job_id", "")] = borrowed.key
                 chat = rec["storage_chat"] or getattr(backend, "storage_chat", "me")
@@ -1203,7 +1380,9 @@ class QueueManager:
             folder_path = ""
         tags = " ".join("#" + p.strip().replace(" ", "_") for p in folder_path.split("/") if p.strip())
 
-        borrowed = await self.manager.acquire("acc", backend=rec.get("backend") or "telegram")
+        borrowed = await self.manager.acquire(
+            "acc", backend=rec.get("backend") or "telegram", direction="upload"
+        )
         new_ids: List[int] = []
         job_id = payload.get("__job_id", "")
         job_row = await self.jobs.fetch(job_id) if job_id else None
@@ -1331,11 +1510,65 @@ class QueueManager:
             if k.startswith(("acc:", "eit:")) and v > t
         ]
 
+    async def admit(self, size_bytes: int) -> Tuple[bool, int, str]:
+        """Admission control before an upload is written to disk.
+
+        Returns ``(ok, retry_after_s, reason)``. The DB count/sum is intentionally
+        simple: the queue is bounded by max_queue_jobs in normal operation, and
+        this check runs once per upload request, not per worker tick.
+        """
+        s = self.settings
+        try:
+            vals = await runtime_settings().get_all(self.db)
+        except Exception:
+            vals = {}
+        max_jobs = int(vals.get("max_queue_jobs") or s.max_queue_jobs or 0)
+        max_bytes = int(vals.get("max_inflight_bytes") or s.max_inflight_bytes or 0)
+        pct = int(vals.get("disk_watermark_pct") or s.disk_watermark_pct or 90)
+        active = "status IN ('pending','retry','running')"
+        if max_jobs > 0:
+            n = int(await self.db.scalar(f"SELECT COUNT(*) FROM jobs WHERE {active}") or 0)
+            if n >= max_jobs:
+                return False, 30, f"queue full ({n}/{max_jobs})"
+        if max_bytes > 0:
+            rows = await self.db.fetch_all(f"SELECT payload FROM jobs WHERE {active}")
+            total = sum(job_size(r) for r in rows)
+            if total + max(0, size_bytes) > max_bytes:
+                return False, 30, f"in-flight bytes limit ({total}/{max_bytes})"
+        if size_bytes >= 16 * 1024 * 1024:
+            # Small writes cannot move a percentage watermark; rejecting a 2KB
+            # file because the disk is at 91% is operationally pointless and
+            # makes a healthy app look broken near the threshold. Large writes
+            # still get hard backpressure.
+            try:
+                os.makedirs(s.final_tmp_dir(), exist_ok=True)
+                usage = shutil.disk_usage(s.final_tmp_dir())
+                if (usage.free - size_bytes) < usage.total * (pct / 100.0):
+                    return False, 60, f"disk watermark ({pct}% free required)"
+            except OSError:
+                pass
+        return True, 0, ""
+
     async def stats(self) -> Dict[str, Any]:
         base = await self.jobs.stats()
         base["paused"] = self.paused()
-        base["heap_size"] = len(self._heap)
-        # admin-visibility extras: upload-queue stall + flooded backends
+        base["heap_size"] = 0  # one DB-backed claim path; kept for panel compatibility
         base["stall"] = await self._stall_info()
         base["flooded"] = self._flooded_backends()
+        t = now()
+        small, max_wait, scan, _lease = await self._policy()
+        pending = [r for r in self._rows.values() if r.get("status") in ("pending", "retry")]
+        lanes: Dict[str, int] = {}
+        for r in pending:
+            lane = lane_for(r, small)
+            lanes[lane] = lanes.get(lane, 0) + 1
+        base["lanes"] = lanes
+        base["oldest_pending_s"] = round(
+            max([t - float(r.get("created_at") or t) for r in pending], default=0.0), 1
+        )
+        base["overdue"] = sum(1 for r in pending if is_overdue(r, now=t, max_wait_s=max_wait))
+        base["workers_alive"] = len([w for w in self._workers if not w.done()])
+        base["scheduler"] = {
+            "small_max_bytes": small, "max_wait_s": max_wait, "scan_limit": scan,
+        }
         return base
