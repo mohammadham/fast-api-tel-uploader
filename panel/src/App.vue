@@ -503,10 +503,14 @@
         </div>
         <div class="card wide">
           <table>
-            <thead><tr><th>شناسه</th><th>نوع</th><th>اولویت</th><th>وضعیت</th><th>تلاش</th><th>خطا</th><th>عملیات</th></tr></thead>
+            <thead><tr><th>شناسه</th><th>نوع</th><th>لِین</th><th>حجم</th><th>انتظار</th><th>اولویت</th><th>وضعیت</th><th>تلاش</th><th>خطا</th><th>عملیات</th></tr></thead>
             <tbody>
               <tr v-for="j in jobs" :key="j.id">
-                <td dir="ltr"><code>{{ j.id }}</code></td><td>{{ j.kind }}</td><td>{{ j.priority }}</td>
+                <td dir="ltr"><code>{{ j.id }}</code></td><td>{{ j.kind }}</td>
+                <td><span class="badge">{{ j.lane || '—' }}</span></td>
+                <td>{{ j.size_bytes ? fmtBytes(j.size_bytes) : '—' }}</td>
+                <td>{{ j.wait_s ? Math.round(j.wait_s) + 's' : '—' }}</td>
+                <td>{{ j.priority }}</td>
                 <td><span class="badge" :class="j.status">{{ j.status }}</span></td>
                 <td>{{ j.attempts }}</td><td class="muted">{{ j.error }}</td>
                 <td>
@@ -517,7 +521,7 @@
                   <template v-else><span class="muted" style="font-size:12px">—</span></template>
                 </td>
               </tr>
-              <tr v-if="!jobs.length"><td colspan="7" class="muted">جابی نیست</td></tr>
+              <tr v-if="!jobs.length"><td colspan="10" class="muted">جابی نیست</td></tr>
             </tbody>
           </table>
         </div>
@@ -1996,8 +2000,13 @@ const doLogin = submitLogin;
           return "عدد وارد کنید";
         if (!Number.isInteger(Number(value))) return "عدد صحیح وارد کنید";
         if (Number(value) < 0) return "باید ≥ 0 باشد";
-        const mustBePositive = ["max_upload_size", "split_threshold", "default_key_rpm", "presigned_ttl", "upload_session_ttl_minutes", "download_workers", "upload_workers", "max_concurrent_downloads", "max_concurrent_uploads"];
+        const mustBePositive = ["max_upload_size", "split_threshold", "default_key_rpm", "presigned_ttl", "upload_session_ttl_minutes", "download_workers", "upload_workers", "max_concurrent_downloads", "max_concurrent_uploads", "max_concurrent_uploads_per_account", "scheduler_small_max_bytes", "job_lease_seconds", "bot_max_concurrent"];
         if (mustBePositive.includes(it.key) && Number(value) < 1) return "باید ≥ 1 باشد";
+        if (it.key === "disk_watermark_pct") { const n = Number(value); if (!(n >= 50 && n <= 99)) return "بین ۵۰ تا ۹۹ درصد"; }
+        if (it.key === "scheduler_scan_limit") { const n = Number(value); if (!(n >= 20 && n <= 5000)) return "بین ۲۰ تا ۵۰۰۰"; }
+        if (it.key === "premium_weight") { const n = Number(value); if (!(n >= 1 && n <= 10)) return "بین ۱ تا ۱۰"; }
+        if (it.key === "tmp_retention_hours") { const n = Number(value); if (!(n >= 1 && n <= 720)) return "بین ۱ تا ۷۲۰ ساعت"; }
+        if (it.key === "job_lease_seconds") { const n = Number(value); if (!(n >= 60 && n <= 86400)) return "بین ۶۰ تا ۸۶۴۰۰ ثانیه"; }
         if (it.key === "thumb_max_px") { const n = Number(value); if (!(n >= 64 && n <= 1280)) return "بین ۶۴ تا ۱۲۸۰ پیکسل"; }
         if (it.key === "thumb_quality") { const n = Number(value); if (!(n >= 40 && n <= 95)) return "بین ۴۰ تا ۹۵"; }
       } else if (it.key === "default_backend") {
@@ -2048,6 +2057,19 @@ const doLogin = submitLogin;
       upload_workers: "ورکرهای آپلود",
       max_concurrent_downloads: "دانلود همزمان هر اکانت",
       max_concurrent_uploads: "سقف آپلود همزمان کل سیستم (فشار روی بک‌اندها)",
+      max_concurrent_uploads_per_account: "آپلود همزمان هر اکانت",
+      job_lease_seconds: "مهلت lease جاب (ثانیه)",
+      scheduler_small_max_bytes: "سقف حجم لِین کوچک (بایت)",
+      scheduler_max_wait_s: "حداکثر انتظار قبل از ارتقای اولویت (ثانیه؛ ۰=خاموش)",
+      scheduler_scan_limit: "تعداد کاندید بررسی‌شده در هر تخصیص",
+      max_queue_jobs: "حداکثر جاب در صف (۰=بی‌نهایت)",
+      max_inflight_bytes: "حداکثر بایت در صف/اجرا (۰=بی‌نهایت)",
+      disk_watermark_pct: "حداقل فضای آزاد دیسک (درصد)",
+      tmp_retention_hours: "نگهداری فایل‌های tmp غیرفعال (ساعت)",
+      bot_max_concurrent: "ارسال همزمان هر ربات",
+      bot_max_rpm: "سقف درخواست هر ربات در دقیقه (۰=خاموش)",
+      account_max_rpm: "سقف درخواست تلگرام هر اکانت در دقیقه (۰=خاموش)",
+      premium_weight: "وزن انتخاب اکانت پریمیوم",
       upload_stall_threshold_s: "آستانه هشدار معطلی صف آپلود (ثانیه؛ ۰=خاموش)",
       flood_alert_threshold: "تعداد FloodWait پشت‌سرهم تا هشدار فشار تلگرام",
       flood_alert_cooldown_s: "فاصله تکرار هشدار فشار (ثانیه)",
@@ -2066,7 +2088,7 @@ const doLogin = submitLogin;
       redis_url: "URL ردیس برای صف (redis://host:port/db — خالی = SQLite)",
     };
     const settingsGroups = computed(() => {
-      const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", backend: "بک‌اند", telegram_api: "تلگرام و ایتا — حالت تست و API", proxy: "پراکسی تلگرام", redis: "ردیس (صف توزیع‌شده — بدون ری‌استارت)" };
+      const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", scheduler: "زمان‌بندی اندازه/قدمت", backend: "بک‌اند", telegram_api: "تلگرام و ایتا — حالت تست و API", proxy: "پراکسی تلگرام", redis: "ردیس (صف توزیع‌شده — بدون ری‌استارت)" };
       const out = [];
       for (const [gid, title] of Object.entries(g)) {
         out.push({ id: gid, title, items: settingsItems.value.filter((x) => x.group === gid) });
