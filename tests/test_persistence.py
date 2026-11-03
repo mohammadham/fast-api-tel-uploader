@@ -29,9 +29,9 @@ async def test_jobs_recovered_after_restart(client, api_key):
     assert rows, "job row missing"
     assert rows[0]["status"] in ("pending", "retry", "running")
 
-    # the recovered heap must contain the job
-    heap_ids = [jid for _, _, jid in queue2._heap]
-    assert job_id in heap_ids
+    # recovery is DB-backed: the next claim must return the recovered job
+    picked = await queue2._claim_next("upload")
+    assert picked and picked["id"] == job_id
 
     queue2._stopped = True  # don't actually run workers in test
     queue.resume("upload")

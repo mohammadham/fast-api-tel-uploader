@@ -16,9 +16,9 @@ async def test_janitor_deletes_stale_tmp_files(client, db):
     os.makedirs(tmp, exist_ok=True)
 
     now = time.time()
-    stale_ts = now - 7200
+    stale_ts = now - 25 * 3600
 
-    # a stale draft file (mtime > 1h old) AND a recent draft file (mtime < 1h)
+    # a stale draft file (mtime > 24h old) AND a recent draft file
     stale_path = os.path.join(tmp, f"stale_{int(stale_ts)}.tmp")
     fresh_path = os.path.join(tmp, f"fresh_{int(now)}.tmp")
     open(stale_path, "wb").write(b"stale")
@@ -92,11 +92,11 @@ async def test_janitor_keeps_recent_tmp_files(client, db):
     os.makedirs(tmp, exist_ok=True)
 
     now = time.time()
-    stale = now - 7200
+    stale = now - 25 * 3600
     fresh = now - 60
     fresh2 = now
 
-    # all three files below the 1h cutoff boundary
+    # all three files around the 24h retention boundary
     a = os.path.join(tmp, f"a_{int(stale)}.bin")
     b = os.path.join(tmp, f"b_{int(fresh)}.bin")
     c = os.path.join(tmp, f"c_{int(fresh2)}.bin")
@@ -104,12 +104,12 @@ async def test_janitor_keeps_recent_tmp_files(client, db):
         open(p, "wb").write(b"x")
         os.utime(p, (time.time(), time.time()))
 
-    # nudge a and c into the past (older than 1h), b stays very recent
+    # nudge a and c into the past (older than 24h), b stays very recent
     os.utime(a, (stale, stale))
     os.utime(c, (stale, stale))
 
     await Janitor(db)._sweep()
 
-    assert not os.path.exists(a)  # older than 1h -> gone
-    assert not os.path.exists(c)  # older than 1h -> gone
-    assert os.path.exists(b)      # younger than 1h -> kept
+    assert not os.path.exists(a)  # older than 24h -> gone
+    assert not os.path.exists(c)  # older than 24h -> gone
+    assert os.path.exists(b)      # recent -> kept
