@@ -15,6 +15,7 @@ from ..core.db import Database
 from ..core.models import FileRepo, now
 from ..tg.base import BackendClient, TransferError
 from ..tg.manager import TGManager
+from .stream_limits import streams
 
 
 def _tmp_dir() -> str:
@@ -108,6 +109,7 @@ async def file_response(
     head_only: bool = False,
     range_start: Optional[int] = None,
     inline: bool = False,
+    stream_key: str = "",
 ) -> "typing.Any":
     """Build a Starlette StreamingResponse with Range/206 handling.
 
@@ -116,7 +118,7 @@ async def file_response(
     ``inline=True`` serves browser-previewable media without the download
     attachment header (image/video/audio/pdf preview in the panel).
     """
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import JSONResponse, StreamingResponse
 
     total = int(rec["size"])
     start, end = 0, total - 1
@@ -150,6 +152,17 @@ async def file_response(
 
         return Response(status_code=status, headers=headers, media_type=mime)
 
+    stream_acquired = False
+    if stream_key:
+        cap, retry_after = await _stream_policy(db)
+        if not await streams.acquire(stream_key, cap):
+            return JSONResponse(
+                {"detail": "too many concurrent streams for this key"},
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+            )
+        stream_acquired = True
+
     # Borrow the backend eagerly (must not await inside the response generator);
     # released after the response completes via the background task.
     from ..tg.base import TransferError
@@ -158,8 +171,8 @@ async def file_response(
             "acc", backend=rec.get("backend") or "telegram", direction="download"
         )
     except Exception as exc:
-        from fastapi.responses import JSONResponse
-
+        if stream_acquired:
+            streams.release(stream_key)
         return JSONResponse({"detail": f"storage unavailable: {exc}"}, status_code=503)
     backend = borrowed.backend
     chat = storage_chat or getattr(backend, "storage_chat", "me")
@@ -186,9 +199,32 @@ async def file_response(
             yield b""
             raise
 
+    headers["X-Accel-Buffering"] = "no"
     resp = StreamingResponse(gen(), status_code=status, media_type=mime, headers=headers)
-    resp.background = _ReleaseAndCount(manager, borrowed.key, db, file_id)
+    resp.background = _ReleaseAndCount(
+        manager, borrowed.key, db, file_id,
+        stream_key=stream_key if stream_acquired else "",
+    )
     return resp
+
+
+async def _stream_policy(db: Database) -> Tuple[int, int]:
+    """Runtime (per-key cap, Retry-After) with env defaults."""
+    from ..core.config import get_settings
+    from ..core.settings_service import get_runtime
+
+    s = get_settings()
+    cap = max(1, int(s.stream_max_per_key or 1))
+    retry = max(1, int(s.stream_retry_after_s or 5))
+    try:
+        cap = max(1, int(await get_runtime(db, "stream_max_per_key") or cap))
+    except Exception:
+        pass
+    try:
+        retry = max(1, int(await get_runtime(db, "stream_retry_after_s") or retry))
+    except Exception:
+        pass
+    return min(cap, 32), min(retry, 300)
 
 
 def _416(total: int) -> "typing.Any":
@@ -215,10 +251,13 @@ class _ZipBackground:
     """After a bulk-zip response completes: release the borrowed backend,
     unlink the temp file, and swallow client-abort errors quietly."""
 
-    def __init__(self, manager: TGManager, key: str, tmp_path: Optional[str]) -> None:
+    def __init__(
+        self, manager: TGManager, key: str, tmp_path: Optional[str], stream_key: str = ""
+    ) -> None:
         self.manager = manager
         self.key = key
         self.tmp_path = tmp_path
+        self.stream_key = stream_key
         self.error: Optional[BaseException] = None
 
     async def __call__(self) -> None:
@@ -226,6 +265,8 @@ class _ZipBackground:
             await self.manager.release(self.key, self.error)
         except Exception:
             pass
+        if self.stream_key:
+            streams.release(self.stream_key)
         if self.tmp_path:
             try:
                 os.remove(self.tmp_path)
@@ -238,6 +279,7 @@ async def zip_stream_response(
     db: Database,
     manager: TGManager,
     files: list,
+    stream_key: str = "",
 ) -> "typing.Any":
     """Stream several stored files as one temporary zip archive.
 
@@ -255,12 +297,28 @@ async def zip_stream_response(
     import struct
     import zipfile
 
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import JSONResponse, StreamingResponse
+
+    stream_acquired = False
+    if stream_key:
+        cap, retry_after = await _stream_policy(db)
+        if not await streams.acquire(stream_key, cap):
+            return JSONResponse(
+                {"detail": "too many concurrent zip streams"},
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+            )
+        stream_acquired = True
 
     # one backend for the whole archive (uploads/other jobs queue behind it)
-    borrowed = await manager.acquire(
-        "acc", backend=files[0].get("backend") or "telegram", direction="download"
-    )
+    try:
+        borrowed = await manager.acquire(
+            "acc", backend=files[0].get("backend") or "telegram", direction="download"
+        )
+    except Exception:
+        if stream_acquired:
+            streams.release(stream_key)
+        raise
     backend = borrowed.backend
     chat = files[0]["storage_chat"] or getattr(backend, "storage_chat", "me")
     tmp_dir = _tmp_dir()
@@ -362,13 +420,18 @@ async def zip_stream_response(
             bg.error = exc
             raise
 
-    bg = _ZipBackground(manager, borrowed.key, None)
+    bg = _ZipBackground(
+        manager, borrowed.key, None, stream_key=stream_key if stream_acquired else ""
+    )
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     resp = StreamingResponse(
         gen(),
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="tgdrive-{stamp}.zip"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="tgdrive-{stamp}.zip"',
+            "X-Accel-Buffering": "no",
+        },
     )
     resp.background = bg
     return resp
@@ -393,11 +456,14 @@ class _ReleaseAndCount:
     runs ``__call__`` once the response is fully sent (or the client goes away).
     """
 
-    def __init__(self, manager: TGManager, key: str, db: Database, file_id: str) -> None:
+    def __init__(
+        self, manager: TGManager, key: str, db: Database, file_id: str, stream_key: str = ""
+    ) -> None:
         self.manager = manager
         self.key = key
         self.db = db
         self.file_id = file_id
+        self.stream_key = stream_key
         self.bytes_sent = 0
         self.error: Optional[BaseException] = None
 
@@ -413,3 +479,5 @@ class _ReleaseAndCount:
                 await self.manager.note_bytes(self.key, served)
         except Exception:
             pass
+        if self.stream_key:
+            streams.release(self.stream_key)

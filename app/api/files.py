@@ -426,6 +426,7 @@ async def preview_file(
         mime=rec["mime"] or "application/octet-stream",
         head_only=request.method == "HEAD",
         inline=True,
+        stream_key=f"key:{key['id']}",
     )
 
 
@@ -520,7 +521,9 @@ async def bulk_zip_stream(ids: str, exp: int, sig: str, request: Request, db=Dep
     if not files:
         raise HTTPException(status_code=404, detail="no downloadable files")
 
-    return await zip_stream_response(db=db, manager=state.manager, files=files)
+    return await zip_stream_response(
+        db=db, manager=state.manager, files=files, stream_key="zip:public"
+    )
 
 
 @router.get("/{file_id}")
@@ -593,8 +596,10 @@ async def download_content(
         filename=rec["name"],
         mime=rec["mime"] or "application/octet-stream",
         head_only=request.method == "HEAD",
+        stream_key=f"key:{key['id']}",
     )
-    quota.add(f"key:{key['id']}", int(rec["size"]))
+    if int(getattr(resp, "status_code", 200)) < 400:
+        quota.add(f"key:{key['id']}", int(rec["size"]))
     return resp
 
 
@@ -724,6 +729,7 @@ async def public_download(file_id: str, request: Request, db=Depends(get_db)):
         filename=rec["name"],
         mime=rec["mime"] or "application/octet-stream",
         head_only=request.method == "HEAD",
+        stream_key=f"dl:{file_id}",
     )
 
 
@@ -829,6 +835,7 @@ async def slug_download(slug: str, request: Request, db=Depends(get_db)):
         filename=rec["name"],
         mime=rec["mime"] or "application/octet-stream",
         head_only=request.method == "HEAD",
+        stream_key=f"link:{link['id']}",
     )
 
 

@@ -75,6 +75,14 @@ def _lease_ok(v: int) -> str:
     return "" if 60 <= v <= 86400 else "must be between 60 and 86400 seconds"
 
 
+def _stream_cap_ok(v: int) -> str:
+    return "" if 1 <= v <= 32 else "must be between 1 and 32 streams"
+
+
+def _retry_after_ok(v: int) -> str:
+    return "" if 1 <= v <= 300 else "must be between 1 and 300 seconds"
+
+
 def _redis_url_ok(v: str) -> str:
     """Empty (SQLite queue) or a redis:// / rediss:// / unix://% URL."""
     s = str(v).strip()
@@ -110,6 +118,8 @@ EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     "split_threshold": (int, _positive_int, "split threshold (bytes)"),
     "default_key_rpm": (int, _positive_int, "default RPM for new API keys"),
     "default_key_daily_quota": (int, _non_negative_int, "default daily quota (bytes)"),
+    "stream_max_per_key": (int, _stream_cap_ok, "concurrent streams per API key / public link"),
+    "stream_retry_after_s": (int, _retry_after_ok, "Retry-After seconds for rejected streams"),
     "blocked_extensions": (str, _str_ok, "blocked extensions (comma separated)"),
     # thumbnails generated for image/video uploads
     "thumb_max_px": (int, _thumb_px_ok, "thumbnail long side in pixels (64-1280)"),
@@ -178,6 +188,8 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "max_inflight_bytes",
         "disk_watermark_pct",
         "tmp_retention_hours",
+        "stream_max_per_key",
+        "stream_retry_after_s",
     ],
     "links": ["presigned_ttl", "upload_session_ttl_minutes", "job_max_retries"],
     "queue": [

@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..core.config import get_settings
 from ..core.db import Database
+from ..core.distributed import allow as distributed_allow
 from ..core.settings_service import runtime_settings
 from ..core.models import AccountRepo, BotRepo, EitaaAccountRepo
 from ..core.metrics import metrics
@@ -70,6 +71,8 @@ class TGManager:
         # one resizable limiter per (backend, direction): uploads and downloads
         # must not share a cap, and bots/eitaa must not dilute account slots
         self._limiters: Dict[Tuple[str, str], SlotLimiter] = {}
+        # AIMD caps: multiplicative decrease on FloodWait, additive recovery
+        self._adaptive_caps: Dict[Tuple[str, str], int] = {}
         self._weights: Dict[str, float] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
         self._flood_until: Dict[str, float] = {}
@@ -180,14 +183,19 @@ class TGManager:
             return max(1, self._setting_int("max_concurrent_downloads", 4))
         return 2  # control / delete
 
+    def _effective_cap(self, key: str, direction: str) -> int:
+        base = self._cap_for(key, direction)
+        adaptive = self._adaptive_caps.get((key, direction))
+        return min(base, adaptive) if adaptive else base
+
     def _limiter(self, key: str, direction: str = "download") -> SlotLimiter:
         lk = (key, direction)
         lim = self._limiters.get(lk)
         if lim is None:
-            lim = SlotLimiter(self._cap_for(key, direction))
+            lim = SlotLimiter(self._effective_cap(key, direction))
             self._limiters[lk] = lim
         else:
-            lim.set_cap(self._cap_for(key, direction))
+            lim.set_cap(self._effective_cap(key, direction))
         return lim
 
     def _weight(self, key: str) -> float:
@@ -227,6 +235,8 @@ class TGManager:
     def _drop_limiters(self, key: str) -> None:
         for lk in [lk for lk in self._limiters if lk[0] == key]:
             self._limiters.pop(lk, None)
+        for lk in [lk for lk in self._adaptive_caps if lk[0] == key]:
+            self._adaptive_caps.pop(lk, None)
         self._weights.pop(key, None)
         self._half_open.discard(key)
 
@@ -401,8 +411,14 @@ class TGManager:
                     self._half_open.discard(key)
                     continue
                 if rpm > 0 and key.startswith("acc:"):
-                    if not await rate_limiter.allow(
-                        f"tg:{key}:{direction}", capacity=rpm, per_minute=rpm
+                    shared = await distributed_allow(
+                        self.db, f"tg:{key}:{direction}", rpm, rpm
+                    )
+                    if shared is False or (
+                        shared is None
+                        and not await rate_limiter.allow(
+                            f"tg:{key}:{direction}", capacity=rpm, per_minute=rpm
+                        )
                     ):
                         lim.release()
                         self._half_open.discard(key)
@@ -477,6 +493,19 @@ class TGManager:
         self, key: str, exc: Optional[BaseException], direction: str = "download"
     ) -> None:
         lim = self._limiters.get((key, direction))
+        lk = (key, direction)
+        base_cap = self._cap_for(key, direction)
+        if isinstance(exc, FloodWait):
+            # AIMD: congestion signal → multiplicative decrease (never below 1)
+            cur = self._adaptive_caps.get(lk, base_cap)
+            self._adaptive_caps[lk] = max(1, cur // 2)
+        elif exc is None and lk in self._adaptive_caps:
+            # healthy transfer → additive recovery toward the configured cap
+            self._adaptive_caps[lk] = min(
+                base_cap, self._adaptive_caps[lk] + 1
+            )
+        if lim is not None:
+            lim.set_cap(self._effective_cap(key, direction))
         was_half = key in self._half_open
         if exc is None:
             self._errors.pop(key, None)

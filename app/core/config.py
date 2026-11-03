@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     split_threshold: int = 1_900_000_000  # split parts below MTProto 2GB cap
     default_key_rpm: int = 120            # requests per minute per API key
     default_key_daily_quota: int = 100 * 1024 * 1024 * 1024  # 100GB/day
+    #: concurrent download/preview streams allowed per API key / public link
+    stream_max_per_key: int = 2
+    #: Retry-After advertised when a stream is rejected by that cap
+    stream_retry_after_s: int = 5
     blocked_extensions: str = ".exe,.bat,.cmd,.msi,.scr,.com"
     # thumbnails generated for media uploads (see app/services/thumbs.py)
     thumb_max_px: int = 320          # long side of the generated thumbnail

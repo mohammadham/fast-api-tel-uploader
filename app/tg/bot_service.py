@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 import httpx
 
 from ..core.config import get_settings
+from ..core.distributed import allow as distributed_allow
 from ..core.models import KIND_DOWNLOAD, KIND_UPLOAD, PRIO_DOWNLOAD, PRIO_UPLOAD
 from ..core.rate_limit import limiter as rate_limiter
 from ..core.settings_service import runtime_settings
@@ -249,10 +250,17 @@ class BotService:
             raise SendFailure("bot delivery slot timeout")
         try:
             rpm = int(cache.get("bot_max_rpm") or s.bot_max_rpm or 0)
-            if rpm > 0 and not await rate_limiter.allow(
-                f"bot:{bot_id}", capacity=rpm, per_minute=rpm
-            ):
-                raise FloodWait(60.0)
+            if rpm > 0:
+                shared = await distributed_allow(
+                    self.db, f"bot:{bot_id}", rpm, rpm
+                )
+                if shared is False or (
+                    shared is None
+                    and not await rate_limiter.allow(
+                        f"bot:{bot_id}", capacity=rpm, per_minute=rpm
+                    )
+                ):
+                    raise FloodWait(60.0)
             timeout = float(cache.get("bot_send_timeout_s") or 300)
             with open(local_path, "rb") as fh:
                 files = {"document": (name, fh, "application/octet-stream")}

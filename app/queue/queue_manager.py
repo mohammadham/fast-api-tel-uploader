@@ -25,6 +25,7 @@ import redis.asyncio as redis
 
 from ..core.config import get_settings
 from ..core.db import Database
+from ..core.distributed import redact_redis_url
 from ..core.metrics import metrics
 from ..core.obs import correlation_id as corr_var, job_id as job_var, slog
 from ..core.settings_service import get_runtime, runtime_settings
@@ -108,6 +109,9 @@ class QueueManager:
         # and skip re-pinging the same URL for a short cooldown
         self._redis_failed_url: str = ""
         self._redis_failed_at: float = 0.0
+        # distributed claim leases: job_id -> opaque owner token
+        self._redis_leases: Dict[str, str] = {}
+        self._redis_wake_task: Optional[asyncio.Task] = None
         self._lease_task: Optional[asyncio.Task] = None
         self._hb_task: Optional[asyncio.Task] = None
         self._stall_task: Optional[asyncio.Task] = None
@@ -145,6 +149,11 @@ class QueueManager:
         """
         enabled, url = await self._redis_settings()
         if not enabled or not url:
+            if self._redis is not None:
+                try:
+                    await self._redis.aclose()
+                except Exception:
+                    pass
             self._redis = None
             self._redis_url = None
             self._redis_ping_done = True
@@ -156,6 +165,11 @@ class QueueManager:
                 and (time.time() - self._redis_failed_at) < 30
             ):
                 return
+            if self._redis is not None:
+                try:
+                    await self._redis.aclose()
+                except Exception:
+                    pass
             self._redis = redis.from_url(
                 url, decode_responses=True,
                 socket_connect_timeout=2, socket_timeout=2,
@@ -166,7 +180,7 @@ class QueueManager:
             await self._redis.ping()
             self._redis_ping_done = True
             self._redis_failed_url = ""
-            log.info("Redis queue backend enabled at %s", url)
+            log.info("Redis queue backend enabled at %s", redact_redis_url(url))
         except Exception as e:
             log.warning("Redis unavailable (%s), falling back to SQLite only", e)
             self._redis = None
@@ -189,6 +203,7 @@ class QueueManager:
         except Exception:
             pass
         self.set_worker_counts(dl, ul)
+        self._redis_wake_task = asyncio.create_task(self._redis_wake_loop())
         self._lease_task = asyncio.create_task(self._lease_loop())
         self._hb_task = asyncio.create_task(self._heartbeat_loop())
         self._stall_task = asyncio.create_task(self._stall_loop())
@@ -197,7 +212,7 @@ class QueueManager:
     async def stop(self) -> None:
         self._stopped = True
         self._wake.set()
-        bg = (self._lease_task, self._hb_task, self._stall_task)
+        bg = (self._lease_task, self._hb_task, self._stall_task, self._redis_wake_task)
         for t in self._workers + [t for t in bg if t]:
             t.cancel()
         for t in self._workers + [t for t in bg if t]:
@@ -250,14 +265,106 @@ class QueueManager:
     def worker_counts(self) -> Dict[str, int]:
         return dict(self._worker_counts)
 
+    # ── redis wake bus + distributed leases ───────────────────
+    async def _publish_wake(self, reason: str) -> None:
+        """Tell other nodes to re-scan immediately (best-effort)."""
+        if self._redis is None:
+            return
+        try:
+            await self._redis.publish("queue:wake", reason)
+        except Exception as exc:
+            log.debug("redis wake publish failed: %s", exc)
+
+    async def _redis_wake_loop(self) -> None:
+        """Subscribe to the shared wake channel; reconnect with backoff."""
+        while not self._stopped:
+            pubsub = None
+            try:
+                if self._redis is None:
+                    if await self._redis_active():
+                        await self._ensure_redis()
+                    if self._redis is None:
+                        await asyncio.sleep(5)
+                        continue
+                pubsub = self._redis.pubsub()
+                await pubsub.subscribe("queue:wake")
+                # catch up on anything enqueued while we were reconnecting
+                self._wake.set()
+                async for msg in pubsub.listen():
+                    if self._stopped:
+                        break
+                    if msg and msg.get("type") == "message":
+                        self._wake.set()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.debug("redis wake listener failed: %s", exc)
+                await asyncio.sleep(2)
+            finally:
+                if pubsub is not None:
+                    try:
+                        await pubsub.close()
+                    except Exception:
+                        pass
+
+    @staticmethod
+    def _redis_lease_key(job_id: str) -> str:
+        return f"queue:lease:{job_id}"
+
+    async def _redis_claim_lease(self, job_id: str, token: str, ttl_s: int) -> bool:
+        """Best-effort distributed guard before the authoritative DB UPDATE."""
+        if self._redis is None:
+            return True
+        try:
+            ok = await self._redis.set(
+                self._redis_lease_key(job_id), token,
+                nx=True, px=max(1000, int(ttl_s) * 1000),
+            )
+            return bool(ok)
+        except Exception as exc:
+            # DB CAS still decides; never stall the queue on Redis
+            log.debug("redis lease claim failed: %s", exc)
+            return True
+
+    async def _redis_release_lease(self, job_id: str, token: str) -> None:
+        if self._redis is None:
+            return
+        script = (
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+            "return redis.call('DEL', KEYS[1]) else return 0 end"
+        )
+        try:
+            await self._redis.eval(script, 1, self._redis_lease_key(job_id), token)
+        except Exception as exc:
+            log.debug("redis lease release failed: %s", exc)
+
+    async def _redis_renew_lease(self, job_id: str, token: str, ttl_s: int) -> bool:
+        if self._redis is None:
+            return False
+        script = (
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+            "return redis.call('PEXPIRE', KEYS[1], ARGV[2]) else return 0 end"
+        )
+        try:
+            return bool(await self._redis.eval(
+                script, 1, self._redis_lease_key(job_id), token, max(1000, int(ttl_s) * 1000)
+            ))
+        except Exception as exc:
+            log.debug("redis lease renew failed: %s", exc)
+            return False
+
     # ── lease renewal + node heartbeat (multi-server) ─────────
     async def _lease_loop(self) -> None:
         """Renew leases of running jobs so other nodes don't steal them."""
         while not self._stopped:
             try:
+                lease = int((await self._policy())[3])
                 running = [jid for jid, r in self._rows.items() if r.get("status") == "running"]
                 if running:
-                    await self.jobs.renew_leases(running, self.node_id, 1800)
+                    await self.jobs.renew_leases(running, self.node_id, lease)
+                for job_id, token in list(self._redis_leases.items()):
+                    if not await self._redis_renew_lease(job_id, token, lease):
+                        self._redis_leases.pop(job_id, None)
             except Exception as exc:
                 log.debug("lease renewal failed: %s", exc)
             await asyncio.sleep(60)
@@ -345,6 +452,8 @@ class QueueManager:
                     )
             except Exception as e:
                 log.warning("Redis recovery check failed (DB remains primary): %s", e)
+        if self._redis is not None:
+            await self._publish_wake("recover")
 
         t = now()
         recovered = 0
@@ -418,6 +527,8 @@ class QueueManager:
                 await self._redis.sadd("queue:ids", job.id)
             except Exception as e:
                 log.debug("Redis enqueue write failed, using SQLite only: %s", e)
+        if self._redis is not None:
+            await self._publish_wake(f"enqueue:{job.id}")
         slog_q.info(
             "job enqueued",
             kind=kind,
@@ -497,17 +608,27 @@ class QueueManager:
                 )
                 if chosen is not None:
                     owner = f"{self.node_id}/{worker_kind[:2]}"
+                    token = f"{owner}:{time.time_ns()}"
+                    if not await self._redis_claim_lease(chosen["id"], token, lease):
+                        continue  # another node already owns the distributed lease
                     lease_until = now() + lease
-                    affected = await self.db.execute(
-                        "UPDATE jobs SET status='running', lease_owner=?, lease_until=?, updated_at=?"
-                        " WHERE id=? AND (status IN ('pending','retry')"
-                        " OR (status IN ('running','lease') AND lease_until < ?))",
-                        (owner, lease_until, now(), chosen["id"], now()),
-                    )
+                    try:
+                        affected = await self.db.execute(
+                            "UPDATE jobs SET status='running', lease_owner=?, lease_until=?, updated_at=?"
+                            " WHERE id=? AND (status IN ('pending','retry')"
+                            " OR (status IN ('running','lease') AND lease_until < ?))",
+                            (owner, lease_until, now(), chosen["id"], now()),
+                        )
+                    except Exception:
+                        await self._redis_release_lease(chosen["id"], token)
+                        raise
                     if affected:
+                        if self._redis is not None:
+                            self._redis_leases[chosen["id"]] = token
                         claimed = {**chosen, "status": "running", "lease_owner": owner, "lease_until": lease_until}
                         self._rows[chosen["id"]] = claimed
                         return claimed
+                    await self._redis_release_lease(chosen["id"], token)
                     continue  # another worker/node won this one
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=0.5)
@@ -888,6 +1009,12 @@ class QueueManager:
             # handlers re-set this on every attempt; dropping it here keeps the
             # map bounded when jobs fail permanently
             self._last_backend_by_job.pop(job_id, None)
+            lease_token = self._redis_leases.pop(job_id, None)
+            if lease_token:
+                try:
+                    await self._redis_release_lease(job_id, lease_token)
+                except Exception:
+                    pass
             job_var.reset(token)
             corr_var.reset(corr_token)
 
