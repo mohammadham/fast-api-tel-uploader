@@ -1136,7 +1136,9 @@ class QueueManager:
         # of sending the whole file again to (possibly) another account.
         existing_parts = await self.files.parts(file_id)
         stored_bytes = sum(int(p.get("size") or 0) for p in existing_parts)
-        if existing_parts and stored_bytes >= int(rec.get("size") or 0):
+        # Exact equality, not >=: an over-sized/duplicated part set is corrupt
+        # and must be re-uploaded, never marked ready.
+        if existing_parts and stored_bytes == int(rec.get("size") or 0):
             ids = [int(p["message_id"]) for p in existing_parts]
             await self._record_digest(file_id, tmp_path)
             await self.files.set_stored(file_id, rec.get("storage_chat") or "", ids, len(ids))
@@ -1838,6 +1840,12 @@ class QueueManager:
         account_key = ""
         if not (payload.get("downloaded_path") and os.path.exists(tmp)):
             parts = await self.files.parts(file_id)
+            from ..services.streaming import IncompleteFileError, iter_stored_part, validate_parts
+
+            try:
+                parts = validate_parts(rec, parts)
+            except IncompleteFileError as exc:
+                raise TransferError(f"file incomplete: {exc}") from exc
             total = 0
             borrowed = await self.manager.acquire(
                 "acc", backend=rec.get("backend") or "telegram", direction="download"
@@ -1846,7 +1854,6 @@ class QueueManager:
                 account_key = borrowed.key
                 self._last_backend_by_job[job_id] = borrowed.key
                 chat = rec["storage_chat"] or getattr(backend, "storage_chat", "me")
-                from ..services.streaming import iter_stored_part
 
                 with open(tmp, "wb") as fh:
                     for part in parts:
@@ -1924,6 +1931,12 @@ class QueueManager:
         parts = await self.files.parts(file_id)
         if not parts:
             raise TransferError("file has no parts to transfer")
+        from ..services.streaming import IncompleteFileError, validate_parts
+
+        try:
+            parts = validate_parts(rec, parts)
+        except IncompleteFileError as exc:
+            raise TransferError(f"file incomplete: {exc}") from exc
         folder_path = ""
         try:
             if rec.get("folder_id"):

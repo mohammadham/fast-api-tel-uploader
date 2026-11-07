@@ -8,6 +8,7 @@ import os
 import re
 import time
 import typing
+import uuid
 import zlib
 from typing import AsyncIterator, Optional, Tuple
 
@@ -26,6 +27,59 @@ def _tmp_dir() -> str:
     return d
 
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)$")
+
+
+class IncompleteFileError(Exception):
+    """The stored part list cannot reproduce the original file."""
+
+
+def validate_parts(rec: dict, parts: list) -> list:
+    """Return a safe part list or raise IncompleteFileError.
+
+    A ready file must have a contiguous 0..n-1 part sequence whose original
+    sizes add up to the file size.  The old single-message schema had no
+    file_parts rows; only that one-message legacy shape is reconstructed here.
+    """
+    total = int(rec.get("size") or 0)
+    if not parts:
+        raw_ids = rec.get("message_ids") or "[]"
+        try:
+            ids = json.loads(raw_ids) if isinstance(raw_ids, str) else list(raw_ids)
+        except Exception:
+            ids = []
+        if total == 0 and not ids:
+            return []
+        if len(ids) == 1:
+            # legacy record: one message whose logical size is the file size
+            parts = [{
+                "idx": 0,
+                "message_id": int(ids[0]),
+                "size": total,
+                "stored_size": 0,
+                "encoding": "",
+            }]
+        else:
+            raise IncompleteFileError("file has no stored parts")
+
+    if len(parts) != len({int(p.get("idx", -1)) for p in parts}):
+        raise IncompleteFileError("duplicate part indexes")
+    if [int(p.get("idx", -1)) for p in parts] != list(range(len(parts))):
+        raise IncompleteFileError("part indexes are not contiguous")
+    if sum(int(p.get("size") or 0) for p in parts) != total:
+        raise IncompleteFileError("part sizes do not match file size")
+    expected = int(rec.get("parts") or 0)
+    if expected and expected != len(parts):
+        raise IncompleteFileError("part count does not match file record")
+    for part in parts:
+        stored = int(part.get("stored_size") or 0)
+        encoding = str(part.get("encoding") or "")
+        if stored < 0:
+            raise IncompleteFileError("negative stored size")
+        if encoding not in ("", "gzip"):
+            raise IncompleteFileError(f"unsupported part encoding: {encoding}")
+        if encoding == "gzip" and stored <= 0:
+            raise IncompleteFileError("gzip part has no stored bytes")
+    return parts
 
 
 def parse_range(header: str, size: int) -> Optional[Tuple[int, int]]:
@@ -167,6 +221,13 @@ async def file_response(
     """
     from fastapi.responses import JSONResponse, StreamingResponse
 
+    try:
+        parts = validate_parts(rec, parts)
+    except IncompleteFileError as exc:
+        return JSONResponse(
+            {"detail": "file incomplete", "reason": str(exc)}, status_code=409
+        )
+
     total = int(rec["size"])
     start, end = 0, total - 1
     status = 200
@@ -295,23 +356,16 @@ def _quote(name: str) -> str:
 
 
 class _ZipBackground:
-    """After a bulk-zip response completes: release the borrowed backend,
-    unlink the temp file, and swallow client-abort errors quietly."""
+    """After a bulk-zip response completes: release the stream slot and unlink
+    the temp file.  Backends are borrowed per entry (and released there), so
+    a mixed-channel archive never reuses another file's account/chat."""
 
-    def __init__(
-        self, manager: TGManager, key: str, tmp_path: Optional[str], stream_key: str = ""
-    ) -> None:
-        self.manager = manager
-        self.key = key
+    def __init__(self, tmp_path: Optional[str], stream_key: str = "") -> None:
         self.tmp_path = tmp_path
         self.stream_key = stream_key
         self.error: Optional[BaseException] = None
 
     async def __call__(self) -> None:
-        try:
-            await self.manager.release(self.key, self.error)
-        except Exception:
-            pass
         if self.stream_key:
             streams.release(self.stream_key)
         if self.tmp_path:
@@ -333,8 +387,9 @@ async def zip_stream_response(
     Each entry is downloaded from telegram into a temp file (parts joined),
     then streamed into the client. The archive is never fully stored: only
     one entry exists on disk at a time and it is unlinked right after its
-    bytes are emitted. Entries share one borrowed backend, released after
-    the response completes.
+    bytes are emitted. Every entry is read from its own storage chat; a
+    mixed-channel selection therefore cannot read one file through another
+    file's account.
 
     The zip is written by hand (local header with flag bit 3 = data
     descriptor, raw deflate, descriptor, then one central directory at the
@@ -345,6 +400,20 @@ async def zip_stream_response(
     import zipfile
 
     from fastapi.responses import JSONResponse, StreamingResponse
+
+    # Validate every entry before the first byte is sent.  An archive must
+    # never contain a silently truncated file just because one part row is
+    # missing or one selected file belongs to a different channel.
+    validated: dict = {}
+    repo = FileRepo(db)
+    for rec in files:
+        try:
+            validated[rec["id"]] = validate_parts(rec, await repo.parts(rec["id"]))
+        except IncompleteFileError as exc:
+            return JSONResponse(
+                {"detail": "file incomplete", "file_id": rec["id"], "reason": str(exc)},
+                status_code=409,
+            )
 
     stream_acquired = False
     if stream_key:
@@ -357,31 +426,44 @@ async def zip_stream_response(
             )
         stream_acquired = True
 
-    # one backend for the whole archive (uploads/other jobs queue behind it)
-    try:
-        borrowed = await manager.acquire(
-            "acc", backend=files[0].get("backend") or "telegram", direction="download"
-        )
-    except Exception:
-        if stream_acquired:
-            streams.release(stream_key)
-        raise
-    backend = borrowed.backend
-    chat = files[0]["storage_chat"] or getattr(backend, "storage_chat", "me")
     tmp_dir = _tmp_dir()
     tmp_paths: list = []
 
     async def fetch_entry(rec: dict) -> str:
-        """Materialise one stored file (joined parts) into a temp file."""
-        parts = await FileRepo(db).parts(rec["id"])
-        path = os.path.join(tmp_dir, f"zip_{rec['id'].replace('/', '_')}.bin")
+        """Materialise one stored file (joined parts) into a temp file.
+
+        The backend is borrowed per entry: files in different chats (or even
+        different backends) must not be read through the first file's chat.
+        """
+        parts = validated[rec["id"]]
+        path = os.path.join(
+            tmp_dir, f"zip_{rec['id'].replace('/', '_')}_{uuid.uuid4().hex}.bin"
+        )
         tmp_paths.append(path)
-        with open(path, "wb") as fh:
-            for part in parts:
-                async for chunk in iter_stored_part(
-                    backend, chat, part, start=0, end=None
-                ):
-                    fh.write(chunk)
+        try:
+            borrowed = await manager.acquire(
+                "acc", backend=rec.get("backend") or "telegram", direction="download"
+            )
+            async with borrowed as backend:
+                chat = (rec.get("storage_chat") or "").strip() or getattr(
+                    backend, "storage_chat", "me"
+                )
+                with open(path, "wb") as fh:
+                    for part in parts:
+                        async for chunk in iter_stored_part(
+                            backend, chat, part, start=0, end=None
+                        ):
+                            fh.write(chunk)
+        except BaseException:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            try:
+                tmp_paths.remove(path)
+            except ValueError:
+                pass
+            raise
         return path
 
     def _cleanup_tmp() -> None:
@@ -446,8 +528,14 @@ async def zip_stream_response(
                     offset += len(descriptor)
                     yield descriptor
                 centrals.append((name_b, crc & 0xFFFFFFFF, csize, usize, entry_offset))
-                os.remove(path)
-                tmp_paths.remove(path)
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                try:
+                    tmp_paths.remove(path)
+                except ValueError:
+                    pass
             # central directory + EOCD
             cd = io.BytesIO()
             cd_start = offset
@@ -467,9 +555,7 @@ async def zip_stream_response(
             bg.error = exc
             raise
 
-    bg = _ZipBackground(
-        manager, borrowed.key, None, stream_key=stream_key if stream_acquired else ""
-    )
+    bg = _ZipBackground(None, stream_key=stream_key if stream_acquired else "")
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     resp = StreamingResponse(

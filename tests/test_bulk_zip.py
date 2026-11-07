@@ -4,6 +4,8 @@ import zipfile
 
 import pytest
 
+from app.core.state import get_db
+
 
 def _H(api_key):
     return {"Authorization": "Bearer " + api_key}
@@ -22,6 +24,34 @@ async def _upload_ready(client, headers, name, body):
     for _ in range(80):
         rec = (await client.get(f"/api/v1/files/{fid}", headers=headers)).json()
         if rec.get("status") == "ready":
+            return fid
+        assert rec.get("status") != "failed", rec
+        await asyncio.sleep(0.05)
+    raise AssertionError("file never became ready")
+
+
+async def _upload_ready_at(client, headers, name, body, chat):
+    """Upload through the resumable API so a per-file storage chat is pinned."""
+    r = await client.post(
+        "/api/v1/files/upload/session",
+        headers={**headers, "X-Storage-Chat": chat},
+        json={"name": name, "size": len(body), "mime": "application/octet-stream"},
+    )
+    assert r.status_code == 200, r.text
+    sid = r.json()["session_id"]
+    r = await client.patch(
+        f"/api/v1/files/upload/session/{sid}",
+        headers={**headers, "X-Offset": "0"},
+        content=body,
+    )
+    assert r.status_code == 200 and r.json().get("completed"), r.text
+    fid = r.json()["file_id"]
+    import asyncio
+
+    for _ in range(80):
+        rec = (await client.get(f"/api/v1/files/{fid}", headers=headers)).json()
+        if rec.get("status") == "ready":
+            assert rec.get("storage_chat") == chat, rec
             return fid
         assert rec.get("status") != "failed", rec
         await asyncio.sleep(0.05)
@@ -95,3 +125,49 @@ async def test_bulk_zip_skips_unusable_and_empty_selection_fails(client, api_key
     zf = zipfile.ZipFile(io.BytesIO(r.content))
     assert zf.namelist() == ["zip-good.bin"]
     assert zf.read("zip-good.bin") == b"good-data"
+
+
+@pytest.mark.asyncio
+async def test_bulk_zip_reads_each_files_own_channel(client, api_key, token):
+    """Regression: the archive used files[0]['storage_chat'] for every entry.
+
+    Two files in two different fake chats must both survive a bulk zip; the
+    second lookup through the first file's chat used to become a _errors stub.
+    """
+    f1 = await _upload_ready_at(
+        client, _H(api_key), "channel-a.txt", b"content-from-channel-a", "@zip-chan-a"
+    )
+    f2 = await _upload_ready_at(
+        client, _H(api_key), "channel-b.txt", b"content-from-channel-b", "@zip-chan-b"
+    )
+
+    r = await client.post(
+        "/api/v1/files/bulk-zip", headers=_H(api_key), json={"file_ids": [f1, f2]}
+    )
+    assert r.status_code == 200, r.text
+    r = await client.get(r.json()["url"])
+    assert r.status_code == 200, r.text
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    assert zf.namelist() == ["channel-a.txt", "channel-b.txt"]
+    assert zf.read("channel-a.txt") == b"content-from-channel-a"
+    assert zf.read("channel-b.txt") == b"content-from-channel-b"
+
+
+@pytest.mark.asyncio
+async def test_download_and_zip_reject_broken_part_sizes(client, api_key, token):
+    """A ready record whose parts no longer sum to files.size must not stream."""
+    fid = await _upload_ready(client, _H(api_key), "broken.bin", b"0123456789")
+    db = await get_db()
+    await db.execute("UPDATE file_parts SET size=size-1 WHERE file_id=?", (fid,))
+
+    r = await client.get(f"/api/v1/files/{fid}/content", headers=_H(api_key))
+    assert r.status_code == 409, r.text
+    assert "incomplete" in r.text
+
+    r = await client.post(
+        "/api/v1/files/bulk-zip", headers=_H(api_key), json={"file_ids": [fid]}
+    )
+    assert r.status_code == 200, r.text
+    r = await client.get(r.json()["url"])
+    assert r.status_code == 409, r.text
+    assert "incomplete" in r.text
