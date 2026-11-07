@@ -49,6 +49,23 @@ class Settings(BaseSettings):
     max_concurrent_uploads_per_account: int = 2
     #: parallel SaveBigFilePart requests per uploaded file (MTProto only)
     upload_part_workers: int = 4
+    #: gzip-compress uploaded parts when it actually makes them smaller
+    compress_uploads: int = 0
+    # ── automatic multi-account split (separate from split_threshold) ──
+    #: split a large upload across several free accounts instead of one account
+    auto_split_enabled: int = 0
+    #: only files at least this large are eligible (0 = no minimum)
+    auto_split_min_file_size: int = 128 * 1024 * 1024
+    #: never create a part smaller than this (except a tiny final safety edge)
+    auto_split_min_part_size: int = 32 * 1024 * 1024
+    #: keep every part below this; the hard split_threshold still wins
+    auto_split_max_part_size: int = 512 * 1024 * 1024
+    #: need at least this many free upload accounts before splitting is worthwhile
+    auto_split_min_accounts: int = 2
+    #: never use more than this many accounts for one file
+    auto_split_max_accounts: int = 4
+    #: safety ceiling for the number of parts of one file
+    auto_split_max_parts: int = 64
     job_max_retries: int = 5
     job_lease_seconds: int = 1800
 
@@ -64,7 +81,7 @@ class Settings(BaseSettings):
     max_queue_jobs: int = 1000          # 0 = unlimited
     max_inflight_bytes: int = 0         # 0 = unlimited; bytes of queued+running work
     disk_watermark_pct: int = 90         # reject uploads that would leave less free space
-    tmp_retention_hours: int = 24        # janitor keeps inactive tmp files this long
+    tmp_retention_hours: int = 2         # janitor keeps inactive tmp files this long
 
     # ── per-bot delivery limits (Bot API) ──
     bot_max_concurrent: int = 2

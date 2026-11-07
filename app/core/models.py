@@ -258,7 +258,11 @@ class AccountRepo:
                 except Exception:
                     continue
                 if k:
-                    out[k] = out.get(k, 0) + 1
+                    # auto-split jobs credit every account that carried a part
+                    for part in str(k).split(","):
+                        part = part.strip()
+                        if part:
+                            out[part] = out.get(part, 0) + 1
         except Exception:
             return {}
         return out
@@ -697,15 +701,18 @@ class FileRepo:
             (storage_chat, json.dumps(message_ids), parts, now(), file_id),
         )
 
-    async def add_part(self, file_id: str, idx: int, message_id: int, size: int) -> None:
+    async def add_part(
+        self, file_id: str, idx: int, message_id: int, size: int,
+        stored_size: int = 0, encoding: str = "",
+    ) -> None:
         await self.db.execute(
-            "INSERT INTO file_parts(file_id, idx, message_id, size) VALUES(?,?,?,?)",
-            (file_id, idx, message_id, size),
+            "INSERT INTO file_parts(file_id, idx, message_id, size, stored_size, encoding) VALUES(?,?,?,?,?,?)",
+            (file_id, idx, message_id, size, int(stored_size or 0), encoding or ""),
         )
 
     async def parts(self, file_id: str) -> List[Dict[str, Any]]:
         return await self.db.fetch_all(
-            "SELECT idx, message_id, size FROM file_parts WHERE file_id=? ORDER BY idx", (file_id,)
+            "SELECT idx, message_id, size, stored_size, encoding FROM file_parts WHERE file_id=? ORDER BY idx", (file_id,)
         )
 
     async def count_download(self, file_id: str, nbytes: int) -> None:
@@ -743,7 +750,20 @@ class FileRepo:
         await self.db.execute("UPDATE files SET folder_id=? WHERE id=?", (folder_id, file_id))
 
     async def set_parts(self, file_id: str, message_ids: List[int], storage_chat: str) -> None:
-        """Rewrite a ready file's part pointers after a channel transfer."""
+        """Rewrite a ready file's part pointers after a channel transfer.
+
+        The transferred bytes are stored verbatim, so per-part encoding and
+        stored_size are preserved for transparent decompression on download.
+        """
+        old_parts = await self.parts(file_id)
+        await self.db.execute("DELETE FROM file_parts WHERE file_id=?", (file_id,))
+        for idx, message_id in enumerate(message_ids):
+            old = old_parts[idx] if idx < len(old_parts) else {}
+            await self.add_part(
+                file_id, idx, int(message_id), int(old.get("size") or 0),
+                stored_size=int(old.get("stored_size") or 0),
+                encoding=str(old.get("encoding") or ""),
+            )
         await self.db.execute(
             "UPDATE files SET storage_chat=?, message_ids=?, parts=? WHERE id=?",
             (storage_chat, json.dumps(message_ids), len(message_ids), file_id),

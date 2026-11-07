@@ -9,6 +9,7 @@ isolates the backend (TGManager) and the job retries with exponential backoff.
 from __future__ import annotations
 
 import asyncio
+import gzip
 import hashlib
 import heapq
 import json
@@ -67,6 +68,17 @@ def sha256_file(path: str, chunk: int = SHA256_CHUNK) -> str:
         while blk := fh.read(chunk):
             h.update(blk)
     return h.hexdigest()
+
+
+def _gzip_copy(src: str, dst: str) -> int:
+    """Compress src to a temporary .gz and return the physical byte count.
+
+    Streaming (not ``gzip.compress(data)``) keeps memory flat for multi-GB
+    uploads.  A part that does not get smaller is discarded by the caller.
+    """
+    with open(src, "rb") as fin, gzip.open(dst, "wb", compresslevel=6) as fout:
+        shutil.copyfileobj(fin, fout, length=1024 * 1024)
+    return os.path.getsize(dst)
 
 
 class QueueManager:
@@ -1036,6 +1048,15 @@ class QueueManager:
             await self.jobs.update_fields(job_id, status="failed", error=error[:500], finished_at=now(), attempts=attempts)
             if kind == KIND_UPLOAD and payload.get("file_id"):
                 await self.files.set_status(payload["file_id"], "failed", error)
+                # Final failure: the source is no longer resumable (a manual
+                # retry starts a fresh upload), so do not leave multi-GB tmp
+                # files around for the janitor window.
+                tmp_path = str(payload.get("tmp_path") or "")
+                if tmp_path:
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
             self._rows.pop(job_id, None)
             metrics.inc(f"queue.failed.{kind}")
             self._wake.set()
@@ -1075,6 +1096,32 @@ class QueueManager:
             await self.files.set_sha256(file_id, digest)
         except Exception as exc:  # never fail a stored upload over a digest
             slog_q.warning("sha256 not stored", file_id=file_id, error=str(exc)[:120])
+
+    async def _prepare_upload_part(self, path: str, compress: bool) -> Tuple[str, int, str, bool]:
+        """Return (send_path, stored_size, encoding, is_temporary).
+
+        Compression is best-effort: an unreadable/expanding part falls back to
+        the original bytes so a CPU/disk hiccup can never lose an upload.
+        """
+        original = int(os.path.getsize(path))
+        if not compress or original <= 0:
+            return path, original, "", False
+        gz = f"{path}.gz"
+        try:
+            stored = await asyncio.to_thread(_gzip_copy, path, gz)
+            if stored < original:
+                return gz, stored, "gzip", True
+            try:
+                os.remove(gz)
+            except OSError:
+                pass
+        except Exception as exc:
+            slog_q.warning("upload compression skipped", path=path, error=str(exc)[:120])
+            try:
+                os.remove(gz)
+            except OSError:
+                pass
+        return path, original, "", False
 
     async def _handle_upload(self, payload: Dict[str, Any], job_id: str) -> None:
         from ..core.security import decrypt_str
@@ -1193,88 +1240,38 @@ class QueueManager:
         finally:
             self._gate_waiters.pop(job_id, None)
         try:
-            borrowed = await self.manager.acquire("acc", backend=backend, direction="upload")
-            async with borrowed as be:
-                account_key = borrowed.key
-                self._last_backend_by_job[job_id] = borrowed.key
-                try:
-                    part_workers = max(1, min(16, int(
-                        await get_runtime(self.db, "upload_part_workers")
-                        or s.upload_part_workers or 4
-                    )))
-                except Exception:
-                    part_workers = 4
-                started = time.monotonic()
-
-                def on_upload_progress(done: int, total: int, *, account=account_key) -> None:
-                    total = max(1, int(total or size))
-                    elapsed = max(0.001, time.monotonic() - started)
-                    self._upload_progress[job_id] = {
-                        "progress_pct": min(100, round(int(done) * 100 / total)),
-                        "progress_bytes": int(done),
-                        "progress_total": total,
-                        "speed_bps": int(int(done) / elapsed),
-                        "account": account,
-                        "stage": "uploading",
-                        "part_workers": part_workers,
-                    }
-
-                self._upload_progress[job_id] = {
-                    "progress_pct": 0, "progress_bytes": 0, "progress_total": size,
-                    "speed_bps": 0, "account": account_key, "stage": "uploading",
-                    "part_workers": part_workers,
-                }
-                # fall back to the backend default when neither the key nor the
-                # record pins a chat ('' → send_document resolves 'me'/global)
-                storage_chat = storage_chat or getattr(be, "storage_chat", "me") or ""
-                if size > split_at and backend != "eitaa":
-                    # split into parts below the MTProto 2GB cap
-                    part_size = split_at
-                    part_paths = await self._split_file(tmp_path, part_size)
-                    try:
-                        offset = 0
-                        for idx, ppath in enumerate(part_paths):
-                            part_name = f"{name}.part{idx:04d}"
-                            part_len = os.path.getsize(ppath)
-
-                            def part_progress(done: int, _total: int, *, off=offset, plen=part_len) -> None:
-                                on_upload_progress(off + min(int(done), plen), size)
-
-                            result = await be.send_document(
-                                storage_chat, ppath, part_name, mime, caption=folder_tag,
-                                part_workers=part_workers, progress_cb=part_progress,
-                            )
-                            message_ids.append(int(result["message_id"]))
-                            await self.files.add_part(file_id, idx, int(result["message_id"]), int(result["size"]))
-                            offset += part_len
-                    finally:
-                        for ppath in part_paths:
-                            try:
-                                os.remove(ppath)
-                            except OSError:
-                                pass
-                else:
-                    # Telethon's send_file has no byte-offset resume; a full send
-                    # is honest and correct. Advancing the session prevents a
-                    # later retry from claiming a bogus partial offset.
-                    if resumed_offset:
-                        slog_q.warning(
-                            "upload resume requested but backend sends full file",
-                            file_id=file_id, requested_offset=resumed_offset,
-                        )
-                    result = await be.send_document(
-                        storage_chat, tmp_path, name, mime, caption=folder_tag,
-                        part_workers=part_workers, progress_cb=on_upload_progress,
-                    )
-                    message_ids.append(int(result["message_id"]))
-                    await self.files.add_part(file_id, 0, int(result["message_id"]), int(result["size"]))
-                    if session_id:
-                        try:
-                            from ..core.models import UploadSessionRepo
-
-                            await UploadSessionRepo(self.db).advance(session_id, size)
-                        except Exception:
-                            pass
+            part_workers = max(1, min(16, int(
+                await get_runtime(self.db, "upload_part_workers")
+                or s.upload_part_workers or 4
+            )))
+        except Exception:
+            part_workers = 4
+        try:
+            compress_uploads = int(await get_runtime(self.db, "compress_uploads") or 0) == 1
+        except Exception:
+            compress_uploads = False
+        try:
+            plan = await self._auto_split_plan(
+                size=size, backend=backend, split_at=split_at,
+                storage_chat=storage_chat,
+            )
+            if plan:
+                account_key, auto_ids, storage_chat = await self._upload_auto_split(
+                    job_id=job_id, file_id=file_id, tmp_path=tmp_path,
+                    name=name, mime=mime, backend=backend, folder_tag=folder_tag,
+                    part_workers=part_workers, plan=plan, compress=compress_uploads,
+                )
+                message_ids.extend(auto_ids)
+            else:
+                account_key, single_ids, storage_chat = await self._upload_single(
+                    job_id=job_id, file_id=file_id, tmp_path=tmp_path,
+                    name=name, mime=mime, size=size, backend=backend,
+                    storage_chat=storage_chat, folder_tag=folder_tag,
+                    split_at=split_at, resumed_offset=resumed_offset,
+                    session_id=session_id, part_workers=part_workers,
+                    compress=compress_uploads,
+                )
+                message_ids.extend(single_ids)
         finally:
             gate.release()
 
@@ -1305,6 +1302,349 @@ class QueueManager:
                     await http.post(webhook, json={"file_id": file_id, "status": "ready", "size": size})
             except Exception:
                 slog_q.warning("webhook delivery failed", file_id=file_id, webhook=webhook[:120])
+
+    async def _upload_single(
+        self, *, job_id: str, file_id: str, tmp_path: str, name: str, mime: str,
+        size: int, backend: str, storage_chat: str, folder_tag: str,
+        split_at: int, resumed_offset: int, session_id: str, part_workers: int,
+        compress: bool,
+    ) -> Tuple[str, List[int], str]:
+        """The existing one-account path (main split_threshold still applies)."""
+        message_ids: List[int] = []
+        borrowed = await self.manager.acquire("acc", backend=backend, direction="upload")
+        async with borrowed as be:
+            account_key = borrowed.key
+            self._last_backend_by_job[job_id] = borrowed.key
+            started = time.monotonic()
+
+            def on_upload_progress(done: int, total: int, *, account=account_key) -> None:
+                total = max(1, int(total or size))
+                elapsed = max(0.001, time.monotonic() - started)
+                self._upload_progress[job_id] = {
+                    "progress_pct": min(100, round(int(done) * 100 / total)),
+                    "progress_bytes": int(done),
+                    "progress_total": total,
+                    "speed_bps": int(int(done) / elapsed),
+                    "account": account,
+                    "stage": "uploading",
+                    "part_workers": part_workers,
+                }
+
+            self._upload_progress[job_id] = {
+                "progress_pct": 0, "progress_bytes": 0, "progress_total": size,
+                "speed_bps": 0, "account": account_key, "stage": "uploading",
+                "part_workers": part_workers,
+            }
+            # fall back to the backend default when neither the key nor the
+            # record pins a chat ('' → send_document resolves 'me'/global)
+            storage_chat = storage_chat or getattr(be, "storage_chat", "me") or ""
+            if size > split_at and backend != "eitaa":
+                # split into parts below the MTProto 2GB cap
+                part_size = split_at
+                part_paths = await self._split_file(tmp_path, part_size)
+                try:
+                    offset = 0
+                    for idx, ppath in enumerate(part_paths):
+                        part_name = f"{name}.part{idx:04d}"
+                        part_len = os.path.getsize(ppath)
+                        send_path, stored_size, encoding, compressed = await self._prepare_upload_part(ppath, compress)
+                        try:
+                            def part_progress(
+                                done: int, _total: int, *, off=offset, plen=part_len,
+                                enc=encoding, physical=stored_size,
+                            ) -> None:
+                                if enc == "gzip" and physical > 0:
+                                    done = int(int(done) * plen / physical)
+                                on_upload_progress(off + min(int(done), plen), size)
+
+                            result = await be.send_document(
+                                storage_chat, send_path, part_name, mime, caption=folder_tag,
+                                part_workers=part_workers, progress_cb=part_progress,
+                            )
+                            mid = int(result["message_id"])
+                            physical = int(result.get("size") or stored_size) or stored_size
+                            message_ids.append(mid)
+                            await self.files.add_part(
+                                file_id, idx, mid, part_len,
+                                stored_size=physical, encoding=encoding,
+                            )
+                            offset += part_len
+                        finally:
+                            if compressed:
+                                try:
+                                    os.remove(send_path)
+                                except OSError:
+                                    pass
+                finally:
+                    for ppath in part_paths:
+                        try:
+                            os.remove(ppath)
+                        except OSError:
+                            pass
+            else:
+                # Telethon's send_file has no byte-offset resume; a full send
+                # is honest and correct. Advancing the session prevents a
+                # later retry from claiming a bogus partial offset.
+                if resumed_offset:
+                    slog_q.warning(
+                        "upload resume requested but backend sends full file",
+                        file_id=file_id, requested_offset=resumed_offset,
+                    )
+                send_path, stored_size, encoding, compressed = await self._prepare_upload_part(tmp_path, compress)
+                try:
+                    def single_progress(
+                        done: int, total: int, *, enc=encoding, physical=stored_size,
+                    ) -> None:
+                        if enc == "gzip" and physical > 0:
+                            done = int(int(done) * size / physical)
+                        on_upload_progress(done, size)
+
+                    result = await be.send_document(
+                        storage_chat, send_path, name, mime, caption=folder_tag,
+                        part_workers=part_workers, progress_cb=single_progress,
+                    )
+                    mid = int(result["message_id"])
+                    physical = int(result.get("size") or stored_size) or stored_size
+                    message_ids.append(mid)
+                    await self.files.add_part(
+                        file_id, 0, mid, size,
+                        stored_size=physical, encoding=encoding,
+                    )
+                finally:
+                    if compressed:
+                        try:
+                            os.remove(send_path)
+                        except OSError:
+                            pass
+                if session_id:
+                    try:
+                        from ..core.models import UploadSessionRepo
+
+                        await UploadSessionRepo(self.db).advance(session_id, size)
+                    except Exception:
+                        pass
+        return account_key, message_ids, storage_chat
+
+    async def _upload_auto_split(
+        self, *, job_id: str, file_id: str, tmp_path: str, name: str, mime: str,
+        backend: str, folder_tag: str, part_workers: int, plan: Dict[str, Any],
+        compress: bool,
+    ) -> Tuple[str, List[int], str]:
+        """Split one file into balanced parts and upload them on separate accounts.
+
+        Each part acquires its own upload slot and releases it immediately, so
+        the pool decides which free account carries which part. The outer job
+        still holds one global upload-gate slot; ``plan['concurrency']`` bounds
+        how many parts run at once.
+        """
+        parts = int(plan["parts"])
+        part_paths = await self._split_file_balanced(tmp_path, parts)
+        if len(part_paths) != parts:
+            raise TransferError(f"auto-split produced {len(part_paths)}/{parts} parts")
+        part_sizes = [os.path.getsize(p) for p in part_paths]
+        done = [0] * parts
+        message_ids = [0] * parts
+        used_accounts: set[str] = set()
+        sem = asyncio.Semaphore(max(1, int(plan.get("concurrency") or 1)))
+        started = time.monotonic()
+
+        def publish(account: str) -> None:
+            done_total = sum(min(done[i], part_sizes[i]) for i in range(parts))
+            elapsed = max(0.001, time.monotonic() - started)
+            self._upload_progress[job_id] = {
+                "progress_pct": min(100, round(done_total * 100 / max(1, sum(part_sizes)))),
+                "progress_bytes": done_total,
+                "progress_total": sum(part_sizes),
+                "speed_bps": int(done_total / elapsed),
+                "account": account or "auto",
+                "stage": "uploading",
+                "part_workers": part_workers,
+                "auto_split": True,
+                "parts_total": parts,
+                "parts_done": sum(1 for i in range(parts) if done[i] >= part_sizes[i]),
+                "accounts_used": len(used_accounts),
+            }
+
+        self._upload_progress[job_id] = {
+            "progress_pct": 0, "progress_bytes": 0, "progress_total": sum(part_sizes),
+            "speed_bps": 0, "account": "auto", "stage": "uploading",
+            "part_workers": part_workers, "auto_split": True,
+            "parts_total": parts, "parts_done": 0, "accounts_used": 0,
+        }
+
+        async def send_part(idx: int, ppath: str, part_len: int) -> None:
+            send_path, stored_size, encoding, compressed = await self._prepare_upload_part(ppath, compress)
+            try:
+                async with sem:
+                    borrowed = await self.manager.acquire(
+                        "acc", backend=backend, direction="upload"
+                    )
+                    async with borrowed as be:
+                        used_accounts.add(borrowed.key)
+
+                        def part_progress(
+                            done_bytes: int, _total: int, *, i=idx, key=borrowed.key,
+                            enc=encoding, physical=stored_size,
+                        ) -> None:
+                            if enc == "gzip" and physical > 0:
+                                done_bytes = int(int(done_bytes) * part_sizes[i] / physical)
+                            done[i] = min(max(0, int(done_bytes)), part_sizes[i])
+                            publish(key)
+
+                        result = await be.send_document(
+                            plan["storage_chat"], send_path, f"{name}.part{idx:04d}", mime,
+                            caption=folder_tag, part_workers=part_workers,
+                            progress_cb=part_progress,
+                        )
+                        mid = int(result["message_id"])
+                        physical = int(result.get("size") or stored_size) or stored_size
+                        message_ids[idx] = mid
+                        await self.files.add_part(
+                            file_id, idx, mid, part_len,
+                            stored_size=physical, encoding=encoding,
+                        )
+                        done[idx] = part_sizes[idx]
+                        publish(borrowed.key)
+            finally:
+                if compressed:
+                    try:
+                        os.remove(send_path)
+                    except OSError:
+                        pass
+
+        tasks = [
+            asyncio.create_task(send_part(idx, ppath, part_sizes[idx]))
+            for idx, ppath in enumerate(part_paths)
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        finally:
+            for ppath in part_paths:
+                try:
+                    os.remove(ppath)
+                except OSError:
+                    pass
+
+        account_key = ",".join(sorted(used_accounts)) or "auto"
+        self._last_backend_by_job[job_id] = account_key
+        return account_key, message_ids, str(plan["storage_chat"])
+
+    def _auto_split_free_accounts(self, backend: str) -> List[str]:
+        if backend == "eitaa":
+            return []
+        try:
+            rows = self.manager.health()
+        except Exception:
+            return []
+        out: List[str] = []
+        for row in rows:
+            key = str(row.get("key") or "")
+            if not key.startswith("acc:") or not row.get("available"):
+                continue
+            try:
+                free = int(row.get("upload_free") or 0)
+            except (TypeError, ValueError):
+                free = 0
+            if free > 0:
+                out.append(key)
+        return out
+
+    async def _shared_storage_chat(self, explicit: str, keys: List[str]) -> str:
+        """Resolve one destination chat that every auto-split account can share.
+
+        Saved Messages (``me``) is per-account and must never be used for a
+        multi-account file: the downloader could acquire a different account.
+        """
+        chat = (explicit or "").strip()
+        if chat and chat.lower() not in ("me", "self"):
+            return chat
+        try:
+            vals = await runtime_settings().get_all(self.db)
+            chat = str(vals.get("tg_storage_chat") or "").strip()
+        except Exception:
+            chat = ""
+        if chat and chat.lower() not in ("me", "self"):
+            return chat
+        chats: list[str] = []
+        for key in keys:
+            try:
+                value = self.manager.storage_chat_of(key).strip()
+            except Exception:
+                value = ""
+            chats.append(value)
+        # Every account that may carry a part must be able to see the same
+        # non-Saved destination.  Picking the one non-'me' chat while another
+        # account defaults to Saved Messages would make that part unreachable
+        # from the downloader's account.
+        if not chats or not chats[0] or chats[0].lower() in ("me", "self"):
+            return ""
+        if any(c != chats[0] for c in chats[1:]):
+            return ""
+        return chats[0]
+
+    async def _auto_split_plan(
+        self, *, size: int, backend: str, split_at: int, storage_chat: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Decide whether a file should use the optional multi-account path."""
+        if size <= 0 or backend == "eitaa":
+            return None
+        s = get_settings()
+        try:
+            vals = await runtime_settings().get_all(self.db)
+        except Exception:
+            vals = {}
+
+        def cfg(name: str, default: int) -> int:
+            raw = vals.get(name, getattr(s, name, default))
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return int(default)
+
+        if cfg("auto_split_enabled", 0) != 1:
+            return None
+        min_file = max(0, cfg("auto_split_min_file_size", 128 * 1024 * 1024))
+        if size < min_file:
+            return None
+        min_part = max(1, cfg("auto_split_min_part_size", 32 * 1024 * 1024))
+        max_part = max(1, cfg("auto_split_max_part_size", 512 * 1024 * 1024))
+        # the original hard cap always wins over the auto-split preference
+        max_part = min(max_part, max(1, int(split_at or max_part)))
+        if max_part < min_part:
+            return None
+        min_accounts = max(2, cfg("auto_split_min_accounts", 2))
+        max_accounts = max(2, cfg("auto_split_max_accounts", 4))
+        max_parts = max(2, cfg("auto_split_max_parts", 64))
+        free = self._auto_split_free_accounts(backend)
+        if len(free) < min_accounts:
+            return None
+        target = await self._shared_storage_chat(storage_chat, free)
+        if not target:
+            return None
+        accounts = min(len(free), max_accounts)
+        if accounts < 2:
+            return None
+        parts = max(accounts, (size + max_part - 1) // max_part)
+        max_by_min = size // min_part
+        if max_by_min < 2:
+            return None
+        parts = min(parts, max_by_min, max_parts)
+        if parts < 2:
+            return None
+        if (size + parts - 1) // parts > max_part:
+            return None
+        if size // parts < min_part:
+            return None
+        return {
+            "parts": parts,
+            "concurrency": min(accounts, parts),
+            "storage_chat": target,
+        }
 
     async def _maybe_store_thumb(self, rec: Dict[str, Any], tmp_path: str) -> None:
         """Best-effort: build a REAL thumbnail for this media type and keep it as a
@@ -1364,6 +1704,46 @@ class QueueManager:
                 os.remove(thumb_path)
             except OSError:
                 pass
+
+    @staticmethod
+    async def _split_file_balanced(tmp_path: str, parts: int) -> List[str]:
+        """Split into exactly ``parts`` near-equal files without loading a part in RAM."""
+        if parts < 1:
+            raise ValueError("parts must be >= 1")
+
+        def _work() -> List[str]:
+            size = os.path.getsize(tmp_path)
+            base, ext = os.path.splitext(tmp_path)
+            part_paths: List[str] = []
+            chunk_size = 1024 * 1024
+            each, remainder = divmod(size, parts)
+            fh_in = open(tmp_path, "rb")
+            try:
+                for idx in range(parts):
+                    remaining = each + (1 if idx < remainder else 0)
+                    if remaining <= 0:
+                        continue
+                    ppath = f"{base}.s{idx:04d}{ext}"
+                    with open(ppath, "wb") as fh_out:
+                        while remaining > 0:
+                            chunk = fh_in.read(min(chunk_size, remaining))
+                            if not chunk:
+                                raise IOError(f"short read while splitting part {idx}")
+                            fh_out.write(chunk)
+                            remaining -= len(chunk)
+                    part_paths.append(ppath)
+            except BaseException:
+                for ppath in part_paths:
+                    try:
+                        os.remove(ppath)
+                    except OSError:
+                        pass
+                raise
+            finally:
+                fh_in.close()
+            return part_paths
+
+        return await asyncio.to_thread(_work)
 
     @staticmethod
     async def _split_file(tmp_path: str, part_size: int) -> List[str]:
@@ -1466,10 +1846,12 @@ class QueueManager:
                 account_key = borrowed.key
                 self._last_backend_by_job[job_id] = borrowed.key
                 chat = rec["storage_chat"] or getattr(backend, "storage_chat", "me")
+                from ..services.streaming import iter_stored_part
+
                 with open(tmp, "wb") as fh:
                     for part in parts:
-                        async for chunk in backend.iter_file(
-                            part["message_id"], chat, start=0, end=None, size=part["size"]
+                        async for chunk in iter_stored_part(
+                            backend, chat, part, start=0, end=None
                         ):
                             fh.write(chunk)
                             total += len(chunk)
@@ -1566,7 +1948,7 @@ class QueueManager:
                 cur_payload = {}
         else:
             cur_payload = raw_payload or {}
-        total_bytes = sum(int(p.get("size") or 0) for p in parts)
+        total_bytes = sum(int(p.get("stored_size") or p.get("size") or 0) for p in parts)
         progress = {
             "file_id": file_id,
             "file_name": rec["name"],
@@ -1586,8 +1968,9 @@ class QueueManager:
                 tmp = f"{get_settings().final_tmp_dir()}/{file_id}.{part['idx']}.transfer"
                 try:
                     with open(tmp, "wb") as fh:
+                        stored_size = int(part.get("stored_size") or part["size"])
                         async for chunk in backend.iter_file(
-                            part["message_id"], src, start=0, end=None, size=part["size"]
+                            part["message_id"], src, start=0, end=None, size=stored_size
                         ):
                             fh.write(chunk)
                             if job_id:

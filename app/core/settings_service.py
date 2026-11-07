@@ -79,6 +79,18 @@ def _part_workers_ok(v: int) -> str:
     return "" if 1 <= v <= 16 else "must be between 1 and 16 parallel parts"
 
 
+def _auto_split_bytes_ok(v: int) -> str:
+    return "" if 1024 * 1024 <= v <= 2_000_000_000 else "must be between 1MB and 2GB"
+
+
+def _auto_split_accounts_ok(v: int) -> str:
+    return "" if 2 <= v <= 32 else "must be between 2 and 32 accounts"
+
+
+def _auto_split_parts_ok(v: int) -> str:
+    return "" if 2 <= v <= 1000 else "must be between 2 and 1000 parts"
+
+
 def _stream_cap_ok(v: int) -> str:
     return "" if 1 <= v <= 32 else "must be between 1 and 32 streams"
 
@@ -143,6 +155,15 @@ EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     "max_concurrent_uploads": (int, _gt_one_int, "global concurrent uploads"),
     "max_concurrent_uploads_per_account": (int, _gt_one_int, "per-account concurrent uploads"),
     "upload_part_workers": (int, _part_workers_ok, "parallel MTProto upload parts per file (1-16)"),
+    "compress_uploads": (int, _int_flag, "gzip-compress upload parts when smaller (0/1)"),
+    # automatic multi-account split (independent of split_threshold)
+    "auto_split_enabled": (int, _int_flag, "automatic multi-account split (0/1)"),
+    "auto_split_min_file_size": (int, _non_negative_int, "minimum file size to auto-split (bytes; 0=off)"),
+    "auto_split_min_part_size": (int, _auto_split_bytes_ok, "minimum auto-split part size (bytes)"),
+    "auto_split_max_part_size": (int, _auto_split_bytes_ok, "maximum auto-split part size (bytes)"),
+    "auto_split_min_accounts": (int, _auto_split_accounts_ok, "minimum free accounts required for auto-split"),
+    "auto_split_max_accounts": (int, _auto_split_accounts_ok, "maximum accounts used for one upload"),
+    "auto_split_max_parts": (int, _auto_split_parts_ok, "safety ceiling for auto-split parts"),
     "job_lease_seconds": (int, _lease_ok, "job lease / stale-claim timeout (seconds)"),
     # size + age aware scheduler
     "scheduler_small_max_bytes": (int, _positive_int, "small-lane max size (bytes)"),
@@ -204,6 +225,7 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "max_concurrent_uploads",
         "max_concurrent_uploads_per_account",
         "upload_part_workers",
+        "compress_uploads",
         "job_lease_seconds",
         "upload_stall_threshold_s",
         "fake_send_delay_s",
@@ -218,6 +240,15 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "scheduler_small_max_bytes",
         "scheduler_max_wait_s",
         "scheduler_scan_limit",
+    ],
+    "auto_split": [
+        "auto_split_enabled",
+        "auto_split_min_file_size",
+        "auto_split_min_part_size",
+        "auto_split_max_part_size",
+        "auto_split_min_accounts",
+        "auto_split_max_accounts",
+        "auto_split_max_parts",
     ],
     "backend": ["default_backend"],
     "telegram_api": ["fake_tg", "eitaa_mode", "tg_api_id", "tg_api_hash", "tg_storage_chat", "transfer_delete_source"],

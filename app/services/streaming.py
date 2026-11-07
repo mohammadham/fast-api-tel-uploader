@@ -54,11 +54,59 @@ def parse_range(header: str, size: int) -> Optional[Tuple[int, int]]:
     return (start, end)
 
 
-async def _iter_single(
-    backend: BackendClient, message_id: int, chat: str, *, start: int, end: Optional[int], size: Optional[int]
+async def iter_stored_part(
+    backend: BackendClient, chat: str, part: dict, *, start: int, end: Optional[int]
 ) -> AsyncIterator[bytes]:
-    async for chunk in backend.iter_file(message_id, chat, start=start, end=end, size=size):
-        yield chunk
+    """Yield one logical part, transparently decompressing gzip parts.
+
+    The Telegram document may be compressed (``encoding='gzip'``); its
+    ``size`` column stays the original size so HTTP ranges and multipart
+    boundaries keep working.  A range inside a compressed part has to feed
+    the stream from byte 0 and discard the prefix.  Storage is still
+    substantially smaller for compressible files.
+    """
+    original = int(part["size"])
+    message_id = int(part["message_id"])
+    encoding = str(part.get("encoding") or "")
+    if encoding != "gzip":
+        async for chunk in backend.iter_file(
+            message_id, chat, start=start, end=end, size=original
+        ):
+            yield chunk
+        return
+
+    stored = int(part.get("stored_size") or original)
+    dec = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    skip = max(0, int(start or 0))
+    remaining = None if end is None else max(0, int(end) - int(start) + 1)
+
+    async for raw in backend.iter_file(
+        message_id, chat, start=0, end=max(0, stored - 1), size=stored
+    ):
+        out = dec.decompress(raw)
+        if skip:
+            if len(out) <= skip:
+                skip -= len(out)
+                continue
+            out = out[skip:]
+            skip = 0
+        if remaining is not None:
+            out = out[:remaining]
+            remaining -= len(out)
+        if out:
+            yield out
+        if remaining is not None and remaining <= 0:
+            return
+
+    out = dec.flush()
+    if skip:
+        if len(out) <= skip:
+            return
+        out = out[skip:]
+    if remaining is not None:
+        out = out[:remaining]
+    if out:
+        yield out
 
 
 async def _iter_multipart(
@@ -82,9 +130,8 @@ async def _iter_multipart(
         take = psize - skip
         if remaining is not None:
             take = min(take, remaining)
-        pos = skip
-        async for chunk in backend.iter_file(
-            part["message_id"], chat, start=pos, end=psize - 1, size=psize
+        async for chunk in iter_stored_part(
+            backend, chat, part, start=skip, end=skip + take - 1
         ):
             if remaining is not None and remaining <= 0:
                 break
@@ -181,8 +228,8 @@ async def file_response(
         bg = resp.background
         try:
             if len(parts) <= 1 and parts:
-                async for chunk in _iter_single(
-                    backend, parts[0]["message_id"], chat, start=start, end=end, size=total if len(parts) == 1 else None
+                async for chunk in iter_stored_part(
+                    backend, chat, parts[0], start=start, end=end
                 ):
                     bg.bytes_sent += len(chunk)
                     yield chunk
@@ -331,8 +378,8 @@ async def zip_stream_response(
         tmp_paths.append(path)
         with open(path, "wb") as fh:
             for part in parts:
-                async for chunk in backend.iter_file(
-                    part["message_id"], chat, start=0, end=None, size=part["size"]
+                async for chunk in iter_stored_part(
+                    backend, chat, part, start=0, end=None
                 ):
                     fh.write(chunk)
         return path

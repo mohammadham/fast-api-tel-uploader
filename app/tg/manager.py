@@ -431,6 +431,11 @@ class TGManager:
             await asyncio.sleep(0.1)
         raise NoBackendAvailable("manager stopped", 5)
 
+    def storage_chat_of(self, key: str) -> str:
+        """Resolved destination chat for one backend (used by auto-split safety)."""
+        backend = self._backends.get(key)
+        return str(getattr(backend, "storage_chat", "") or "").strip()
+
     def _retry_after(self, keys: List[str]) -> float:
         t = time.time()
         waits = [self._flood_until.get(k, 0) - t for k in keys]

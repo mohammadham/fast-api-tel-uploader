@@ -104,7 +104,9 @@ CREATE TABLE IF NOT EXISTS file_parts (
   file_id TEXT NOT NULL,
   idx INTEGER NOT NULL,
   message_id INTEGER NOT NULL,
-  size INTEGER NOT NULL
+  size INTEGER NOT NULL,
+  stored_size INTEGER NOT NULL DEFAULT 0,
+  encoding TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
@@ -314,7 +316,9 @@ CREATE TABLE IF NOT EXISTS file_parts (
   file_id TEXT NOT NULL,
   idx INTEGER NOT NULL,
   message_id INTEGER NOT NULL,
-  size INTEGER NOT NULL
+  size INTEGER NOT NULL,
+  stored_size BIGINT NOT NULL DEFAULT 0,
+  encoding TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
@@ -532,7 +536,9 @@ CREATE TABLE IF NOT EXISTS file_parts (
   file_id VARCHAR(64) NOT NULL,
   idx INT NOT NULL,
   message_id BIGINT NOT NULL,
-  size BIGINT NOT NULL
+  size BIGINT NOT NULL,
+  stored_size BIGINT NOT NULL DEFAULT 0,
+  encoding VARCHAR(16) NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS jobs (
   id VARCHAR(64) PRIMARY KEY,
@@ -714,6 +720,8 @@ class Database:
             "ALTER TABLE channels ADD COLUMN last_backup_bytes INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN last_backup_files INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE folders ADD COLUMN scope TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE file_parts ADD COLUMN stored_size INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE file_parts ADD COLUMN encoding TEXT NOT NULL DEFAULT ''",
         ):
             try:
                 await self._conn.execute(stmt)
@@ -839,6 +847,16 @@ class PgDatabase:
         )
         async with self._engine.begin() as conn:
             await conn.execute(text(SCHEMA_PG))
+        # Light migration for databases created before transparent compression.
+        for stmt in (
+            "ALTER TABLE file_parts ADD COLUMN IF NOT EXISTS stored_size BIGINT NOT NULL DEFAULT 0",
+            "ALTER TABLE file_parts ADD COLUMN IF NOT EXISTS encoding TEXT NOT NULL DEFAULT ''",
+        ):
+            try:
+                async with self._engine.begin() as conn:
+                    await conn.execute(text(stmt))
+            except Exception:
+                pass
 
     async def close(self) -> None:
         if self._engine:
@@ -964,6 +982,16 @@ class MysqlDatabase:
         async with self._engine.begin() as conn:
             for stmt in _schema_statements(SCHEMA_MYSQL):
                 await conn.execute(text(stmt))
+        # Light migration for databases created before transparent compression.
+        for stmt in (
+            "ALTER TABLE file_parts ADD COLUMN stored_size BIGINT NOT NULL DEFAULT 0",
+            "ALTER TABLE file_parts ADD COLUMN encoding VARCHAR(16) NOT NULL DEFAULT ''",
+        ):
+            try:
+                async with self._engine.begin() as conn:
+                    await conn.execute(text(stmt))
+            except Exception:
+                pass
         # one transaction per index: MySQL has no CREATE INDEX IF NOT EXISTS,
         # so an existing index raises 1061 and must not poison the batch
         for stmt in SCHEMA_MYSQL_INDEXES:
