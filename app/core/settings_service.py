@@ -75,6 +75,10 @@ def _lease_ok(v: int) -> str:
     return "" if 60 <= v <= 86400 else "must be between 60 and 86400 seconds"
 
 
+def _part_workers_ok(v: int) -> str:
+    return "" if 1 <= v <= 16 else "must be between 1 and 16 parallel parts"
+
+
 def _stream_cap_ok(v: int) -> str:
     return "" if 1 <= v <= 32 else "must be between 1 and 32 streams"
 
@@ -138,6 +142,7 @@ EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     "max_concurrent_downloads": (int, _gt_one_int, "max concurrent downloads per account"),
     "max_concurrent_uploads": (int, _gt_one_int, "global concurrent uploads"),
     "max_concurrent_uploads_per_account": (int, _gt_one_int, "per-account concurrent uploads"),
+    "upload_part_workers": (int, _part_workers_ok, "parallel MTProto upload parts per file (1-16)"),
     "job_lease_seconds": (int, _lease_ok, "job lease / stale-claim timeout (seconds)"),
     # size + age aware scheduler
     "scheduler_small_max_bytes": (int, _positive_int, "small-lane max size (bytes)"),
@@ -198,6 +203,7 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "max_concurrent_downloads",
         "max_concurrent_uploads",
         "max_concurrent_uploads_per_account",
+        "upload_part_workers",
         "job_lease_seconds",
         "upload_stall_threshold_s",
         "fake_send_delay_s",
@@ -217,6 +223,28 @@ _SETTING_GROUPS: dict[str, list[str]] = {
     "telegram_api": ["fake_tg", "eitaa_mode", "tg_api_id", "tg_api_hash", "tg_storage_chat", "transfer_delete_source"],
     "proxy": ["proxy_enabled", "proxy_strategy", "proxy_monitor_interval"],
     "redis": ["redis_enabled", "redis_url"],
+}
+
+#: Settings that only exist in the process environment.  They are displayed in
+#: the panel as read-only so an operator can see what the running container
+#: actually booted with instead of guessing why a shell edit had no effect.
+_ENV_ONLY_SETTINGS: dict[str, tuple[str, bool]] = {
+    "database_url": ("str", True),
+    "db_engine": ("str", False),
+    "node_id": ("str", False),
+    "data_dir": ("str", False),
+    "upload_tmp_dir": ("str", False),
+    "log_level": ("str", False),
+    "cors_origins": ("str", False),
+    "jwt_ttl_minutes": ("int", False),
+    "refresh_ttl_days": ("int", False),
+    "trusted_proxies": ("str", False),
+    "admin_username": ("str", False),
+    "admin_password": ("str", True),
+    "secret": ("str", True),
+    "fernet_key": ("str", True),
+    "bot_admin_ids": ("str", False),
+    "bot_api_base": ("str", False),
 }
 
 CACHE_TTL = 10.0  # seconds; cheap staleness window for multi-node convergence
@@ -387,6 +415,23 @@ async def editable_settings_meta(db=None) -> list:
                     "read_only": False,
                 }
             )
+    for key, (vtype, sensitive) in _ENV_ONLY_SETTINGS.items():
+        value = getattr(s, key, None)
+        if sensitive and value not in (None, ""):
+            value = "********"
+        out.append(
+            {
+                "key": key,
+                "group": "environment",
+                "type": vtype,
+                "description": "env-only (requires container restart)",
+                "current": value,
+                "env_value": value,
+                "db_value": None,
+                "source": "env",
+                "read_only": True,
+            }
+        )
     return out
 
 

@@ -67,6 +67,11 @@ async def jobs(limit: int = 100, _: str = Depends(get_current_admin), db=Depends
         item["lane"] = lane_for(item, small_max)
         created = float(r.get("created_at") or clock)
         item["wait_s"] = max(0, clock - created) if r.get("status") in ("pending", "retry") else 0
+        live = state.queue._upload_progress.get(r["id"])
+        if live:
+            item.update(live)
+        elif item.get("payload"):
+            item["account"] = item["payload"].get("handled_by") or item.get("payload", {}).get("account") or ""
         items.append(item)
     return {"items": items, "paused": state.queue.paused()}
 

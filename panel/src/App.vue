@@ -139,7 +139,7 @@
         </div>
         <div class="card wide">
           <h4>صف انتظار</h4>
-          <div class="stat" v-for="(v, k) in queueStats" :key="k"><div class="lbl">{{ k }}</div><div class="num">{{ v }}</div></div>
+          <div class="stat" v-for="c in queueCards" :key="c.label"><div class="lbl">{{ c.label }}</div><div class="num">{{ c.value }}</div></div>
         </div>
       </section>
 
@@ -499,16 +499,23 @@
           </div>
         </div>
         <div class="cards">
-          <div class="stat" v-for="(v, k) in queueStats" :key="k"><div class="lbl">{{ k }}</div><div class="num">{{ v }}</div></div>
+          <div class="stat" v-for="c in queueCards" :key="c.label"><div class="lbl">{{ c.label }}</div><div class="num">{{ c.value }}</div></div>
         </div>
         <div class="card wide">
           <table>
-            <thead><tr><th>شناسه</th><th>نوع</th><th>لِین</th><th>حجم</th><th>انتظار</th><th>اولویت</th><th>وضعیت</th><th>تلاش</th><th>خطا</th><th>عملیات</th></tr></thead>
+            <thead><tr><th>شناسه</th><th>نوع</th><th>لِین</th><th>حجم</th><th>پیشرفت</th><th>اکانت</th><th>انتظار</th><th>اولویت</th><th>وضعیت</th><th>تلاش</th><th>خطا</th><th>عملیات</th></tr></thead>
             <tbody>
               <tr v-for="j in jobs" :key="j.id">
                 <td dir="ltr"><code>{{ j.id }}</code></td><td>{{ j.kind }}</td>
                 <td><span class="badge">{{ j.lane || '—' }}</span></td>
                 <td>{{ j.size_bytes ? fmtBytes(j.size_bytes) : '—' }}</td>
+                <td>
+                  <div style="height:6px;background:var(--border,#2a3040);border-radius:4px;overflow:hidden;min-width:70px">
+                    <div :style="{ height: '100%', width: (j.progress_pct ?? (j.status === 'done' ? 100 : 0)) + '%', background: 'var(--ok,#22C55E)' }"></div>
+                  </div>
+                  <span class="muted" style="font-size:11px">{{ j.progress_pct ?? (j.status === 'done' ? 100 : 0) }}%<template v-if="j.speed_bps"> · {{ fmtBytes(j.speed_bps) }}/s</template></span>
+                </td>
+                <td dir="ltr" class="muted">{{ j.account || '—' }}</td>
                 <td>{{ j.wait_s ? Math.round(j.wait_s) + 's' : '—' }}</td>
                 <td>{{ j.priority }}</td>
                 <td><span class="badge" :class="j.status">{{ j.status }}</span></td>
@@ -521,7 +528,7 @@
                   <template v-else><span class="muted" style="font-size:12px">—</span></template>
                 </td>
               </tr>
-              <tr v-if="!jobs.length"><td colspan="10" class="muted">جابی نیست</td></tr>
+              <tr v-if="!jobs.length"><td colspan="12" class="muted">جابی نیست</td></tr>
             </tbody>
           </table>
         </div>
@@ -608,6 +615,16 @@
         <div class="card wide" v-show="dirtyCount" style="margin-bottom:14px;border-color:var(--warn);padding:10px 14px;display:flex;align-items:center;gap:10px">
           <b style="font-size:13px">{{ dirtyCount }} مقدار ویرایش شده اما هنوز ذخیره نشده است.</b>
           <span class="muted" style="font-size:12px">برای اعمال، «ذخیره و اعمال» را بزنید.</span>
+        </div>
+        <div v-if="envSettings.length" class="card wide" style="margin-bottom:14px;border-color:var(--warn)">
+          <h3 style="font-size:15px;margin:0 0 6px">تنظیمات محیط (فقط خواندنی)</h3>
+          <p class="muted" style="font-size:12px;margin:0 0 10px">این مقادیر از env/کانتینر خوانده می‌شوند و با ذخیره این صفحه تغییر نمی‌کنند. برای تغییر، مقدار را در shell و سپس کانتینر را ری‌استارت کنید.</p>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">
+            <div class="field" v-for="it in envSettings" :key="it.key">
+              <label>{{ settingLabels[it.key] || it.key }} <span class="muted" style="font-size:11px">env</span></label>
+              <input :value="it.current ?? '—'" disabled dir="ltr" style="opacity:.8">
+            </div>
+          </div>
         </div>
         <div v-for="g in settingsGroups" :key="g.id" class="card wide" style="margin-bottom:14px">
           <h3 style="font-size:15px;margin:0 0 10px">{{ g.title }}</h3>
@@ -1172,16 +1189,25 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
 
     /* ---------- ops tab auto-refresh ---------- */
     let opsPollInterval = null;
+    let queuePollInterval = null;
     onMounted(() => {
       opsPollInterval = setInterval(() => {
         if (!token.value) return; // no polling while on the login screen
         loaders.ops().catch(() => {/* ignore errors during unmount */});
       }, 30000);
+      queuePollInterval = setInterval(() => {
+        if (!token.value || tab.value !== "queue") return;
+        loaders.queue().catch(() => {/* ignore transient errors */});
+      }, 5000);
     });
     onBeforeUnmount(() => {
       if (opsPollInterval) {
         clearInterval(opsPollInterval);
         opsPollInterval = null;
+      }
+      if (queuePollInterval) {
+        clearInterval(queuePollInterval);
+        queuePollInterval = null;
       }
       if (accTimerId) { clearInterval(accTimerId); accTimerId = null; }
     });
@@ -1217,6 +1243,19 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
     const jobs = ref([]);
     const audit = ref([]);
     const queueStats = ref({});
+    const queueCards = computed(() => {
+      const s = queueStats.value || {};
+      const u = (s.by_kind && s.by_kind.upload) || {};
+      const t = (s.by_kind && s.by_kind.transfer) || {};
+      return [
+        { label: "آپلود در انتظار", value: (s.upload_pending ?? u.pending ?? 0) + (t.pending ?? 0) },
+        { label: "آپلود در حال اجرا", value: (s.upload_running ?? u.running ?? 0) + (t.running ?? 0) },
+        { label: "آپلود تکمیل‌شده", value: (u.done ?? 0) + (t.done ?? 0) },
+        { label: "آپلود شکست‌خورده", value: (u.failed ?? 0) + (t.failed ?? 0) },
+        { label: "کل در انتظار", value: s.pending ?? 0 },
+        { label: "کل در حال اجرا", value: s.running ?? 0 },
+      ];
+    });
     /* admin pressure alerts: upload-queue stall + flooded telegram backends */
     const pressure = ref({ stall: { waiting: 0, stalled: false, oldest_waiting_s: 0, threshold: 0, gate_capacity: 0, upload_workers: 0, gate_full: false }, flooded: [], summary: "" });
     let pressureTimer = null;
@@ -2033,6 +2072,7 @@ const doLogin = submitLogin;
     function dirtySettings() {
       const updates = {};
       for (const it of settingsItems.value) {
+        if (it.read_only) continue;
         const v = settingsDraft[it.key];
         if (v === "" || v == null) continue;
         // ints compare numerically so env bools (false) vs draft "0" don't count as dirty
@@ -2088,7 +2128,25 @@ const doLogin = submitLogin;
       proxy_monitor_interval: "بازه تست دوره‌ای پراکسی‌ها (دقیقه؛ ۰=خاموش)",
       redis_enabled: "استفاده از Redis به‌عنوان صف (۰=SQLite، ۱=Redis)",
       redis_url: "URL ردیس برای صف (redis://host:port/db — خالی = SQLite)",
+      upload_part_workers: "تعداد part موازی آپلود MTProto برای هر فایل (۱ تا ۱۶)",
+      database_url: "آدرس دیتابیس (env)",
+      db_engine: "موتور دیتابیس (env)",
+      node_id: "شناسه نود (env)",
+      data_dir: "پوشه داده (env)",
+      upload_tmp_dir: "پوشه موقت آپلود (env)",
+      log_level: "سطح لاگ (env)",
+      cors_origins: "CORS origins (env)",
+      jwt_ttl_minutes: "عمر توکن دسترسی (env)",
+      refresh_ttl_days: "عمر refresh token (env)",
+      trusted_proxies: "پراکسی‌های مورد اعتماد (env)",
+      admin_username: "نام کاربری ادمین (env)",
+      admin_password: "رمز ادمین (env — پوشانده)",
+      secret: "کلید امنیتی (env — پوشانده)",
+      fernet_key: "کلید Fernet (env — پوشانده)",
+      bot_admin_ids: "شناسه‌های ادمین ربات (env)",
+      bot_api_base: "آدرس Bot API (env)",
     };
+    const envSettings = computed(() => settingsItems.value.filter((x) => x.group === "environment"));
     const settingsGroups = computed(() => {
       const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", scheduler: "زمان‌بندی اندازه/قدمت", backend: "بک‌اند", telegram_api: "تلگرام و ایتا — حالت تست و API", proxy: "پراکسی تلگرام", redis: "ردیس (صف توزیع‌شده — بدون ری‌استارت)" };
       const out = [];
@@ -2122,6 +2180,7 @@ const doLogin = submitLogin;
     async function saveSettings() {
       // validate every touched field first
       for (const it of settingsItems.value) {
+        if (it.read_only) continue;
         const v = settingsDraft[it.key];
         const err = (v !== "" && v != null) ? validateSetting(it, v) : "";
         if (err) settingsErrors[it.key] = err; else delete settingsErrors[it.key];

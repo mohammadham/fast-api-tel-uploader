@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     max_concurrent_uploads: int = 2
     #: per-account upload slots (separate from the global gate)
     max_concurrent_uploads_per_account: int = 2
+    #: parallel SaveBigFilePart requests per uploaded file (MTProto only)
+    upload_part_workers: int = 4
     job_max_retries: int = 5
     job_lease_seconds: int = 1800
 

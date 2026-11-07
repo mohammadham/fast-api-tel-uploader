@@ -90,7 +90,10 @@ class EitaaBackend(BackendClient):
         self.storage_chat = chat
         self._http = httpx.AsyncClient(timeout=300, transport=transport)
 
-    async def send_document(self, chat: str, path: str, name: str, mime: str, caption: str = "") -> dict:
+    async def send_document(
+        self, chat: str, path: str, name: str, mime: str, caption: str = "", *,
+        part_workers: int = 4, progress_cb=None,
+    ) -> dict:
         # chat overrides the configured default when given explicitly
         target = chat or self.storage_chat
         if not target:

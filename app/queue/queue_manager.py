@@ -102,6 +102,8 @@ class QueueManager:
         # job_id → wait-started-at for uploads currently blocked acquiring the
         # global upload gate (they are status=running but stuck behind the cap)
         self._gate_waiters: Dict[str, float] = {}
+        # job_id → live upload progress/account snapshot for the panel
+        self._upload_progress: Dict[str, Dict[str, Any]] = {}
         self._redis: Optional[redis.Redis] = None
         self._redis_url: Optional[str] = None
         self._redis_ping_done = False
@@ -1006,9 +1008,10 @@ class QueueManager:
                     duration_ms=round((time.perf_counter() - t0) * 1000, 1),
                 )
         finally:
-            # handlers re-set this on every attempt; dropping it here keeps the
-            # map bounded when jobs fail permanently
+            # handlers re-set this on every attempt; dropping them here keeps the
+            # maps bounded when jobs fail permanently
             self._last_backend_by_job.pop(job_id, None)
+            self._upload_progress.pop(job_id, None)
             lease_token = self._redis_leases.pop(job_id, None)
             if lease_token:
                 try:
@@ -1194,6 +1197,33 @@ class QueueManager:
             async with borrowed as be:
                 account_key = borrowed.key
                 self._last_backend_by_job[job_id] = borrowed.key
+                try:
+                    part_workers = max(1, min(16, int(
+                        await get_runtime(self.db, "upload_part_workers")
+                        or s.upload_part_workers or 4
+                    )))
+                except Exception:
+                    part_workers = 4
+                started = time.monotonic()
+
+                def on_upload_progress(done: int, total: int, *, account=account_key) -> None:
+                    total = max(1, int(total or size))
+                    elapsed = max(0.001, time.monotonic() - started)
+                    self._upload_progress[job_id] = {
+                        "progress_pct": min(100, round(int(done) * 100 / total)),
+                        "progress_bytes": int(done),
+                        "progress_total": total,
+                        "speed_bps": int(int(done) / elapsed),
+                        "account": account,
+                        "stage": "uploading",
+                        "part_workers": part_workers,
+                    }
+
+                self._upload_progress[job_id] = {
+                    "progress_pct": 0, "progress_bytes": 0, "progress_total": size,
+                    "speed_bps": 0, "account": account_key, "stage": "uploading",
+                    "part_workers": part_workers,
+                }
                 # fall back to the backend default when neither the key nor the
                 # record pins a chat ('' → send_document resolves 'me'/global)
                 storage_chat = storage_chat or getattr(be, "storage_chat", "me") or ""
@@ -1202,11 +1232,21 @@ class QueueManager:
                     part_size = split_at
                     part_paths = await self._split_file(tmp_path, part_size)
                     try:
+                        offset = 0
                         for idx, ppath in enumerate(part_paths):
                             part_name = f"{name}.part{idx:04d}"
-                            result = await be.send_document(storage_chat, ppath, part_name, mime, caption=folder_tag)
+                            part_len = os.path.getsize(ppath)
+
+                            def part_progress(done: int, _total: int, *, off=offset, plen=part_len) -> None:
+                                on_upload_progress(off + min(int(done), plen), size)
+
+                            result = await be.send_document(
+                                storage_chat, ppath, part_name, mime, caption=folder_tag,
+                                part_workers=part_workers, progress_cb=part_progress,
+                            )
                             message_ids.append(int(result["message_id"]))
                             await self.files.add_part(file_id, idx, int(result["message_id"]), int(result["size"]))
+                            offset += part_len
                     finally:
                         for ppath in part_paths:
                             try:
@@ -1222,7 +1262,10 @@ class QueueManager:
                             "upload resume requested but backend sends full file",
                             file_id=file_id, requested_offset=resumed_offset,
                         )
-                    result = await be.send_document(storage_chat, tmp_path, name, mime, caption=folder_tag)
+                    result = await be.send_document(
+                        storage_chat, tmp_path, name, mime, caption=folder_tag,
+                        part_workers=part_workers, progress_cb=on_upload_progress,
+                    )
                     message_ids.append(int(result["message_id"]))
                     await self.files.add_part(file_id, 0, int(result["message_id"]), int(result["size"]))
                     if session_id:
@@ -1695,6 +1738,8 @@ class QueueManager:
         )
         base["overdue"] = sum(1 for r in pending if is_overdue(r, now=t, max_wait_s=max_wait))
         base["workers_alive"] = len([w for w in self._workers if not w.done()])
+        base["upload_pending"] = base["by_kind"].get(KIND_UPLOAD, {}).get("pending", 0)
+        base["upload_running"] = base["by_kind"].get(KIND_UPLOAD, {}).get("running", 0)
         base["scheduler"] = {
             "small_max_bytes": small, "max_wait_s": max_wait, "scan_limit": scan,
         }

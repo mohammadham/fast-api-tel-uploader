@@ -32,7 +32,10 @@ class FakeBackend(BackendClient):
         self.send_delay = 0.0  # simulate slow telegram (fake_send_delay_s runtime setting)
         self.closed = False
 
-    async def send_document(self, chat: str, path: str, name: str, mime: str, caption: str = "") -> dict:
+    async def send_document(
+        self, chat: str, path: str, name: str, mime: str, caption: str = "", *,
+        part_workers: int = 4, progress_cb=None,
+    ) -> dict:
         import asyncio
 
         if self.fail_rate > 0:

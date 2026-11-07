@@ -91,11 +91,15 @@ class TelethonBackend(BackendClient):
             return int(chat)
         return chat
 
-    async def send_document(self, chat: str, path: str, name: str, mime: str, caption: str = "") -> dict:
+    async def send_document(
+        self, chat: str, path: str, name: str, mime: str, caption: str = "", *,
+        part_workers: int = 4, progress_cb=None,
+    ) -> dict:
         try:
             await self.start()
             msg = await fast_transfer.send_file_message(
-                self._client, self._chat(chat), path, caption=caption, file_name=name
+                self._client, self._chat(chat), path, caption=caption, file_name=name,
+                mime=mime, part_workers=part_workers, progress=progress_cb,
             )
             doc = self._location(msg)
             return {"message_id": int(msg.id), "size": int(getattr(doc, "size", os.path.getsize(path)))}
@@ -175,7 +179,10 @@ class BotBackend(BackendClient):
             raise SendFailure(desc or f"bot api error {resp.status_code}")
         return data["result"]
 
-    async def send_document(self, chat: str, path: str, name: str, mime: str, caption: str = "") -> dict:
+    async def send_document(
+        self, chat: str, path: str, name: str, mime: str, caption: str = "", *,
+        part_workers: int = 4, progress_cb=None,
+    ) -> dict:
         # caption kwarg keeps BotBackend compatible with the shared BackendClient
         # contract (channel probe/backup pass captions; Bot API supports them)
         try:

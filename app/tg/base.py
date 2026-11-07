@@ -11,11 +11,23 @@ class BackendClient(abc.ABC):
     id: str
 
     @abc.abstractmethod
-    async def send_document(self, chat: str, path: str, name: str, mime: str, caption: str = "") -> dict:
+    async def send_document(
+        self,
+        chat: str,
+        path: str,
+        name: str,
+        mime: str,
+        caption: str = "",
+        *,
+        part_workers: int = 4,
+        progress_cb=None,
+    ) -> dict:
         """Upload `path` as a document to `chat`. Returns {'message_id': int, 'size': int}.
 
         `caption` carries the folder-tag hashtags (e.g. '#projects #2026') so the
         file stays searchable/organized inside the telegram client itself.
+        `part_workers`/`progress_cb` are MTProto-only hints; other backends may
+        ignore them.
         """
 
     @abc.abstractmethod

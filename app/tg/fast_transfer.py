@@ -5,7 +5,8 @@ each fetched by its own `iter_download` stream (own pipeline/connection) and
 written into its slot of the output file. Streaming to HTTP responses uses a
 single aligned stream with Range support.
 
-Uploads use Telethon's native pipelined `save_file` (512KB parts).
+Uploads split the file into 512KB parts and send independent
+`SaveBigFilePart` requests concurrently.
 """
 from __future__ import annotations
 
@@ -141,25 +142,93 @@ async def stream_range(
             yield chunk
 
 
-async def upload_file(client, in_path: str, *, file_name: str = "", progress=None) -> Any:
-    """Upload a local file to Telegram (pipelined parts). Returns InputFile."""
-    return await client.save_file(
-        in_path,
-        file_name=file_name or os.path.basename(in_path),
-        part_size_kb=512,
-        progress=progress,
-        force_document=True,
-    )
+async def upload_file(
+    client,
+    in_path: str,
+    *,
+    file_name: str = "",
+    part_workers: int = 4,
+    progress=None,
+) -> Any:
+    """Upload a local file to Telegram using parallel SaveBigFilePart requests.
+
+    Telethon's own ``upload_file`` sends parts strictly serially.  For large
+    files that leaves most of the link idle, so we issue independent part
+    requests up to ``part_workers`` at a time.  Telegram accepts parts in any
+    order; the returned ``InputFileBig`` carries the part count needed by
+    ``send_file``.
+    """
+    from telethon import helpers
+    from telethon.tl import functions, types
+
+    file_name = file_name or os.path.basename(in_path)
+    size = os.path.getsize(in_path)
+    if size <= 10 * 1024 * 1024:
+        # Small files use Telethon's InputSizedFile path (MD5 + exact size).
+        return await client.upload_file(
+            in_path, part_size_kb=512, file_name=file_name,
+            progress_callback=progress,
+        )
+
+    part_size = MAX_REQUEST
+    part_count = (size + part_size - 1) // part_size
+    file_id = helpers.generate_random_long()
+    workers = max(1, min(int(part_workers or 1), 16, part_count))
+    sent = 0
+    sent_lock = asyncio.Lock()
+
+    async def send_part(worker_index: int) -> None:
+        nonlocal sent
+        with open(in_path, "rb") as fh:
+            for index in range(worker_index, part_count, workers):
+                fh.seek(index * part_size)
+                part = fh.read(part_size)
+                if len(part) != part_size and index < part_count - 1:
+                    raise IOError(
+                        f"short read at part {index}: {len(part)}/{part_size}"
+                    )
+                ok = await client(
+                    functions.upload.SaveBigFilePartRequest(
+                        file_id, index, part_count, part
+                    )
+                )
+                if not ok:
+                    raise RuntimeError(f"failed to upload file part {index}")
+                async with sent_lock:
+                    sent += len(part)
+                    if progress:
+                        await helpers._maybe_await(progress(sent, size))
+
+    await asyncio.gather(*(send_part(i) for i in range(workers)))
+    return types.InputFileBig(file_id, part_count, file_name)
 
 
-async def send_file_message(client, chat, in_path: str, *, caption: str = "", file_name: str = "") -> Any:
+async def send_file_message(
+    client,
+    chat,
+    in_path: str,
+    *,
+    caption: str = "",
+    file_name: str = "",
+    mime: str = "",
+    part_workers: int = 4,
+    progress=None,
+) -> Any:
     """Upload and send as document message; returns the Message (has .id, .document)."""
+    from telethon.tl import types
+
+    file_name = file_name or os.path.basename(in_path)
+    handle = await upload_file(
+        client, in_path, file_name=file_name,
+        part_workers=part_workers, progress=progress,
+    )
     return await client.send_file(
         chat,
-        in_path,
+        handle,
         caption=caption,
-        file_name=file_name or os.path.basename(in_path),
         force_document=True,
+        attributes=[types.DocumentAttributeFilename(file_name=file_name)],
+        mime_type=mime or None,
     )
 
 
