@@ -501,11 +501,39 @@
         <div class="cards">
           <div class="stat" v-for="c in queueCards" :key="c.label"><div class="lbl">{{ c.label }}</div><div class="num">{{ c.value }}</div></div>
         </div>
+        <div class="card wide" style="margin-bottom:14px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+            <h3 style="font-size:15px;margin:0">۱۰ جاب آخر</h3>
+            <span class="muted" style="font-size:12px">{{ recentJobs.length }} مورد اخیر</span>
+            <span class="muted" style="font-size:12px;margin-inline-start:auto" v-if="archivedJobs.length">بایگانی: {{ archivedJobs.length }} جاب</span>
+          </div>
+          <div v-if="recentJobs.length" style="display:flex;flex-direction:column;gap:6px">
+            <div v-for="j in recentJobs" :key="'recent-' + j.id" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--border,#2a3040);border-radius:8px;background:var(--surface2,#171b26)">
+              <span class="badge" :class="j.status">{{ j.status }}</span>
+              <code dir="ltr" style="font-size:11px">{{ j.id }}</code>
+              <b style="font-size:12px">{{ j.kind }}</b>
+              <span class="muted" style="font-size:11px">{{ j.size_bytes ? fmtBytes(j.size_bytes) : '—' }}</span>
+              <span v-if="j.progress_pct != null" class="muted" style="font-size:11px">{{ j.progress_pct }}%</span>
+              <span v-if="j.speed_bps" class="muted" style="font-size:11px">{{ fmtBytes(j.speed_bps) }}/s</span>
+              <span v-if="j.account" dir="ltr" class="badge">{{ j.account }}</span>
+              <span v-if="j.auto_split" class="tag" style="font-size:10px">auto {{ j.parts_done || 0 }}/{{ j.parts_total || 0 }} · {{ j.accounts_used || 0 }} اکانت</span>
+              <span class="muted" style="font-size:11px;margin-inline-start:auto">{{ fmtTime(j.created_at) }}</span>
+              <button v-if="j.status === 'failed'" @click="qRetry(j)">تلاش مجدد</button>
+              <button v-else-if="j.kind === 'upload' && !j.paused && (j.status === 'pending' || j.status === 'running' || j.status === 'retry')" @click="qResumeJob(j)">ادامه</button>
+            </div>
+          </div>
+          <p v-else class="muted" style="font-size:12px;margin:0">جابی نیست</p>
+        </div>
         <div class="card wide">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+            <h3 style="font-size:15px;margin:0">بایگانی جاب‌ها</h3>
+            <span class="muted" style="font-size:12px">صفحه {{ queuePage }} از {{ queuePageCount }}</span>
+            <span class="muted" style="font-size:12px;margin-inline-start:auto">۱۰ جاب در هر صفحه</span>
+          </div>
           <table>
             <thead><tr><th>شناسه</th><th>نوع</th><th>لِین</th><th>حجم</th><th>پیشرفت</th><th>اکانت</th><th>انتظار</th><th>اولویت</th><th>وضعیت</th><th>تلاش</th><th>خطا</th><th>عملیات</th></tr></thead>
             <tbody>
-              <tr v-for="j in jobs" :key="j.id">
+              <tr v-for="j in pagedJobs" :key="j.id">
                 <td dir="ltr"><code>{{ j.id }}</code></td><td>{{ j.kind }}</td>
                 <td><span class="badge">{{ j.lane || '—' }}</span></td>
                 <td>{{ j.size_bytes ? fmtBytes(j.size_bytes) : '—' }}</td>
@@ -528,26 +556,58 @@
                   <template v-else><span class="muted" style="font-size:12px">—</span></template>
                 </td>
               </tr>
-              <tr v-if="!jobs.length"><td colspan="12" class="muted">جابی نیست</td></tr>
+              <tr v-if="!pagedJobs.length"><td colspan="12" class="muted">جاب قدیمی‌تری نیست</td></tr>
             </tbody>
           </table>
+          <div style="display:flex;gap:8px;align-items:center;justify-content:center;margin-top:10px">
+            <button class="ghost" style="padding:4px 10px;font-size:12px" :disabled="queuePage <= 1" @click="queuePage--">قبلی</button>
+            <span class="muted" style="font-size:12px">صفحه {{ queuePage }} از {{ queuePageCount }}</span>
+            <button class="ghost" style="padding:4px 10px;font-size:12px" :disabled="queuePage >= queuePageCount" @click="queuePage++">بعدی</button>
+          </div>
         </div>
       </section>
 
       <!-- Audit -->
       <section v-show="tab === 'audit'">
         <h3 style="font-size:16px;margin-top:0">لاگ‌های سیستم</h3>
+        <div class="card wide" style="margin-bottom:14px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+            <h3 style="font-size:15px;margin:0">۱۰ لاگ آخر</h3>
+            <span class="muted" style="font-size:12px">{{ recentAudit.length }} مورد اخیر</span>
+            <span class="muted" style="font-size:12px;margin-inline-start:auto" v-if="archivedAudit.length">بایگانی: {{ archivedAudit.length }} لاگ</span>
+          </div>
+          <div v-if="recentAudit.length" style="display:flex;flex-direction:column;gap:6px">
+            <div v-for="a in recentAudit" :key="'recent-log-' + a.id" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--border,#2a3040);border-radius:8px;background:var(--surface2,#171b26)">
+              <span class="muted" style="font-size:11px;min-width:130px">{{ fmtTime(a.ts) }}</span>
+              <b style="font-size:12px">{{ a.actor }}</b>
+              <span class="badge">{{ a.action }}</span>
+              <span dir="ltr" class="muted" style="font-size:11px;overflow-wrap:anywhere">{{ a.target || '—' }}</span>
+              <span dir="ltr" class="muted" style="font-size:11px;margin-inline-start:auto">{{ a.ip }}</span>
+            </div>
+          </div>
+          <p v-else class="muted" style="font-size:12px;margin:0">لاگی نیست</p>
+        </div>
         <div class="card wide">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+            <h3 style="font-size:15px;margin:0">بایگانی لاگ‌ها</h3>
+            <span class="muted" style="font-size:12px">صفحه {{ auditPage }} از {{ auditPageCount }}</span>
+            <span class="muted" style="font-size:12px;margin-inline-start:auto">۱۰ لاگ در هر صفحه</span>
+          </div>
           <table>
             <thead><tr><th>زمان</th><th>کاربر</th><th>اکشن</th><th>هدف</th><th>IP</th></tr></thead>
             <tbody>
-              <tr v-for="(a, i) in audit" :key="i">
+              <tr v-for="a in pagedAudit" :key="a.id">
                 <td class="muted">{{ fmtTime(a.ts) }}</td><td>{{ a.actor }}</td>
                 <td>{{ a.action }}</td><td dir="ltr">{{ a.target }}</td><td dir="ltr">{{ a.ip }}</td>
               </tr>
-              <tr v-if="!audit.length"><td colspan="5" class="muted">لاگی نیست</td></tr>
+              <tr v-if="!pagedAudit.length"><td colspan="5" class="muted">لاگ قدیمی‌تری نیست</td></tr>
             </tbody>
           </table>
+          <div style="display:flex;gap:8px;align-items:center;justify-content:center;margin-top:10px">
+            <button class="ghost" style="padding:4px 10px;font-size:12px" :disabled="auditPage <= 1" @click="auditPage--">قبلی</button>
+            <span class="muted" style="font-size:12px">صفحه {{ auditPage }} از {{ auditPageCount }}</span>
+            <button class="ghost" style="padding:4px 10px;font-size:12px" :disabled="auditPage >= auditPageCount" @click="auditPage++">بعدی</button>
+          </div>
         </div>
         <div v-if="blockedFilesTotal > 0" class="card wide" style="margin-bottom:14px">
           <h3 style="font-size:15px;margin:0 0 10px">گزارش فایل‌های بن‌شده</h3>
@@ -665,6 +725,14 @@
                 <template v-else-if="it.key === 'transfer_delete_source'">
                   <option value="0">خاموش — نسخه‌های منبع در کانال قبلی بمانند</option>
                   <option value="1">روشن — پس از انتقال موفق، پیام‌های منبع حذف شوند</option>
+                </template>
+                <template v-else-if="it.key === 'auto_split_enabled'">
+                  <option value="0">غیرفعال — هر فایل روی یک اکانت</option>
+                  <option value="1">فعال — تقسیم خودکار بین اکانت‌های آزاد</option>
+                </template>
+                <template v-else-if="it.key === 'compress_uploads'">
+                  <option value="0">غیرفعال — آپلود بایت‌های اصلی</option>
+                  <option value="1">فعال — gzip فقط وقتی قطعه کوچک‌تر شود</option>
                 </template>
               </select>
               <input v-else-if="it.key === 'tg_api_hash'" v-model="settingsDraft[it.key]" type="password"
@@ -998,6 +1066,7 @@
       </div>
       <p v-if="uploadDlg.files.length" class="muted" style="margin:0" dir="ltr">{{ uploadDlg.files.length > 1 ? uploadDlg.files.length + " فایل — " : "" }}{{ uploadDlg.files[0].name }}{{ uploadDlg.files.length > 1 ? " …" : "" }} — {{ fmtBytes(uploadDlg.files.reduce((s, f) => s + (f.size || 0), 0)) }}</p>
       <p class="muted" style="margin:0">نام فایل همان‌طور که هست ذخیره می‌شود (بدون تغییر نام).</p>
+      <p class="muted" style="margin:0;font-size:11px">اگر «اسپلیت خودکار چنداکانتی» در تنظیمات فعال باشد، فایل‌های بزرگ بین اکانت‌های آزاد تقسیم می‌شوند.</p>
       <div class="field">
         <label>پوشه مقصد (اختیاری، مثل projects/2026)</label>
         <input v-model="uploadDlg.folder" dir="ltr" placeholder="از پوشه‌های همین کانال استفاده می‌شود">
@@ -1242,6 +1311,27 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
     const files = ref([]);
     const jobs = ref([]);
     const audit = ref([]);
+    /* queue/log layout: newest 10 stay visible, older rows are paginated */
+    const queuePageSize = 10;
+    const queuePage = ref(1);
+    const recentJobs = computed(() => jobs.value.slice(0, 10));
+    const archivedJobs = computed(() => jobs.value.slice(10));
+    const queuePageCount = computed(() => Math.max(1, Math.ceil(archivedJobs.value.length / queuePageSize)));
+    const pagedJobs = computed(() => {
+      const page = Math.min(queuePage.value, queuePageCount.value);
+      return archivedJobs.value.slice((page - 1) * queuePageSize, page * queuePageSize);
+    });
+    watch(jobs, () => { queuePage.value = Math.min(queuePage.value, queuePageCount.value); });
+    const auditPageSize = 10;
+    const auditPage = ref(1);
+    const recentAudit = computed(() => audit.value.slice(0, 10));
+    const archivedAudit = computed(() => audit.value.slice(10));
+    const auditPageCount = computed(() => Math.max(1, Math.ceil(archivedAudit.value.length / auditPageSize)));
+    const pagedAudit = computed(() => {
+      const page = Math.min(auditPage.value, auditPageCount.value);
+      return archivedAudit.value.slice((page - 1) * auditPageSize, page * auditPageSize);
+    });
+    watch(audit, () => { auditPage.value = Math.min(auditPage.value, auditPageCount.value); });
     const queueStats = ref({});
     const queueCards = computed(() => {
       const s = queueStats.value || {};
@@ -1928,13 +2018,13 @@ const doLogin = submitLogin;
     }
     loaders.queue = async () => {
       try {
-        const [s, j] = await Promise.all([api("/api/v1/queue/stats"), api("/api/v1/queue/jobs")]);
+        const [s, j] = await Promise.all([api("/api/v1/queue/stats"), api("/api/v1/queue/jobs?limit=500")]);
         queueStats.value = { ...s, paused: (s.paused || []).join(",") || "-" };
         jobs.value = j.items || [];
       } catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
     loaders.audit = async () => {
-      try { const d = await api("/api/v1/admin/audit"); audit.value = d.items || []; }
+      try { const d = await api("/api/v1/admin/audit?limit=500"); audit.value = d.items || []; }
       catch (e) { showToast("خطا: " + e.message, 4000, true); }
     };
     loaders.blockedFilesReport = async () => {
@@ -2032,7 +2122,7 @@ const doLogin = submitLogin;
     const redisTesting = ref(false);
     const redisStatus = ref(null); // {ok, error, server, db}
 
-    const optionedSettings = ["fake_tg", "eitaa_mode", "transfer_delete_source"]; // int settings rendered as selects
+    const optionedSettings = ["fake_tg", "eitaa_mode", "transfer_delete_source", "auto_split_enabled", "compress_uploads"]; // int settings rendered as selects
     function validateSetting(it, value) {
       if (it.type === "int") {
         if (value === "" || value === null || value === undefined || Number.isNaN(Number(value)))
@@ -2048,6 +2138,13 @@ const doLogin = submitLogin;
         if (it.key === "job_lease_seconds") { const n = Number(value); if (!(n >= 60 && n <= 86400)) return "بین ۶۰ تا ۸۶۴۰۰ ثانیه"; }
         if (it.key === "thumb_max_px") { const n = Number(value); if (!(n >= 64 && n <= 1280)) return "بین ۶۴ تا ۱۲۸۰ پیکسل"; }
         if (it.key === "thumb_quality") { const n = Number(value); if (!(n >= 40 && n <= 95)) return "بین ۴۰ تا ۹۵"; }
+        if (["auto_split_min_part_size", "auto_split_max_part_size"].includes(it.key)) {
+          const n = Number(value); if (!(n >= 1048576 && n <= 2000000000)) return "بین ۱ مگابایت تا ۲ گیگابایت";
+        }
+        if (["auto_split_min_accounts", "auto_split_max_accounts"].includes(it.key)) {
+          const n = Number(value); if (!(n >= 2 && n <= 32)) return "بین ۲ تا ۳۲ اکانت";
+        }
+        if (it.key === "auto_split_max_parts") { const n = Number(value); if (!(n >= 2 && n <= 1000)) return "بین ۲ تا ۱۰۰۰ قطعه"; }
       } else if (it.key === "default_backend") {
         if (!["telegram", "eitaa"].includes(value)) return "تلگرام یا ایتا";
       } else if (it.key === "proxy_strategy") {
@@ -2102,6 +2199,14 @@ const doLogin = submitLogin;
       scheduler_small_max_bytes: "سقف حجم لِین کوچک (بایت)",
       scheduler_max_wait_s: "حداکثر انتظار قبل از ارتقای اولویت (ثانیه؛ ۰=خاموش)",
       scheduler_scan_limit: "تعداد کاندید بررسی‌شده در هر تخصیص",
+      auto_split_enabled: "اسپلیت خودکار بین اکانت‌های آزاد (۰=خاموش، ۱=روشن)",
+      auto_split_min_file_size: "حداقل حجم فایل برای اسپلیت خودکار (بایت؛ ۰=بدون حداقل)",
+      auto_split_min_part_size: "حداقل اندازه هر قطعه خودکار (بایت)",
+      auto_split_max_part_size: "حداکثر اندازه هر قطعه خودکار (بایت)",
+      auto_split_min_accounts: "حداقل اکانت آزاد لازم برای فعال‌شدن اسپلیت خودکار",
+      auto_split_max_accounts: "حداکثر اکانت مجاز برای یک فایل",
+      auto_split_max_parts: "سقف تعداد قطعات یک فایل",
+      compress_uploads: "فشرده‌سازی gzip قطعات آپلود در صورت کوچک‌شدن (۰=خاموش، ۱=روشن)",
       stream_max_per_key: "سقف استریم هم‌زمان هر کلید/لینک عمومی",
       stream_retry_after_s: "مهلت Retry-After برای استریم ردشده (ثانیه)",
       max_queue_jobs: "حداکثر جاب در صف (۰=بی‌نهایت)",
@@ -2148,7 +2253,7 @@ const doLogin = submitLogin;
     };
     const envSettings = computed(() => settingsItems.value.filter((x) => x.group === "environment"));
     const settingsGroups = computed(() => {
-      const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", scheduler: "زمان‌بندی اندازه/قدمت", backend: "بک‌اند", telegram_api: "تلگرام و ایتا — حالت تست و API", proxy: "پراکسی تلگرام", redis: "ردیس (صف توزیع‌شده — بدون ری‌استارت)" };
+      const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", scheduler: "زمان‌بندی اندازه/قدمت", auto_split: "اسپلیت خودکار چنداکانتی", backend: "بک‌اند", telegram_api: "تلگرام و ایتا — حالت تست و API", proxy: "پراکسی تلگرام", redis: "ردیس (صف توزیع‌شده — بدون ری‌استارت)" };
       const out = [];
       for (const [gid, title] of Object.entries(g)) {
         out.push({ id: gid, title, items: settingsItems.value.filter((x) => x.group === gid) });
