@@ -37,6 +37,14 @@ class BackendClient(abc.ABC):
     @abc.abstractmethod
     async def delete_message(self, message_id: int, chat: str) -> None: ...
 
+    async def probe_access(self, chat: str, need: str = "read") -> Optional[bool]:
+        """Return True/False when this backend can prove chat access.
+
+        ``None`` means the backend cannot answer cheaply (bot API, eitaa), so
+        the caller may fall back to its normal pooled selection.
+        """
+        return None
+
     @abc.abstractmethod
     async def close(self) -> None: ...
 

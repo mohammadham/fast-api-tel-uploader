@@ -138,6 +138,34 @@ class TelethonBackend(BackendClient):
         except Exception as exc:
             raise _map_error(exc) from exc
 
+    async def probe_access(self, chat: str, need: str = "read") -> Optional[bool]:
+        """Cheaply prove read/write access without sending a message.
+
+        Read is checked with a one-message history fetch.  Write uses the
+        entity's permissions (post_messages for broadcast channels,
+        send_messages for groups); ``me`` is always writable by its own account.
+        """
+        try:
+            await self.start()
+            target = self._chat(chat)
+            if str(target).lower() in ("me", "self"):
+                return True
+            entity = await self._client.get_entity(target)
+            if need == "read":
+                await self._client.get_messages(entity, limit=1)
+                return True
+            perms = await self._client.get_permissions(entity)
+            if getattr(perms, "is_admin", False):
+                return True
+            return bool(
+                getattr(perms, "post_messages", False)
+                or getattr(perms, "send_messages", False)
+            )
+        except (FloodWait, TransferError):
+            raise
+        except Exception as exc:
+            raise _map_error(exc) from exc
+
     async def delete_message(self, message_id: int, chat: str) -> None:
         try:
             await self.start()

@@ -16,6 +16,7 @@ from ..core.db import Database
 from ..core.models import FileRepo, now
 from ..tg.base import BackendClient, TransferError
 from ..tg.manager import TGManager
+from .access import AccessService
 from .stream_limits import streams
 
 
@@ -274,9 +275,15 @@ async def file_response(
     # Borrow the backend eagerly (must not await inside the response generator);
     # released after the response completes via the background task.
     from ..tg.base import TransferError
+    preferred = next(
+        (str(p.get("account_key") or "") for p in parts if p.get("account_key")), ""
+    )
     try:
-        borrowed = await manager.acquire(
-            "acc", backend=rec.get("backend") or "telegram", direction="download"
+        borrowed = await AccessService(db, manager).pick(
+            storage_chat,
+            backend=rec.get("backend") or "telegram",
+            need="read",
+            preferred=preferred,
         )
     except Exception as exc:
         if stream_acquired:
@@ -428,6 +435,7 @@ async def zip_stream_response(
 
     tmp_dir = _tmp_dir()
     tmp_paths: list = []
+    access = AccessService(db, manager)
 
     async def fetch_entry(rec: dict) -> str:
         """Materialise one stored file (joined parts) into a temp file.
@@ -441,8 +449,14 @@ async def zip_stream_response(
         )
         tmp_paths.append(path)
         try:
-            borrowed = await manager.acquire(
-                "acc", backend=rec.get("backend") or "telegram", direction="download"
+            preferred = next(
+                (str(p.get("account_key") or "") for p in parts if p.get("account_key")), ""
+            )
+            borrowed = await access.pick(
+                (rec.get("storage_chat") or "me").strip(),
+                backend=rec.get("backend") or "telegram",
+                need="read",
+                preferred=preferred,
             )
             async with borrowed as backend:
                 chat = (rec.get("storage_chat") or "").strip() or getattr(

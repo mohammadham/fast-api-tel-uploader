@@ -106,8 +106,22 @@ CREATE TABLE IF NOT EXISTS file_parts (
   message_id INTEGER NOT NULL,
   size INTEGER NOT NULL,
   stored_size INTEGER NOT NULL DEFAULT 0,
-  encoding TEXT NOT NULL DEFAULT ''
+  encoding TEXT NOT NULL DEFAULT '',
+  account_key TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS chat_access (
+  backend TEXT NOT NULL DEFAULT 'telegram',
+  account_key TEXT NOT NULL,
+  chat_key TEXT NOT NULL,
+  can_read INTEGER NOT NULL DEFAULT 0,
+  can_write INTEGER NOT NULL DEFAULT 0,
+  checked_at DOUBLE PRECISION NOT NULL DEFAULT 0,
+  expires_at DOUBLE PRECISION NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (backend, account_key, chat_key)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_access_expires ON chat_access(expires_at);
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -318,8 +332,22 @@ CREATE TABLE IF NOT EXISTS file_parts (
   message_id INTEGER NOT NULL,
   size INTEGER NOT NULL,
   stored_size BIGINT NOT NULL DEFAULT 0,
-  encoding TEXT NOT NULL DEFAULT ''
+  encoding TEXT NOT NULL DEFAULT '',
+  account_key TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS chat_access (
+  backend TEXT NOT NULL DEFAULT 'telegram',
+  account_key TEXT NOT NULL,
+  chat_key TEXT NOT NULL,
+  can_read INTEGER NOT NULL DEFAULT 0,
+  can_write INTEGER NOT NULL DEFAULT 0,
+  checked_at DOUBLE PRECISION NOT NULL DEFAULT 0,
+  expires_at DOUBLE PRECISION NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (backend, account_key, chat_key)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_access_expires ON chat_access(expires_at);
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -538,7 +566,20 @@ CREATE TABLE IF NOT EXISTS file_parts (
   message_id BIGINT NOT NULL,
   size BIGINT NOT NULL,
   stored_size BIGINT NOT NULL DEFAULT 0,
-  encoding VARCHAR(16) NOT NULL DEFAULT ''
+  encoding VARCHAR(16) NOT NULL DEFAULT '',
+  account_key VARCHAR(64) NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS chat_access (
+  backend VARCHAR(32) NOT NULL DEFAULT 'telegram',
+  account_key VARCHAR(64) NOT NULL,
+  chat_key VARCHAR(255) NOT NULL,
+  can_read INT NOT NULL DEFAULT 0,
+  can_write INT NOT NULL DEFAULT 0,
+  checked_at DOUBLE NOT NULL DEFAULT 0,
+  expires_at DOUBLE NOT NULL DEFAULT 0,
+  last_error VARCHAR(500) NOT NULL DEFAULT '',
+  source VARCHAR(32) NOT NULL DEFAULT '',
+  PRIMARY KEY (backend, account_key, chat_key)
 );
 CREATE TABLE IF NOT EXISTS jobs (
   id VARCHAR(64) PRIMARY KEY,
@@ -657,6 +698,7 @@ CREATE TABLE IF NOT EXISTS channels (
 # CREATE INDEX IF NOT EXISTS is not portable to MySQL: indexes are created
 # individually and a duplicate-key error just means "already present".
 SCHEMA_MYSQL_INDEXES = (
+    "CREATE INDEX idx_chat_access_expires ON chat_access(expires_at)",
     "CREATE INDEX idx_folders_parent ON folders(parent_id)",
     "CREATE INDEX idx_files_storage_chat_created ON files(storage_chat, created_at)",
     "CREATE INDEX idx_files_folder_created ON files(folder_id, created_at)",
@@ -722,6 +764,7 @@ class Database:
             "ALTER TABLE folders ADD COLUMN scope TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE file_parts ADD COLUMN stored_size INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE file_parts ADD COLUMN encoding TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE file_parts ADD COLUMN account_key TEXT NOT NULL DEFAULT ''",
         ):
             try:
                 await self._conn.execute(stmt)
@@ -851,6 +894,7 @@ class PgDatabase:
         for stmt in (
             "ALTER TABLE file_parts ADD COLUMN IF NOT EXISTS stored_size BIGINT NOT NULL DEFAULT 0",
             "ALTER TABLE file_parts ADD COLUMN IF NOT EXISTS encoding TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE file_parts ADD COLUMN IF NOT EXISTS account_key TEXT NOT NULL DEFAULT ''",
         ):
             try:
                 async with self._engine.begin() as conn:
@@ -986,6 +1030,7 @@ class MysqlDatabase:
         for stmt in (
             "ALTER TABLE file_parts ADD COLUMN stored_size BIGINT NOT NULL DEFAULT 0",
             "ALTER TABLE file_parts ADD COLUMN encoding VARCHAR(16) NOT NULL DEFAULT ''",
+            "ALTER TABLE file_parts ADD COLUMN account_key VARCHAR(64) NOT NULL DEFAULT ''",
         ):
             try:
                 async with self._engine.begin() as conn:

@@ -24,6 +24,9 @@ class FakeBackend(BackendClient):
     STORE: Dict[Tuple[str, int], Tuple[bytes, str]] = {}
     # message_id → caption text (folder hashtags), so tests can assert the tag
     CAPTIONS: Dict[int, str] = {}
+    # optional test ACL: {backend_id: {chat: {"read", "write"}}}.  Empty or
+    # missing entries mean "unknown" so existing tests keep their open access.
+    ACCESS: Dict[str, Dict[str, set]] = {}
 
     def __init__(self, cid: str, *, fail_rate: float = 0.0, flood_seconds: float = 0.0) -> None:
         self.id = cid
@@ -47,6 +50,9 @@ class FakeBackend(BackendClient):
             raise FloodWait(self.flood_seconds)
         with open(path, "rb") as fh:
             data = fh.read()
+        perms = self.ACCESS.get(self.id)
+        if perms is not None and "write" not in perms.get(chat, set()):
+            raise SendFailure(f"fake no write access to {chat}")
         if self.send_delay > 0:
             await asyncio.sleep(self.send_delay)  # hold the borrow → queue waits on the gate
         mid = next(counter)
@@ -65,6 +71,9 @@ class FakeBackend(BackendClient):
         end: Optional[int],
         size: Optional[int],
     ) -> AsyncIterator[bytes]:
+        perms = self.ACCESS.get(self.id)
+        if perms is not None and "read" not in perms.get(chat, set()):
+            raise TransferError(f"fake no read access to {chat}")
         entry = self.STORE.get((chat, message_id))
         if entry is None:
             raise TransferError(f"fake message {chat}/{message_id} not found")
@@ -79,6 +88,12 @@ class FakeBackend(BackendClient):
                 break
             yield piece
             pos += len(piece)
+
+    async def probe_access(self, chat: str, need: str = "read") -> Optional[bool]:
+        perms = self.ACCESS.get(self.id)
+        if perms is None:
+            return None
+        return need in perms.get(chat, set())
 
     async def delete_message(self, message_id: int, chat: str) -> None:
         self.STORE.pop((chat, message_id), None)

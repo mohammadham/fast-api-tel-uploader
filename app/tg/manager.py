@@ -436,6 +436,10 @@ class TGManager:
         backend = self._backends.get(key)
         return str(getattr(backend, "storage_chat", "") or "").strip()
 
+    def account_keys(self) -> List[str]:
+        """Live Telegram user-account keys (excludes bots/eitaa)."""
+        return sorted(k for k in self._backends if k.startswith("acc:"))
+
     def _retry_after(self, keys: List[str]) -> float:
         t = time.time()
         waits = [self._flood_until.get(k, 0) - t for k in keys]

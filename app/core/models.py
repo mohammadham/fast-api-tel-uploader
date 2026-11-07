@@ -703,16 +703,18 @@ class FileRepo:
 
     async def add_part(
         self, file_id: str, idx: int, message_id: int, size: int,
-        stored_size: int = 0, encoding: str = "",
+        stored_size: int = 0, encoding: str = "", account_key: str = "",
     ) -> None:
         await self.db.execute(
-            "INSERT INTO file_parts(file_id, idx, message_id, size, stored_size, encoding) VALUES(?,?,?,?,?,?)",
-            (file_id, idx, message_id, size, int(stored_size or 0), encoding or ""),
+            "INSERT INTO file_parts(file_id, idx, message_id, size, stored_size, encoding, account_key)"
+            " VALUES(?,?,?,?,?,?,?)",
+            (file_id, idx, message_id, size, int(stored_size or 0), encoding or "", account_key or ""),
         )
 
     async def parts(self, file_id: str) -> List[Dict[str, Any]]:
         return await self.db.fetch_all(
-            "SELECT idx, message_id, size, stored_size, encoding FROM file_parts WHERE file_id=? ORDER BY idx", (file_id,)
+            "SELECT idx, message_id, size, stored_size, encoding, account_key"
+            " FROM file_parts WHERE file_id=? ORDER BY idx", (file_id,)
         )
 
     async def count_download(self, file_id: str, nbytes: int) -> None:
@@ -749,7 +751,10 @@ class FileRepo:
     async def set_folder(self, file_id: str, folder_id: Optional[int]) -> None:
         await self.db.execute("UPDATE files SET folder_id=? WHERE id=?", (folder_id, file_id))
 
-    async def set_parts(self, file_id: str, message_ids: List[int], storage_chat: str) -> None:
+    async def set_parts(
+        self, file_id: str, message_ids: List[int], storage_chat: str,
+        account_key: str = "",
+    ) -> None:
         """Rewrite a ready file's part pointers after a channel transfer.
 
         The transferred bytes are stored verbatim, so per-part encoding and
@@ -763,6 +768,7 @@ class FileRepo:
                 file_id, idx, int(message_id), int(old.get("size") or 0),
                 stored_size=int(old.get("stored_size") or 0),
                 encoding=str(old.get("encoding") or ""),
+                account_key=account_key or str(old.get("account_key") or ""),
             )
         await self.db.execute(
             "UPDATE files SET storage_chat=?, message_ids=?, parts=? WHERE id=?",

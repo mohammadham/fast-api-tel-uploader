@@ -254,6 +254,7 @@ async def client(request):
         from app.tg.fake import FakeBackend
 
         FakeBackend.STORE.clear()
+        FakeBackend.ACCESS.clear()
         from app.core.rate_limit import limiter, quota
 
         limiter._buckets.clear()

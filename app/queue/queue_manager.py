@@ -47,6 +47,7 @@ from ..core.models import (
     new_id,
     now,
 )
+from ..services.access import AccessService
 from ..tg.base import FloodWait, SendFailure, TransferError
 from ..tg.manager import NoBackendAvailable, TGManager
 from .scheduler import is_overdue, job_size, lane_for, pick_best
@@ -85,6 +86,7 @@ class QueueManager:
     def __init__(self, db: Database, manager: TGManager, bot_service=None, node_id: str = "") -> None:
         self.db = db
         self.manager = manager
+        self.access = AccessService(db, manager)
         self.bot_service = bot_service
         self.settings = get_settings()
         self.node_id = node_id or os.environ.get("TGDRIVE_NODE_ID") or socket.gethostname()
@@ -1313,7 +1315,13 @@ class QueueManager:
     ) -> Tuple[str, List[int], str]:
         """The existing one-account path (main split_threshold still applies)."""
         message_ids: List[int] = []
-        borrowed = await self.manager.acquire("acc", backend=backend, direction="upload")
+        target_chat = (storage_chat or "").strip()
+        if target_chat:
+            borrowed = await self.access.pick(
+                target_chat, backend=backend, need="write"
+            )
+        else:
+            borrowed = await self.manager.acquire("acc", backend=backend, direction="upload")
         async with borrowed as be:
             account_key = borrowed.key
             self._last_backend_by_job[job_id] = borrowed.key
@@ -1369,6 +1377,7 @@ class QueueManager:
                             await self.files.add_part(
                                 file_id, idx, mid, part_len,
                                 stored_size=physical, encoding=encoding,
+                                account_key=account_key,
                             )
                             offset += part_len
                         finally:
@@ -1411,6 +1420,7 @@ class QueueManager:
                     await self.files.add_part(
                         file_id, 0, mid, size,
                         stored_size=physical, encoding=encoding,
+                        account_key=account_key,
                     )
                 finally:
                     if compressed:
@@ -1425,6 +1435,11 @@ class QueueManager:
                         await UploadSessionRepo(self.db).advance(session_id, size)
                     except Exception:
                         pass
+        if storage_chat and account_key:
+            await self.access.mark(
+                account_key, storage_chat, backend,
+                can_read=True, can_write=True, source="upload",
+            )
         return account_key, message_ids, storage_chat
 
     async def _upload_auto_split(
@@ -1478,8 +1493,8 @@ class QueueManager:
             send_path, stored_size, encoding, compressed = await self._prepare_upload_part(ppath, compress)
             try:
                 async with sem:
-                    borrowed = await self.manager.acquire(
-                        "acc", backend=backend, direction="upload"
+                    borrowed = await self.access.pick(
+                        plan["storage_chat"], backend=backend, need="write"
                     )
                     async with borrowed as be:
                         used_accounts.add(borrowed.key)
@@ -1504,6 +1519,11 @@ class QueueManager:
                         await self.files.add_part(
                             file_id, idx, mid, part_len,
                             stored_size=physical, encoding=encoding,
+                            account_key=borrowed.key,
+                        )
+                        await self.access.mark(
+                            borrowed.key, plan["storage_chat"], backend,
+                            can_read=True, can_write=True, source="upload",
                         )
                         done[idx] = part_sizes[idx]
                         publish(borrowed.key)
@@ -1847,13 +1867,19 @@ class QueueManager:
             except IncompleteFileError as exc:
                 raise TransferError(f"file incomplete: {exc}") from exc
             total = 0
-            borrowed = await self.manager.acquire(
-                "acc", backend=rec.get("backend") or "telegram", direction="download"
+            chat = rec["storage_chat"] or "me"
+            preferred = next(
+                (str(p.get("account_key") or "") for p in parts if p.get("account_key")), ""
+            )
+            borrowed = await self.access.pick(
+                chat,
+                backend=rec.get("backend") or "telegram",
+                need="read",
+                preferred=preferred,
             )
             async with borrowed as backend:
                 account_key = borrowed.key
                 self._last_backend_by_job[job_id] = borrowed.key
-                chat = rec["storage_chat"] or getattr(backend, "storage_chat", "me")
 
                 with open(tmp, "wb") as fh:
                     for part in parts:
@@ -1891,12 +1917,18 @@ class QueueManager:
             return
         parts = await self.files.parts(file_id)
         if parts:
-            borrowed = await self.manager.acquire(
-                "acc", backend=rec.get("backend") or "telegram", direction="control"
+            chat = rec["storage_chat"] or "me"
+            preferred = next(
+                (str(p.get("account_key") or "") for p in parts if p.get("account_key")), ""
+            )
+            borrowed = await self.access.pick(
+                chat,
+                backend=rec.get("backend") or "telegram",
+                need="read",
+                preferred=preferred,
             )
             async with borrowed as backend:
                 self._last_backend_by_job[payload.get("__job_id", "")] = borrowed.key
-                chat = rec["storage_chat"] or getattr(backend, "storage_chat", "me")
                 for part in parts:
                     try:
                         await backend.delete_message(part["message_id"], chat)
@@ -1945,9 +1977,25 @@ class QueueManager:
             folder_path = ""
         tags = " ".join("#" + p.strip().replace(" ", "_") for p in folder_path.split("/") if p.strip())
 
-        borrowed = await self.manager.acquire(
-            "acc", backend=rec.get("backend") or "telegram", direction="upload"
+        preferred = next(
+            (str(p.get("account_key") or "") for p in parts if p.get("account_key")), ""
         )
+        src_borrowed = await self.access.pick(
+            src_chat or "me",
+            backend=rec.get("backend") or "telegram",
+            need="read",
+            preferred=preferred,
+        )
+        try:
+            target_borrowed = await self.access.pick(
+                target_chat,
+                backend=rec.get("backend") or "telegram",
+                need="write",
+            )
+        except Exception:
+            # release the source slot before surfacing a target-access failure
+            await src_borrowed.__aexit__(None, None, None)
+            raise
         new_ids: List[int] = []
         job_id = payload.get("__job_id", "")
         job_row = await self.jobs.fetch(job_id) if job_id else None
@@ -1971,9 +2019,9 @@ class QueueManager:
         }
         if job_row:
             await self.jobs.update_payload(job_id, {**cur_payload, "progress": progress, "progress_pct": 0})
-        async with borrowed as backend:
-            self._last_backend_by_job[payload.get("__job_id", "")] = borrowed.key
-            src = src_chat or getattr(backend, "storage_chat", "me")
+        async with src_borrowed as src_backend, target_borrowed as target_backend:
+            self._last_backend_by_job[payload.get("__job_id", "")] = target_borrowed.key
+            src = src_chat or getattr(src_backend, "storage_chat", "me")
             done_bytes = 0
             last_pct = -1
             for part in parts:
@@ -1982,7 +2030,7 @@ class QueueManager:
                 try:
                     with open(tmp, "wb") as fh:
                         stored_size = int(part.get("stored_size") or part["size"])
-                        async for chunk in backend.iter_file(
+                        async for chunk in src_backend.iter_file(
                             part["message_id"], src, start=0, end=None, size=stored_size
                         ):
                             fh.write(chunk)
@@ -1996,14 +2044,20 @@ class QueueManager:
                                         {**cur_payload, "progress": {**progress, "bytes_done": done_bytes}, "progress_pct": pct},
                                     )
                     name = rec["name"] if len(parts) == 1 else f"{rec['name']}.part{part['idx']:04d}"
-                    result = await backend.send_document(target_chat, tmp, name, rec["mime"], caption=tags)
+                    result = await target_backend.send_document(target_chat, tmp, name, rec["mime"], caption=tags)
                     new_ids.append(int(result["message_id"]))
                 finally:
                     try:
                         os.remove(tmp)
                     except OSError:
                         pass
-        await self.files.set_parts(file_id, new_ids, target_chat)
+        await self.files.set_parts(
+            file_id, new_ids, target_chat, account_key=target_borrowed.key
+        )
+        await self.access.mark(
+            target_borrowed.key, target_chat, rec.get("backend") or "telegram",
+            can_read=True, can_write=True, source="transfer",
+        )
         metrics.inc("transfer.files")
         slog_q.info("file transferred", file_id=file_id, from_chat=src_chat, to_chat=target_chat, parts=len(new_ids))
 
@@ -2017,7 +2071,11 @@ class QueueManager:
             delete_source = False
         if delete_source and src_chat and src_chat != target_chat:
             try:
-                cleanup = await self.manager.acquire("acc", backend=rec.get("backend") or "telegram")
+                cleanup = await self.access.pick(
+                    src_chat or "me",
+                    backend=rec.get("backend") or "telegram",
+                    need="read",
+                )
             except Exception as exc:
                 log.warning("transfer source-cleanup borrow failed: %s", exc)
                 cleanup = None

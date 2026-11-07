@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     upload_part_workers: int = 4
     #: gzip-compress uploaded parts when it actually makes them smaller
     compress_uploads: int = 0
+    #: cache per-account chat access; downloads pick only an authorized account
+    access_cache_enabled: int = 1
+    access_cache_ttl_s: int = 6 * 3600
+    access_cache_negative_ttl_s: int = 10 * 60
+    access_probe_limit: int = 3
     # ── automatic multi-account split (separate from split_threshold) ──
     #: split a large upload across several free accounts instead of one account
     auto_split_enabled: int = 0
