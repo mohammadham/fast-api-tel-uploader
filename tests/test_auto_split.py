@@ -265,3 +265,90 @@ async def test_auto_split_honors_key_channel_and_compresses(client, token):
         for key in keys:
             await db.execute("DELETE FROM settings WHERE key=?", (key,))
         runtime_settings().invalidate()
+
+
+@pytest.mark.asyncio
+async def test_gzip_skipped_when_savings_are_below_minimum(client, api_key, token):
+    """A compressed part replaces the original only when the saving is material."""
+    db = await get_db()
+    admin = {"Authorization": f"Bearer {token}"}
+    keys = ("compress_uploads", "compress_min_savings_pct")
+    try:
+        r = await client.put(
+            "/api/v1/admin/settings",
+            headers=admin,
+            json={"compress_uploads": 1, "compress_min_savings_pct": 99},
+        )
+        assert r.status_code == 200, r.text
+
+        # ~50% compressible: enough to gzip, but far below the 99% threshold
+        payload = os.urandom(1024 * 1024) + b"0" * (1024 * 1024)
+        r = await client.post(
+            "/api/v1/files/upload",
+            headers=_H(api_key),
+            files={"file": ("min-savings.bin", io.BytesIO(payload), "application/octet-stream")},
+        )
+        assert r.status_code == 200, r.text
+        rec = await _wait_ready(client, api_key, r.json()["file_id"])
+        assert rec["status"] == "ready", rec
+        part = (rec.get("parts") or [])[0]
+        assert part["encoding"] == ""
+        assert int(part["stored_size"]) == int(part["size"]) == len(payload)
+    finally:
+        for key in keys:
+            await db.execute("DELETE FROM settings WHERE key=?", (key,))
+        runtime_settings().invalidate()
+
+
+@pytest.mark.asyncio
+async def test_auto_split_plan_excludes_accounts_without_write_access(client, api_key, token):
+    from app.tg.fake import FakeBackend
+
+    db = await get_db()
+    acc2 = await AccountRepo(db).create("auto-acc-denied", "+989120000004", "")
+    await AccountRepo(db).set_session(acc2, encrypt_str("fake-session::denied"), "ready")
+    await state.manager.refresh_one_account(acc2)
+
+    admin = {"Authorization": f"Bearer {token}"}
+    target = "@plan-denied-access"
+    keys = (
+        "auto_split_enabled", "auto_split_min_file_size", "auto_split_min_part_size",
+        "auto_split_max_part_size", "auto_split_min_accounts", "auto_split_max_accounts",
+        "auto_split_max_parts", "split_threshold",
+    )
+    try:
+        r = await client.put(
+            "/api/v1/admin/settings",
+            headers=admin,
+            json={
+                "auto_split_enabled": 1,
+                "auto_split_min_file_size": 0,
+                "auto_split_min_part_size": 1024 * 1024,
+                "auto_split_max_part_size": 1024 * 1024,
+                "auto_split_min_accounts": 2,
+                "auto_split_max_accounts": 2,
+                "auto_split_max_parts": 8,
+                "split_threshold": 1024 * 1024,
+            },
+        )
+        assert r.status_code == 200, r.text
+
+        live = state.manager.account_keys()
+        assert len(live) >= 2, live
+        FakeBackend.ACCESS.clear()
+        for idx, key in enumerate(live):
+            # only the first account may write; the plan needs at least two
+            FakeBackend.ACCESS[key] = {target: {"write", "read"} if idx == 0 else {"read"}}
+
+        plan = await state.queue._auto_split_plan(
+            size=3 * 1024 * 1024,
+            backend="telegram",
+            split_at=1024 * 1024,
+            storage_chat=target,
+        )
+        assert plan is None
+    finally:
+        FakeBackend.ACCESS.clear()
+        for key in keys:
+            await db.execute("DELETE FROM settings WHERE key=?", (key,))
+        runtime_settings().invalidate()

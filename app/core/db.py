@@ -122,6 +122,17 @@ CREATE TABLE IF NOT EXISTS chat_access (
   PRIMARY KEY (backend, account_key, chat_key)
 );
 CREATE INDEX IF NOT EXISTS idx_chat_access_expires ON chat_access(expires_at);
+CREATE TABLE IF NOT EXISTS orphan_parts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_id TEXT NOT NULL DEFAULT '',
+  backend TEXT NOT NULL DEFAULT 'telegram',
+  account_key TEXT NOT NULL DEFAULT '',
+  chat_key TEXT NOT NULL DEFAULT '',
+  message_id INTEGER NOT NULL,
+  created_at DOUBLE PRECISION NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_orphan_parts_created ON orphan_parts(created_at);
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -348,6 +359,17 @@ CREATE TABLE IF NOT EXISTS chat_access (
   PRIMARY KEY (backend, account_key, chat_key)
 );
 CREATE INDEX IF NOT EXISTS idx_chat_access_expires ON chat_access(expires_at);
+CREATE TABLE IF NOT EXISTS orphan_parts (
+  id SERIAL PRIMARY KEY,
+  file_id TEXT NOT NULL DEFAULT '',
+  backend TEXT NOT NULL DEFAULT 'telegram',
+  account_key TEXT NOT NULL DEFAULT '',
+  chat_key TEXT NOT NULL DEFAULT '',
+  message_id INTEGER NOT NULL,
+  created_at DOUBLE PRECISION NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_orphan_parts_created ON orphan_parts(created_at);
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -581,6 +603,16 @@ CREATE TABLE IF NOT EXISTS chat_access (
   source VARCHAR(32) NOT NULL DEFAULT '',
   PRIMARY KEY (backend, account_key, chat_key)
 );
+CREATE TABLE IF NOT EXISTS orphan_parts (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  file_id VARCHAR(64) NOT NULL DEFAULT '',
+  backend VARCHAR(32) NOT NULL DEFAULT 'telegram',
+  account_key VARCHAR(64) NOT NULL DEFAULT '',
+  chat_key VARCHAR(255) NOT NULL DEFAULT '',
+  message_id BIGINT NOT NULL,
+  created_at DOUBLE NOT NULL DEFAULT 0,
+  last_error VARCHAR(500) NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS jobs (
   id VARCHAR(64) PRIMARY KEY,
   kind VARCHAR(64) NOT NULL,
@@ -699,6 +731,7 @@ CREATE TABLE IF NOT EXISTS channels (
 # individually and a duplicate-key error just means "already present".
 SCHEMA_MYSQL_INDEXES = (
     "CREATE INDEX idx_chat_access_expires ON chat_access(expires_at)",
+    "CREATE INDEX idx_orphan_parts_created ON orphan_parts(created_at)",
     "CREATE INDEX idx_folders_parent ON folders(parent_id)",
     "CREATE INDEX idx_files_storage_chat_created ON files(storage_chat, created_at)",
     "CREATE INDEX idx_files_folder_created ON files(folder_id, created_at)",

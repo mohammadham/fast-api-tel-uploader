@@ -853,6 +853,11 @@ class JobRepo:
                 value = payload.get(key)
                 if value:
                     out.add(os.path.normcase(os.path.abspath(str(value))))
+            extra = payload.get("tmp_paths")
+            if isinstance(extra, list):
+                for value in extra:
+                    if value:
+                        out.add(os.path.normcase(os.path.abspath(str(value))))
         return out
 
     async def update_payload(self, job_id: str, payload: Dict[str, Any]) -> None:

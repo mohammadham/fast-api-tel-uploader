@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     upload_part_workers: int = 4
     #: gzip-compress uploaded parts when it actually makes them smaller
     compress_uploads: int = 0
+    #: minimum percentage saved before a gzip part replaces the original
+    compress_min_savings_pct: int = 5
     #: cache per-account chat access; downloads pick only an authorized account
     access_cache_enabled: int = 1
     access_cache_ttl_s: int = 6 * 3600

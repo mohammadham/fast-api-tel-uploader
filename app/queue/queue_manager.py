@@ -47,7 +47,7 @@ from ..core.models import (
     new_id,
     now,
 )
-from ..services.access import AccessService
+from ..services.access import AccessService, normalize_chat
 from ..tg.base import FloodWait, SendFailure, TransferError
 from ..tg.manager import NoBackendAvailable, TGManager
 from .scheduler import is_overdue, job_size, lane_for, pick_best
@@ -1050,15 +1050,9 @@ class QueueManager:
             await self.jobs.update_fields(job_id, status="failed", error=error[:500], finished_at=now(), attempts=attempts)
             if kind == KIND_UPLOAD and payload.get("file_id"):
                 await self.files.set_status(payload["file_id"], "failed", error)
-                # Final failure: the source is no longer resumable (a manual
-                # retry starts a fresh upload), so do not leave multi-GB tmp
-                # files around for the janitor window.
-                tmp_path = str(payload.get("tmp_path") or "")
-                if tmp_path:
-                    try:
-                        os.remove(tmp_path)
-                    except OSError:
-                        pass
+                # Final failure: delete partial Telegram messages, forget the
+                # part rows and remove the source plus every derived tmp path.
+                await self._cleanup_final_upload(payload, error)
             self._rows.pop(job_id, None)
             metrics.inc(f"queue.failed.{kind}")
             self._wake.set()
@@ -1099,6 +1093,95 @@ class QueueManager:
         except Exception as exc:  # never fail a stored upload over a digest
             slog_q.warning("sha256 not stored", file_id=file_id, error=str(exc)[:120])
 
+    async def _remember_tmp_paths(self, job_id: str, paths: List[str]) -> None:
+        """Persist derived split/zip paths so the janitor protects active work."""
+        if not job_id or not paths:
+            return
+        try:
+            row = await self.jobs.fetch(job_id)
+            raw = (row or {}).get("payload")
+            payload = json.loads(raw or "{}") if isinstance(raw, str) else dict(raw or {})
+            current = list(payload.get("tmp_paths") or [])
+            for path in paths:
+                if path and path not in current:
+                    current.append(path)
+            payload["tmp_paths"] = current
+            await self.jobs.update_payload(job_id, payload)
+        except Exception:
+            pass
+
+    async def _record_orphans(
+        self, file_id: str, rec: Dict[str, Any], parts: List[Dict[str, Any]], error: str
+    ) -> None:
+        """Remember Telegram messages we could not delete, for later cleanup."""
+        chat = str(rec.get("storage_chat") or "me")
+        for part in parts:
+            try:
+                await self.db.execute(
+                    "INSERT INTO orphan_parts(file_id, backend, account_key, chat_key, message_id, created_at, last_error)"
+                    " VALUES(?,?,?,?,?,?,?)",
+                    (
+                        file_id,
+                        str(rec.get("backend") or "telegram"),
+                        str(part.get("account_key") or ""),
+                        normalize_chat(chat),
+                        int(part["message_id"]),
+                        now(),
+                        str(error or "")[:500],
+                    ),
+                )
+            except Exception:
+                pass
+
+    async def _discard_parts(
+        self, file_id: str, rec: Dict[str, Any], parts: List[Dict[str, Any]], reason: str
+    ) -> None:
+        """Best-effort delete of a partial attempt's Telegram messages."""
+        if not parts:
+            return
+        chat = str(rec.get("storage_chat") or "me")
+        preferred = next(
+            (str(p.get("account_key") or "") for p in parts if p.get("account_key")), ""
+        )
+        try:
+            borrowed = await self.access.pick(
+                chat,
+                backend=rec.get("backend") or "telegram",
+                need="read",
+                preferred=preferred,
+            )
+        except Exception as exc:
+            await self._record_orphans(file_id, rec, parts, f"discard access: {exc}")
+            return
+        async with borrowed as backend:
+            for part in parts:
+                try:
+                    await backend.delete_message(int(part["message_id"]), chat)
+                except Exception as exc:
+                    await self._record_orphans(file_id, rec, [part], f"discard: {exc}")
+
+    async def _cleanup_final_upload(self, payload: Dict[str, Any], error: str) -> None:
+        """Final failure: drop partial Telegram parts and every staged tmp path."""
+        file_id = str(payload.get("file_id") or "")
+        rec = await self.files.get(file_id) if file_id else None
+        if rec:
+            parts = await self.files.parts(file_id)
+            if parts:
+                await self._discard_parts(file_id, rec, parts, error or "final upload failure")
+                await self.db.execute("DELETE FROM file_parts WHERE file_id=?", (file_id,))
+        paths: List[str] = []
+        for value in (payload.get("tmp_path"), payload.get("downloaded_path")):
+            if value:
+                paths.append(str(value))
+        for value in payload.get("tmp_paths") or []:
+            if value:
+                paths.append(str(value))
+        for path in paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
     async def _prepare_upload_part(self, path: str, compress: bool) -> Tuple[str, int, str, bool]:
         """Return (send_path, stored_size, encoding, is_temporary).
 
@@ -1111,7 +1194,16 @@ class QueueManager:
         gz = f"{path}.gz"
         try:
             stored = await asyncio.to_thread(_gzip_copy, path, gz)
-            if stored < original:
+            try:
+                min_save = int(
+                    await get_runtime(self.db, "compress_min_savings_pct")
+                    or self.settings.compress_min_savings_pct
+                    or 0
+                )
+            except Exception:
+                min_save = int(self.settings.compress_min_savings_pct or 0)
+            saved_pct = ((original - stored) * 100.0 / original) if original else 0.0
+            if stored < original and saved_pct >= max(0, min_save):
                 return gz, stored, "gzip", True
             try:
                 os.remove(gz)
@@ -1151,7 +1243,9 @@ class QueueManager:
             slog_q.info("upload completed from existing parts", file_id=file_id, parts=len(ids))
             return
         if existing_parts and rec.get("status") != "ready":
-            # partial previous attempt: sequence/idx would collide with the fresh send
+            # partial previous attempt: delete its Telegram messages first, then
+            # remove the rows so the fresh send cannot leave orphaned parts.
+            await self._discard_parts(file_id, rec, existing_parts, "partial retry")
             await self.db.execute("DELETE FROM file_parts WHERE file_id=?", (file_id,))
         await self._maybe_store_thumb(rec, tmp_path)
 
@@ -1352,6 +1446,7 @@ class QueueManager:
                 # split into parts below the MTProto 2GB cap
                 part_size = split_at
                 part_paths = await self._split_file(tmp_path, part_size)
+                await self._remember_tmp_paths(job_id, part_paths)
                 try:
                     offset = 0
                     for idx, ppath in enumerate(part_paths):
@@ -1456,12 +1551,15 @@ class QueueManager:
         """
         parts = int(plan["parts"])
         part_paths = await self._split_file_balanced(tmp_path, parts)
+        await self._remember_tmp_paths(job_id, part_paths)
         if len(part_paths) != parts:
             raise TransferError(f"auto-split produced {len(part_paths)}/{parts} parts")
         part_sizes = [os.path.getsize(p) for p in part_paths]
         done = [0] * parts
         message_ids = [0] * parts
         used_accounts: set[str] = set()
+        account_lock = asyncio.Lock()
+        planned_accounts = list(plan.get("account_keys") or [])
         sem = asyncio.Semaphore(max(1, int(plan.get("concurrency") or 1)))
         started = time.monotonic()
 
@@ -1493,11 +1591,22 @@ class QueueManager:
             send_path, stored_size, encoding, compressed = await self._prepare_upload_part(ppath, compress)
             try:
                 async with sem:
-                    borrowed = await self.access.pick(
-                        plan["storage_chat"], backend=backend, need="write"
-                    )
-                    async with borrowed as be:
+                    # Spread the first parts over distinct authorized accounts;
+                    # once that is achieved the normal pool may reuse accounts.
+                    async with account_lock:
+                        want_distinct = min(len(planned_accounts), parts)
+                        exclude = tuple(used_accounts) if len(used_accounts) < want_distinct else ()
+                        try:
+                            borrowed = await self.access.pick(
+                                plan["storage_chat"], backend=backend, need="write",
+                                exclude=exclude,
+                            )
+                        except NoBackendAvailable:
+                            borrowed = await self.access.pick(
+                                plan["storage_chat"], backend=backend, need="write"
+                            )
                         used_accounts.add(borrowed.key)
+                    async with borrowed as be:
 
                         def part_progress(
                             done_bytes: int, _total: int, *, i=idx, key=borrowed.key,
@@ -1556,14 +1665,14 @@ class QueueManager:
         self._last_backend_by_job[job_id] = account_key
         return account_key, message_ids, str(plan["storage_chat"])
 
-    def _auto_split_free_accounts(self, backend: str) -> List[str]:
+    def _auto_split_free_rows(self, backend: str) -> List[Dict[str, Any]]:
         if backend == "eitaa":
             return []
         try:
             rows = self.manager.health()
         except Exception:
             return []
-        out: List[str] = []
+        out: List[Dict[str, Any]] = []
         for row in rows:
             key = str(row.get("key") or "")
             if not key.startswith("acc:") or not row.get("available"):
@@ -1573,8 +1682,11 @@ class QueueManager:
             except (TypeError, ValueError):
                 free = 0
             if free > 0:
-                out.append(key)
+                out.append(row)
         return out
+
+    def _auto_split_free_accounts(self, backend: str) -> List[str]:
+        return [str(row.get("key")) for row in self._auto_split_free_rows(backend)]
 
     async def _shared_storage_chat(self, explicit: str, keys: List[str]) -> str:
         """Resolve one destination chat that every auto-split account can share.
@@ -1648,6 +1760,27 @@ class QueueManager:
         target = await self._shared_storage_chat(storage_chat, free)
         if not target:
             return None
+
+        # Only accounts that can write to the shared destination may carry a
+        # part.  Cached positives are cheap; unknown accounts get one lazy
+        # probe; an unprobeable backend keeps the legacy behaviour.
+        authorized: List[str] = []
+        for key in free:
+            try:
+                cached = await self.access.get(key, target, backend)
+                if cached is not None and not int(cached.get("can_write") or 0):
+                    continue
+                if cached is not None:
+                    authorized.append(key)
+                    continue
+                allowed = await self.access.probe(key, target, backend, "write")
+                if allowed is not False:
+                    authorized.append(key)
+            except Exception:
+                authorized.append(key)
+        free = authorized
+        if len(free) < min_accounts:
+            return None
         accounts = min(len(free), max_accounts)
         if accounts < 2:
             return None
@@ -1666,6 +1799,8 @@ class QueueManager:
             "parts": parts,
             "concurrency": min(accounts, parts),
             "storage_chat": target,
+            "account_keys": free[:max_accounts],
+            "min_accounts": min_accounts,
         }
 
     async def _maybe_store_thumb(self, rec: Dict[str, Any], tmp_path: str) -> None:
@@ -1916,6 +2051,7 @@ class QueueManager:
         if not rec:
             return
         parts = await self.files.parts(file_id)
+        failed: List[Dict[str, Any]] = []
         if parts:
             chat = rec["storage_chat"] or "me"
             preferred = next(
@@ -1933,7 +2069,16 @@ class QueueManager:
                     try:
                         await backend.delete_message(part["message_id"], chat)
                     except Exception as exc:
+                        text = str(exc).lower()
+                        if any(word in text for word in ("not found", "no such", "already deleted", "invalid message")):
+                            continue
                         log.warning("delete part failed: %s", exc)
+                        failed.append(part)
+        if failed:
+            # Keep the record so a retry can still find the remaining messages;
+            # deleting rows now would make those Telegram messages unreachable.
+            await self._record_orphans(file_id, rec, failed, "delete failed")
+            raise TransferError(f"could not delete {len(failed)}/{len(parts)} parts")
         await self.files.delete(file_id)
         metrics.inc("queue.done.delete")
         slog_q.info("file deleted", file_id=file_id, parts=len(parts))
@@ -1998,6 +2143,13 @@ class QueueManager:
             raise
         new_ids: List[int] = []
         job_id = payload.get("__job_id", "")
+        await self._remember_tmp_paths(
+            job_id,
+            [
+                f"{get_settings().final_tmp_dir()}/{file_id}.{part['idx']}.transfer"
+                for part in parts
+            ],
+        )
         job_row = await self.jobs.fetch(job_id) if job_id else None
         # JobRepo.fetch returns the raw payload TEXT — parse it once here so
         # both the pre-loop and in-loop progress writes spread a dict, not a str.
