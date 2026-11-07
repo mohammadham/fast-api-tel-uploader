@@ -564,6 +564,40 @@ async def _get_storage_channels_cached(db) -> dict:
     return result
 
 
+@router.get("/access-health")
+async def access_health(_: str = Depends(get_current_admin), db=Depends(get_db)):
+    """Observability for the per-account channel access cache and orphan parts."""
+    now = time.time()
+    rows = await db.fetch_all(
+        "SELECT backend, COUNT(*) AS total,"
+        " COALESCE(SUM(can_read),0) AS readable, COALESCE(SUM(can_write),0) AS writable,"
+        " COALESCE(SUM(CASE WHEN expires_at > ? THEN 1 ELSE 0 END),0) AS active"
+        " FROM chat_access GROUP BY backend",
+        (now,),
+    )
+    orphans = await db.fetch_one(
+        "SELECT COUNT(*) AS total, MIN(created_at) AS oldest FROM orphan_parts"
+    )
+    total = sum(int(r.get("total") or 0) for r in rows)
+    active = sum(int(r.get("active") or 0) for r in rows)
+    return {
+        "generated_at": now,
+        "accounts": len(getattr(state.manager, "account_keys", lambda: [])()),
+        "chat_access": {
+            "total": total,
+            "active": active,
+            "expired": max(0, total - active),
+            "readable": sum(int(r.get("readable") or 0) for r in rows),
+            "writable": sum(int(r.get("writable") or 0) for r in rows),
+            "by_backend": rows,
+        },
+        "orphan_parts": {
+            "total": int((orphans or {}).get("total") or 0),
+            "oldest": (orphans or {}).get("oldest"),
+        },
+    }
+
+
 @router.get("/storage-channels")
 async def storage_channels(_: str = Depends(get_current_admin), db=Depends(get_db)):
     """Per storage channel: file count, total size and per-type breakdown.

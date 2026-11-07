@@ -99,3 +99,30 @@ async def test_upload_and_download_use_authorized_account(client, api_key):
     r = await client.get(f"/api/v1/files/{fid}/content", headers=H)
     assert r.status_code == 200, r.text
     assert r.content == payload
+
+
+@pytest.mark.asyncio
+async def test_key_preflight_and_access_health_report(client, token):
+    db = await get_db()
+    denied, allowed = await _two_accounts(db)
+    FakeBackend.ACCESS[denied] = {}
+    FakeBackend.ACCESS[allowed] = {"@preflight": {"write", "read"}}
+
+    admin = {"Authorization": f"Bearer {token}"}
+    r = await client.post(
+        "/api/v1/keys/preflight",
+        headers=admin,
+        json={"backend": "telegram", "storage_chat": "@preflight"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert body["writable"] >= 1
+    assert {a["key"] for a in body["accounts"]} >= {denied, allowed}
+
+    r = await client.get("/api/v1/admin/access-health", headers=admin)
+    assert r.status_code == 200, r.text
+    health = r.json()
+    assert health["chat_access"]["total"] >= 2
+    assert health["chat_access"]["active"] >= 2
+    assert health["orphan_parts"]["total"] >= 0

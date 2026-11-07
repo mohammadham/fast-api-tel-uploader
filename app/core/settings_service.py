@@ -59,6 +59,14 @@ def _pct_ok(v: int) -> str:
     return "" if 50 <= v <= 99 else "must be between 50 and 99 percent"
 
 
+def _savings_pct_ok(v: int) -> str:
+    return "" if 0 <= v <= 99 else "must be between 0 and 99 percent"
+
+
+def _access_probe_limit_ok(v: int) -> str:
+    return "" if 1 <= v <= 32 else "must be between 1 and 32 accounts"
+
+
 def _hours_ok(v: int) -> str:
     return "" if 1 <= v <= 720 else "must be between 1 and 720 hours"
 
@@ -156,11 +164,11 @@ EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     "max_concurrent_uploads_per_account": (int, _gt_one_int, "per-account concurrent uploads"),
     "upload_part_workers": (int, _part_workers_ok, "parallel MTProto upload parts per file (1-16)"),
     "compress_uploads": (int, _int_flag, "gzip-compress upload parts when smaller (0/1)"),
-    "compress_min_savings_pct": (int, _pct_ok, "minimum gzip savings percentage (0-99)"),
+    "compress_min_savings_pct": (int, _savings_pct_ok, "minimum gzip savings percentage (0-99)"),
     "access_cache_enabled": (int, _int_flag, "cache per-account chat access (0/1)"),
     "access_cache_ttl_s": (int, _positive_int, "positive chat-access cache TTL (seconds)"),
     "access_cache_negative_ttl_s": (int, _positive_int, "denied chat-access cache TTL (seconds)"),
-    "access_probe_limit": (int, _scan_limit_ok, "accounts probed per unknown chat access check"),
+    "access_probe_limit": (int, _access_probe_limit_ok, "accounts probed per unknown chat access check"),
     # automatic multi-account split (independent of split_threshold)
     "auto_split_enabled": (int, _int_flag, "automatic multi-account split (0/1)"),
     "auto_split_min_file_size": (int, _non_negative_int, "minimum file size to auto-split (bytes; 0=off)"),
@@ -232,10 +240,6 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "upload_part_workers",
         "compress_uploads",
         "compress_min_savings_pct",
-        "access_cache_enabled",
-        "access_cache_ttl_s",
-        "access_cache_negative_ttl_s",
-        "access_probe_limit",
         "job_lease_seconds",
         "upload_stall_threshold_s",
         "fake_send_delay_s",
@@ -250,6 +254,12 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "scheduler_small_max_bytes",
         "scheduler_max_wait_s",
         "scheduler_scan_limit",
+    ],
+    "access": [
+        "access_cache_enabled",
+        "access_cache_ttl_s",
+        "access_cache_negative_ttl_s",
+        "access_probe_limit",
     ],
     "auto_split": [
         "auto_split_enabled",

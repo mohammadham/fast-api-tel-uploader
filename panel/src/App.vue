@@ -141,6 +141,14 @@
           <h4>صف انتظار</h4>
           <div class="stat" v-for="c in queueCards" :key="c.label"><div class="lbl">{{ c.label }}</div><div class="num">{{ c.value }}</div></div>
         </div>
+        <div class="card wide" v-if="accessHealth">
+          <h4>دسترسی اکانت‌ها به کانال‌ها</h4>
+          <div class="stat"><div class="lbl">اکانت‌های فعال</div><div class="num">{{ accessHealth.accounts }}</div></div>
+          <div class="stat"><div class="lbl">رکورد کش دسترسی</div><div class="num">{{ accessHealth.chat_access.total }}</div></div>
+          <div class="stat"><div class="lbl">مجاز / ردشده (فعال)</div><div class="num">{{ accessHealth.chat_access.active }} / {{ accessHealth.chat_access.expired }}</div></div>
+          <div class="stat"><div class="lbl">قطعات تلگرامی بدون مرجع</div><div class="num" :style="accessHealth.orphan_parts.total ? 'color:var(--warn,#F59E0B)' : ''">{{ accessHealth.orphan_parts.total }}</div></div>
+          <p class="muted" style="font-size:11px;margin:10px 0 0">کش مثبت ۶ ساعت و کش منفی ۱۰ دقیقه نگه داشته می‌شود؛ قطعات orphan در صورت شکست پاک‌سازی تلگرام ثبت می‌شوند.</p>
+        </div>
       </section>
 
 
@@ -733,6 +741,10 @@
                 <template v-else-if="it.key === 'compress_uploads'">
                   <option value="0">غیرفعال — آپلود بایت‌های اصلی</option>
                   <option value="1">فعال — gzip فقط وقتی قطعه کوچک‌تر شود</option>
+                </template>
+                <template v-else-if="it.key === 'access_cache_enabled'">
+                  <option value="0">غیرفعال — بررسی دسترسی در هر درخواست</option>
+                  <option value="1">فعال — کش مثبت/منفی دسترسی اکانت‌ها</option>
                 </template>
               </select>
               <input v-else-if="it.key === 'tg_api_hash'" v-model="settingsDraft[it.key]" type="password"
@@ -2033,7 +2045,8 @@ const doLogin = submitLogin;
     };
     loaders.ops = async () => {
       try {
-        const [q, n, p] = await Promise.all([api("/api/v1/queue/stats"), api("/api/v1/admin/nodes"), api("/api/v1/admin/proxies")]);
+        const [q, n, p, a] = await Promise.all([api("/api/v1/queue/stats"), api("/api/v1/admin/nodes"), api("/api/v1/admin/proxies"), api("/api/v1/admin/access-health")]);
+        accessHealth.value = a;
         // Queue status
         queueStats.value = { ...q, paused: (q.paused || []).join(",") || "-" };
         // Nodes health
@@ -2072,6 +2085,7 @@ const doLogin = submitLogin;
       return lbl + ": " + (proxyStatusDetails[p.status] || "") + extra;
     }
     const proxyErrorCount = ref(0);
+    const accessHealth = ref(null);
     function fmtLatency(ms) {
       if (ms == null || ms < 0) return "—";
       return (Number(ms) / 1000).toFixed(2) + " ثانیه";
@@ -2122,7 +2136,7 @@ const doLogin = submitLogin;
     const redisTesting = ref(false);
     const redisStatus = ref(null); // {ok, error, server, db}
 
-    const optionedSettings = ["fake_tg", "eitaa_mode", "transfer_delete_source", "auto_split_enabled", "compress_uploads"]; // int settings rendered as selects
+    const optionedSettings = ["fake_tg", "eitaa_mode", "transfer_delete_source", "auto_split_enabled", "compress_uploads", "access_cache_enabled"]; // int settings rendered as selects
     function validateSetting(it, value) {
       if (it.type === "int") {
         if (value === "" || value === null || value === undefined || Number.isNaN(Number(value)))
@@ -2145,6 +2159,9 @@ const doLogin = submitLogin;
           const n = Number(value); if (!(n >= 2 && n <= 32)) return "بین ۲ تا ۳۲ اکانت";
         }
         if (it.key === "auto_split_max_parts") { const n = Number(value); if (!(n >= 2 && n <= 1000)) return "بین ۲ تا ۱۰۰۰ قطعه"; }
+        if (it.key === "compress_min_savings_pct") { const n = Number(value); if (!(n >= 0 && n <= 99)) return "بین ۰ تا ۹۹ درصد"; }
+        if (it.key === "access_probe_limit") { const n = Number(value); if (!(n >= 1 && n <= 32)) return "بین ۱ تا ۳۲ اکانت"; }
+        if (["access_cache_ttl_s", "access_cache_negative_ttl_s"].includes(it.key) && Number(value) < 1) return "باید ≥ ۱ ثانیه باشد";
       } else if (it.key === "default_backend") {
         if (!["telegram", "eitaa"].includes(value)) return "تلگرام یا ایتا";
       } else if (it.key === "proxy_strategy") {
@@ -2207,6 +2224,11 @@ const doLogin = submitLogin;
       auto_split_max_accounts: "حداکثر اکانت مجاز برای یک فایل",
       auto_split_max_parts: "سقف تعداد قطعات یک فایل",
       compress_uploads: "فشرده‌سازی gzip قطعات آپلود در صورت کوچک‌شدن (۰=خاموش، ۱=روشن)",
+      compress_min_savings_pct: "حداقل درصد صرفه‌جویی برای استفاده از gzip (۰ تا ۹۹)",
+      access_cache_enabled: "کش دسترسی اکانت به کانال (۰=خاموش، ۱=روشن)",
+      access_cache_ttl_s: "مدت نگهداری دسترسی مجاز در کش (ثانیه)",
+      access_cache_negative_ttl_s: "مدت نگهداری دسترسی ردشده در کش (ثانیه)",
+      access_probe_limit: "حداکثر اکانت‌هایی که برای بررسی دسترسی آزمایش می‌شوند",
       stream_max_per_key: "سقف استریم هم‌زمان هر کلید/لینک عمومی",
       stream_retry_after_s: "مهلت Retry-After برای استریم ردشده (ثانیه)",
       max_queue_jobs: "حداکثر جاب در صف (۰=بی‌نهایت)",
@@ -2253,7 +2275,7 @@ const doLogin = submitLogin;
     };
     const envSettings = computed(() => settingsItems.value.filter((x) => x.group === "environment"));
     const settingsGroups = computed(() => {
-      const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", scheduler: "زمان‌بندی اندازه/قدمت", auto_split: "اسپلیت خودکار چنداکانتی", backend: "بک‌اند", telegram_api: "تلگرام و ایتا — حالت تست و API", proxy: "پراکسی تلگرام", redis: "ردیس (صف توزیع‌شده — بدون ری‌استارت)" };
+      const g = { limits: "محدودیت‌ها", links: "لینک و انقضا", queue: "صف و همزمانی", access: "دسترسی اکانت‌ها به کانال (کش)", scheduler: "زمان‌بندی اندازه/قدمت", auto_split: "اسپلیت خودکار چنداکانتی", backend: "بک‌اند", telegram_api: "تلگرام و ایتا — حالت تست و API", proxy: "پراکسی تلگرام", redis: "ردیس (صف توزیع‌شده — بدون ری‌استارت)" };
       const out = [];
       for (const [gid, title] of Object.entries(g)) {
         out.push({ id: gid, title, items: settingsItems.value.filter((x) => x.group === gid) });

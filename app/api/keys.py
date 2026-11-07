@@ -32,6 +32,11 @@ def _validate_scopes(raw: str) -> str:
     return ",".join(parts)
 
 
+class StoragePreflightIn(BaseModel):
+    backend: str = "telegram"
+    storage_chat: str = ""
+
+
 class KeyIn(BaseModel):
     name: str
     scopes: str = "read,write"
@@ -65,6 +70,39 @@ def _validate_storage_chat(db, raw: str) -> str:
     if v.lstrip("-").isdigit():
         return v
     raise HTTPException(status_code=400, detail="storage_chat must be @username, numeric chat id, or empty")
+
+
+@router.post("/preflight")
+async def preflight_storage(
+    body: StoragePreflightIn, _: str = Depends(get_current_admin), db=Depends(get_db)
+):
+    """Check which live accounts can write to a key's proposed storage chat."""
+    backend = (body.backend or "telegram").strip().lower()
+    if backend not in ("telegram", "eitaa"):
+        raise HTTPException(status_code=400, detail="backend must be 'telegram' or 'eitaa'")
+    chat = _validate_storage_chat(db, body.storage_chat)
+    if not chat:
+        return {"chat": "", "backend": backend, "ok": True, "unknown": True, "accounts": []}
+    if backend == "eitaa":
+        return {"chat": chat, "backend": backend, "ok": True, "unknown": True, "accounts": []}
+
+    from ..core.state import state
+    from ..services.access import AccessService
+
+    service = AccessService(db, state.manager)
+    accounts = []
+    for key in state.manager.account_keys():
+        allowed = await service.probe(key, chat, backend, "write")
+        accounts.append({"key": key, "can_write": allowed})
+    known = [a for a in accounts if a["can_write"] is not None]
+    return {
+        "chat": chat,
+        "backend": backend,
+        "ok": any(a["can_write"] for a in known) if known else True,
+        "unknown": not known,
+        "writable": sum(1 for a in known if a["can_write"]),
+        "accounts": accounts,
+    }
 
 
 @router.post("")
