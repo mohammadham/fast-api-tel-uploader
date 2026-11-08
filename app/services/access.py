@@ -271,6 +271,16 @@ class AccessService:
                 )
             except NoBackendAvailable:
                 continue
+        # Uploads are safe to fail-open: the actual Telegram send is the final
+        # authority, and a cached false negative (or a session that cannot
+        # resolve the channel entity yet) must not block an otherwise valid
+        # upload forever.  Downloads stay strict: reading another account's
+        # Saved Messages would leak the wrong file.
+        if need == "write":
+            metrics.inc("access.write_fallback")
+            return await self.manager.acquire(
+                "acc", backend=backend, direction="upload"
+            )
         metrics.inc("access.unavailable")
         raise NoBackendAvailable(
             f"no account can access storage chat {chat!r}", 30.0, retryable=False

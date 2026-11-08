@@ -64,6 +64,37 @@ async def test_pick_keeps_legacy_fallback_when_backend_cannot_probe(client):
 
 
 @pytest.mark.asyncio
+async def test_pick_upload_falls_back_when_every_account_is_denied(client):
+    """A stale negative write cache must not block the actual upload attempt."""
+    db = await get_db()
+    first, second = await _two_accounts(db)
+    FakeBackend.ACCESS[first] = {}
+    FakeBackend.ACCESS[second] = {}
+
+    service = AccessService(db, state.manager)
+    borrowed = await service.pick("@private", need="write")
+    await borrowed.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_probe_entity_resolution_is_unknown_not_denied():
+    """Telethon's missing-entity error means "unknown", never a cached denial."""
+    from app.tg.telethon_backend import TelethonBackend
+
+    class _Client:
+        async def get_entity(self, _target):
+            raise ValueError(
+                "Could not find the input entity for PeerChannel(channel_id=2546879743)"
+            )
+
+    backend = TelethonBackend.__new__(TelethonBackend)
+    backend._started = True
+    backend.storage_chat = "me"
+    backend._client = _Client()
+    assert await backend.probe_access("-1004466029012", "write") is None
+
+
+@pytest.mark.asyncio
 async def test_upload_and_download_use_authorized_account(client, api_key):
     db = await get_db()
     denied, allowed = await _two_accounts(db)

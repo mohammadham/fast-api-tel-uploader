@@ -28,6 +28,28 @@ def _map_error(exc: Exception) -> Exception:
     return SendFailure(str(exc) or name)
 
 
+def _entity_unresolved(exc: Exception) -> bool:
+    """True when Telethon cannot resolve a chat from the session entity cache.
+
+    That is *not* proof that the account cannot post: a fresh StringSession has
+    no access hash until dialogs are warmed, and a private storage channel can
+    be missing even after warm-up.  Treat it as "unknown" and let the normal
+    pool attempt the send; turning it into a cached denial blocked uploads for
+    the whole negative-TTL window.
+    """
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "could not find the input entity",
+            "cannot find any entity",
+            "entity corresponding to",
+            "no user has",
+            "access hash",
+        )
+    )
+
+
 class TelethonBackend(BackendClient):
     kind = "telethon"
 
@@ -150,12 +172,29 @@ class TelethonBackend(BackendClient):
             target = self._chat(chat)
             if str(target).lower() in ("me", "self"):
                 return True
-            entity = await self._client.get_entity(target)
+            try:
+                entity = await self._client.get_entity(target)
+            except Exception as exc:
+                if _entity_unresolved(exc):
+                    return None
+                raise
             if need == "read":
                 await self._client.get_messages(entity, limit=1)
                 return True
-            perms = await self._client.get_permissions(entity)
-            if getattr(perms, "is_admin", False):
+            try:
+                perms = await self._client.get_permissions(entity)
+            except Exception as exc:
+                if _entity_unresolved(exc):
+                    return None
+                raise
+            if getattr(perms, "is_admin", False) or getattr(perms, "is_creator", False):
+                return True
+            # Admins of a broadcast channel can carry the right on the entity
+            # even when get_permissions reports only the participant view.
+            if getattr(entity, "creator", False):
+                return True
+            admin_rights = getattr(entity, "admin_rights", None)
+            if admin_rights is not None and getattr(admin_rights, "post_messages", False):
                 return True
             return bool(
                 getattr(perms, "post_messages", False)

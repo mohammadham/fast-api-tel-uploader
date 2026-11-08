@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -118,3 +119,43 @@ async def test_download_priority_over_upload(client, api_key, token):
     # The download must have been picked while uploads (enqueued earlier) exist.
     stats = await queue.stats()
     assert stats["by_kind"]["upload"]["pending"] >= 0  # uploads may still run
+
+
+async def test_resume_upload_job_parses_text_payload(client, token):
+    """MySQL (and SQLite) return jobs.payload as text; resume must not 500."""
+    import time
+
+    db = await get_db()
+    job_id = "j_resume_text_payload"
+    now = time.time()
+    await db.execute(
+        "INSERT INTO jobs(id, kind, priority, seq, status, payload, attempts, max_retries,"
+        " next_run_at, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            job_id,
+            "upload",
+            40,
+            int(now * 1000),
+            "retry",
+            json.dumps({"file_id": "resume-missing", "tmp_path": "/tmp/resume-missing.bin"}),
+            1,
+            5,
+            now + 3600,
+            now,
+            now,
+        ),
+    )
+
+    queue = state.queue
+    queue.pause("upload")
+    try:
+        r = await client.post(
+            f"/api/v1/queue/resume/{job_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["session_id"] is None
+    finally:
+        # do not let a resumed upload outlive the per-test DB/temp dir
+        await db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+        queue.resume("upload")

@@ -1,6 +1,8 @@
 """Queue inspection & control: stats, jobs list, pause/resume kinds, purge."""
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -8,6 +10,25 @@ from ..core.state import get_db, state
 from .deps import get_current_admin
 
 router = APIRouter(prefix="/api/v1/queue", tags=["queue"])
+
+
+def _payload_dict(row: dict) -> dict:
+    """MySQL returns jobs.payload as JSON text; SQLite also returns text.
+
+    ``dict(raw)`` on a string raises ValueError (the resume endpoint used to
+    500 on MySQL).  Parse strings and tolerate malformed legacy payloads.
+    """
+    raw = (row or {}).get("payload")
+    if isinstance(raw, str):
+        try:
+            value = json.loads(raw or "{}")
+        except Exception:
+            return {}
+        return value if isinstance(value, dict) else {}
+    try:
+        return dict(raw or {})
+    except (TypeError, ValueError):
+        return {}
 
 
 @router.get("/stats")
@@ -53,16 +74,7 @@ async def jobs(limit: int = 100, _: str = Depends(get_current_admin), db=Depends
     items = []
     for r in rows:
         item = dict(r)
-        payload = r.get("payload")
-        if payload:
-            try:
-                import json
-
-                item["payload"] = json.loads(payload) if isinstance(payload, str) else dict(payload)
-            except Exception:
-                item["payload"] = None
-        else:
-            item["payload"] = None
+        item["payload"] = _payload_dict(r) if r.get("payload") else None
         item["size_bytes"] = job_size(item)
         item["lane"] = lane_for(item, small_max)
         created = float(r.get("created_at") or clock)
@@ -101,7 +113,7 @@ async def resume_job(job_id: str, _: str = Depends(get_current_admin), db=Depend
         raise HTTPException(status_code=409, detail="job is paused, use /api/v1/queue/pause first")
 
     # resume the upload session from its stored offset (if it still exists)
-    payload = dict(row.get("payload") or {})
+    payload = _payload_dict(row)
     session_id = payload.get("session_id")
     resumed_offset = 0
     if session_id:

@@ -1052,7 +1052,7 @@ class QueueManager:
                 await self.files.set_status(payload["file_id"], "failed", error)
                 # Final failure: delete partial Telegram messages, forget the
                 # part rows and remove the source plus every derived tmp path.
-                await self._cleanup_final_upload(payload, error)
+                await self._cleanup_final_upload(payload, error, job_id=job_id)
             self._rows.pop(job_id, None)
             metrics.inc(f"queue.failed.{kind}")
             self._wake.set()
@@ -1164,7 +1164,9 @@ class QueueManager:
                 else:
                     metrics.inc("parts.discarded")
 
-    async def _cleanup_final_upload(self, payload: Dict[str, Any], error: str) -> None:
+    async def _cleanup_final_upload(
+        self, payload: Dict[str, Any], error: str, job_id: str = ""
+    ) -> None:
         """Final failure: drop partial Telegram parts and every staged tmp path."""
         file_id = str(payload.get("file_id") or "")
         rec = await self.files.get(file_id) if file_id else None
@@ -1182,6 +1184,12 @@ class QueueManager:
                 paths.append(str(value))
         for path in paths:
             try:
+                # Two jobs can briefly point at the same staged file (for
+                # example a retry overlapping the original job).  Never let the
+                # first failure delete the source another active job still owns.
+                if job_id and await self.jobs.tmp_path_active(path, exclude_job_id=job_id):
+                    metrics.inc("upload.cleanup_skipped_active")
+                    continue
                 os.remove(path)
             except OSError:
                 metrics.inc("upload.cleanup_failed")

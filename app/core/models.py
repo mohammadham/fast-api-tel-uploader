@@ -828,20 +828,24 @@ class JobRepo:
             "SELECT * FROM jobs WHERE status IN ('pending','running','lease') ORDER BY priority DESC, seq LIMIT 500"
         )
 
-    async def active_tmp_paths(self) -> set[str]:
+    async def active_tmp_paths(self, exclude_job_id: str = "") -> set[str]:
         """Absolute tmp/download paths referenced by pending/running jobs.
 
         The janitor must never delete the source file of a queued upload just
-        because it has been waiting (or transferring) for over an hour.
+        because it has been waiting (or transferring) for over an hour.  The
+        optional ``exclude_job_id`` lets a finishing job ignore its own payload
+        while still protecting a path shared with another active job.
         """
         try:
             rows = await self.db.fetch_all(
-                "SELECT payload FROM jobs WHERE status IN ('pending','retry','running')"
+                "SELECT id, payload FROM jobs WHERE status IN ('pending','retry','running')"
             )
         except Exception:
             return set()
         out: set[str] = set()
         for row in rows:
+            if exclude_job_id and str(row.get("id") or "") == exclude_job_id:
+                continue
             raw = row.get("payload")
             try:
                 payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
@@ -859,6 +863,13 @@ class JobRepo:
                     if value:
                         out.add(os.path.normcase(os.path.abspath(str(value))))
         return out
+
+    async def tmp_path_active(self, path: str, exclude_job_id: str = "") -> bool:
+        """True when another pending/retry/running job still owns ``path``."""
+        if not path:
+            return False
+        target = os.path.normcase(os.path.abspath(str(path)))
+        return target in await self.active_tmp_paths(exclude_job_id)
 
     async def update_payload(self, job_id: str, payload: Dict[str, Any]) -> None:
         """Persist mutated payload (used for live transfer progress)."""

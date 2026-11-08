@@ -1,7 +1,9 @@
 """Cleanup guarantees for failed or partially retried uploads."""
 from __future__ import annotations
 
+import json
 import os
+import time
 
 import pytest
 
@@ -52,3 +54,37 @@ async def test_final_failure_removes_parts_tmp_and_records_orphans(client, api_k
         assert orphan["chat_key"] == "@cleanup-denied"
     finally:
         FakeBackend.ACCESS.clear()
+
+
+@pytest.mark.asyncio
+async def test_final_cleanup_keeps_tmp_shared_with_another_active_job(client):
+    """A duplicate/overlapping job must not lose its source to the first failure."""
+    db = await get_db()
+    tmp_dir = get_settings().final_tmp_dir()
+    source = os.path.join(tmp_dir, "cleanup-shared.bin")
+    with open(source, "wb") as fh:
+        fh.write(b"shared cleanup payload")
+
+    now = time.time()
+    payload = json.dumps({"file_id": "cleanup-shared", "tmp_path": source})
+    for job_id, status in (("cleanup-shared-a", "running"), ("cleanup-shared-b", "retry")):
+        await db.execute(
+            "INSERT INTO jobs(id, kind, priority, seq, status, payload, created_at, updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (job_id, "upload", 40, int(now * 1000), status, payload, now, now),
+        )
+
+    await state.queue._cleanup_final_upload(
+        {"file_id": "cleanup-shared", "tmp_path": source},
+        "forced failure",
+        job_id="cleanup-shared-a",
+    )
+    assert os.path.exists(source)
+
+    await db.execute("DELETE FROM jobs WHERE id IN (?,?)", ("cleanup-shared-a", "cleanup-shared-b"))
+    await state.queue._cleanup_final_upload(
+        {"file_id": "cleanup-shared", "tmp_path": source},
+        "forced failure",
+        job_id="cleanup-shared-a",
+    )
+    assert not os.path.exists(source)
