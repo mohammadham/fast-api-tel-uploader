@@ -1114,6 +1114,7 @@ class QueueManager:
         self, file_id: str, rec: Dict[str, Any], parts: List[Dict[str, Any]], error: str
     ) -> None:
         """Remember Telegram messages we could not delete, for later cleanup."""
+        metrics.inc("parts.orphaned", len(parts))
         chat = str(rec.get("storage_chat") or "me")
         for part in parts:
             try:
@@ -1158,7 +1159,10 @@ class QueueManager:
                 try:
                     await backend.delete_message(int(part["message_id"]), chat)
                 except Exception as exc:
+                    metrics.inc("parts.discard_failed")
                     await self._record_orphans(file_id, rec, [part], f"discard: {exc}")
+                else:
+                    metrics.inc("parts.discarded")
 
     async def _cleanup_final_upload(self, payload: Dict[str, Any], error: str) -> None:
         """Final failure: drop partial Telegram parts and every staged tmp path."""
@@ -1180,7 +1184,9 @@ class QueueManager:
             try:
                 os.remove(path)
             except OSError:
-                pass
+                metrics.inc("upload.cleanup_failed")
+            else:
+                metrics.inc("upload.tmp_removed")
 
     async def _prepare_upload_part(self, path: str, compress: bool) -> Tuple[str, int, str, bool]:
         """Return (send_path, stored_size, encoding, is_temporary).
@@ -1204,12 +1210,15 @@ class QueueManager:
                 min_save = int(self.settings.compress_min_savings_pct or 0)
             saved_pct = ((original - stored) * 100.0 / original) if original else 0.0
             if stored < original and saved_pct >= max(0, min_save):
+                metrics.inc("upload.compressed")
                 return gz, stored, "gzip", True
+            metrics.inc("upload.compression_skipped")
             try:
                 os.remove(gz)
             except OSError:
                 pass
         except Exception as exc:
+            metrics.inc("upload.compression_failed")
             slog_q.warning("upload compression skipped", path=path, error=str(exc)[:120])
             try:
                 os.remove(gz)
@@ -1409,6 +1418,7 @@ class QueueManager:
     ) -> Tuple[str, List[int], str]:
         """The existing one-account path (main split_threshold still applies)."""
         message_ids: List[int] = []
+        metrics.inc("upload.split" if size > split_at and backend != "eitaa" else "upload.single")
         target_chat = (storage_chat or "").strip()
         if target_chat:
             borrowed = await self.access.pick(
@@ -1550,11 +1560,13 @@ class QueueManager:
         how many parts run at once.
         """
         parts = int(plan["parts"])
+        metrics.inc("autosplit.uploads")
         part_paths = await self._split_file_balanced(tmp_path, parts)
         await self._remember_tmp_paths(job_id, part_paths)
         if len(part_paths) != parts:
             raise TransferError(f"auto-split produced {len(part_paths)}/{parts} parts")
         part_sizes = [os.path.getsize(p) for p in part_paths]
+        metrics.inc("autosplit.bytes", sum(part_sizes))
         done = [0] * parts
         message_ids = [0] * parts
         used_accounts: set[str] = set()
@@ -1662,6 +1674,8 @@ class QueueManager:
                     pass
 
         account_key = ",".join(sorted(used_accounts)) or "auto"
+        metrics.inc("autosplit.accounts_used", len(used_accounts))
+        metrics.observe("autosplit.parts_done", parts)
         self._last_backend_by_job[job_id] = account_key
         return account_key, message_ids, str(plan["storage_chat"])
 
@@ -1725,8 +1739,13 @@ class QueueManager:
         self, *, size: int, backend: str, split_at: int, storage_chat: str,
     ) -> Optional[Dict[str, Any]]:
         """Decide whether a file should use the optional multi-account path."""
-        if size <= 0 or backend == "eitaa":
+
+        def skip(reason: str):
+            metrics.inc(f"autosplit.fallback.{reason}")
             return None
+
+        if size <= 0 or backend == "eitaa":
+            return skip("unsupported")
         s = get_settings()
         try:
             vals = await runtime_settings().get_all(self.db)
@@ -1741,25 +1760,25 @@ class QueueManager:
                 return int(default)
 
         if cfg("auto_split_enabled", 0) != 1:
-            return None
+            return skip("disabled")
         min_file = max(0, cfg("auto_split_min_file_size", 128 * 1024 * 1024))
         if size < min_file:
-            return None
+            return skip("too_small")
         min_part = max(1, cfg("auto_split_min_part_size", 32 * 1024 * 1024))
         max_part = max(1, cfg("auto_split_max_part_size", 512 * 1024 * 1024))
         # the original hard cap always wins over the auto-split preference
         max_part = min(max_part, max(1, int(split_at or max_part)))
         if max_part < min_part:
-            return None
+            return skip("part_range")
         min_accounts = max(2, cfg("auto_split_min_accounts", 2))
         max_accounts = max(2, cfg("auto_split_max_accounts", 4))
         max_parts = max(2, cfg("auto_split_max_parts", 64))
         free = self._auto_split_free_accounts(backend)
         if len(free) < min_accounts:
-            return None
+            return skip("not_enough_accounts")
         target = await self._shared_storage_chat(storage_chat, free)
         if not target:
-            return None
+            return skip("no_shared_chat")
 
         # Only accounts that can write to the shared destination may carry a
         # part.  Cached positives are cheap; unknown accounts get one lazy
@@ -1780,21 +1799,23 @@ class QueueManager:
                 authorized.append(key)
         free = authorized
         if len(free) < min_accounts:
-            return None
+            return skip("not_enough_authorized")
         accounts = min(len(free), max_accounts)
         if accounts < 2:
-            return None
+            return skip("one_account")
         parts = max(accounts, (size + max_part - 1) // max_part)
         max_by_min = size // min_part
         if max_by_min < 2:
-            return None
+            return skip("too_small_for_min_part")
         parts = min(parts, max_by_min, max_parts)
         if parts < 2:
-            return None
+            return skip("one_part")
         if (size + parts - 1) // parts > max_part:
-            return None
+            return skip("max_part_exceeded")
         if size // parts < min_part:
-            return None
+            return skip("min_part_exceeded")
+        metrics.inc("autosplit.planned")
+        metrics.observe("autosplit.parts", parts)
         return {
             "parts": parts,
             "concurrency": min(accounts, parts),

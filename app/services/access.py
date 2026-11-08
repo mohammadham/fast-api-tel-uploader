@@ -17,6 +17,7 @@ from typing import Dict, List, Optional
 
 from ..core.config import get_settings
 from ..core.db import Database
+from ..core.metrics import metrics
 from ..core.settings_service import get_runtime
 from ..tg.base import FloodWait, SendFailure, TransferError
 from ..tg.manager import Borrowed, NoBackendAvailable, TGManager
@@ -64,9 +65,12 @@ class AccessService:
             (backend or "telegram", account_key, normalize_chat(chat)),
         )
         if not row:
+            metrics.inc("access.cache_miss")
             return None
         if float(row.get("expires_at") or 0) <= time.time():
+            metrics.inc("access.cache_miss")
             return None
+        metrics.inc("access.cache_hit")
         return row
 
     async def mark(
@@ -148,6 +152,7 @@ class AccessService:
                     be.probe_access(chat, need), timeout=15.0
                 )
             if result is None:
+                metrics.inc("access.probe_unknown")
                 return None
             if need == "write":
                 await self.mark(
@@ -159,10 +164,13 @@ class AccessService:
                     account_key, chat, backend, can_read=bool(result),
                     source="probe", error="" if result else "read denied",
                 )
+            metrics.inc("access.probe_ok" if result else "access.probe_denied")
             return bool(result)
         except FloodWait:
+            metrics.inc("access.probe_unknown")
             return None
         except TransferError:
+            metrics.inc("access.probe_unknown")
             return None
         except SendFailure as exc:
             await self.mark(
@@ -171,8 +179,10 @@ class AccessService:
                 can_read=False if need == "read" else None,
                 source="probe", error=str(exc),
             )
+            metrics.inc("access.probe_denied")
             return False
         except Exception:
+            metrics.inc("access.probe_unknown")
             return None
 
     async def pick(
@@ -192,6 +202,7 @@ class AccessService:
         normal pool so fake/eitaa/bot paths keep working.
         """
         if not await self._cfg_int("access_cache_enabled", 1):
+            metrics.inc("access.cache_disabled")
             return await self.manager.acquire(
                 "acc", backend=backend, direction="download" if need == "read" else "upload"
             )
@@ -204,6 +215,7 @@ class AccessService:
             if k not in exclude and k not in keys
         )
         if not keys:
+            metrics.inc("access.no_accounts")
             return await self.manager.acquire(
                 "acc", backend=backend, direction="download" if need == "read" else "upload"
             )
@@ -217,8 +229,11 @@ class AccessService:
                 unknown.append(key)
                 continue
             if not int(row.get(flag) or 0):
+                metrics.inc("access.denied_skipped")
                 continue
             try:
+                if key == preferred:
+                    metrics.inc("access.preferred_used")
                 return await self.manager.acquire_key(
                     key, timeout=min(10.0, timeout), direction=direction
                 )
@@ -256,6 +271,7 @@ class AccessService:
                 )
             except NoBackendAvailable:
                 continue
+        metrics.inc("access.unavailable")
         raise NoBackendAvailable(
             f"no account can access storage chat {chat!r}", 30.0, retryable=False
         )

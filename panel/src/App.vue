@@ -146,6 +146,7 @@
           <div class="stat"><div class="lbl">اکانت‌های فعال</div><div class="num">{{ accessHealth.accounts }}</div></div>
           <div class="stat"><div class="lbl">رکورد کش دسترسی</div><div class="num">{{ accessHealth.chat_access.total }}</div></div>
           <div class="stat"><div class="lbl">مجاز / ردشده (فعال)</div><div class="num">{{ accessHealth.chat_access.active }} / {{ accessHealth.chat_access.expired }}</div></div>
+          <div class="stat" v-if="accessHealth.file_parts"><div class="lbl">قطعات ذخیره‌شده (gzip)</div><div class="num">{{ accessHealth.file_parts.total }} <span class="muted" style="font-size:12px">({{ accessHealth.file_parts.gzip }})</span></div></div>
           <div class="stat"><div class="lbl">قطعات تلگرامی بدون مرجع</div><div class="num" :style="accessHealth.orphan_parts.total ? 'color:var(--warn,#F59E0B)' : ''">{{ accessHealth.orphan_parts.total }}</div></div>
           <p class="muted" style="font-size:11px;margin:10px 0 0">کش مثبت ۶ ساعت و کش منفی ۱۰ دقیقه نگه داشته می‌شود؛ قطعات orphan در صورت شکست پاک‌سازی تلگرام ثبت می‌شوند.</p>
         </div>
@@ -449,7 +450,7 @@
                 <td><input type="checkbox" :checked="selectedFiles.has(f.id)" @change="toggleSelectFile(f.id)" class="checkbox" dir="ltr" v-if="!bulkMode"></td>
                 <td v-if="!bulkMode" dir="ltr"><code>{{ f.id }}</code></td>
                 <td v-else dir="ltr"><code style="color:var(--muted)">{{ f.id }}</code></td>
-                <td v-if="!bulkMode"><a href="#" style="color:inherit;text-decoration:underline dotted" @click.prevent="filePreview(f)" :title="f.mime">{{ f.name }}</a><span v-if="f.blocked" class="tag" style="background:var(--err);color:#fff;font-size:10px;margin-inline-start:6px">بن</span></td>
+                <td v-if="!bulkMode"><a href="#" style="color:inherit;text-decoration:underline dotted" @click.prevent="filePreview(f)" :title="f.mime">{{ f.name }}</a><span v-if="f.blocked" class="tag" style="background:var(--err);color:#fff;font-size:10px;margin-inline-start:6px">بن</span><span v-if="f.parts > 1" class="tag" style="font-size:9px;margin-inline-start:4px;background:var(--panel2)">{{ f.parts }} قطعه</span></td>
                 <td v-else><span class="muted">{{ f.name }}</span></td>
                 <td>{{ fmtBytes(f.size) }}</td>
                 <td><span class="badge" :class="f.status">{{ f.status }}</span></td>
@@ -1060,6 +1061,13 @@
           <option v-for="o in keyChatOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
         </select>
         <p class="muted" style="font-size:11px;margin:4px 0 0">فایل‌های آپلودشده با این کلید به این کانال می‌روند.</p>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
+          <button class="ghost" style="padding:3px 10px;font-size:11px" :disabled="keyDlg.preflightBusy || !keyDlg.storageChat" @click="keyPreflight">
+            <span v-if="keyDlg.preflightBusy" class="spinner" aria-hidden="true"></span>
+            بررسی دسترسی اکانت‌ها
+          </button>
+          <span v-if="keyDlg.preflightMsg" class="muted" style="font-size:11px" :style="keyDlg.preflightOk === false ? 'color:var(--err)' : ''">{{ keyDlg.preflightMsg }}</span>
+        </div>
       </div>
       <button class="primary" style="width:100%" @click="keySave">ایجاد</button>
       <div v-if="keyDlg.result !== ''" style="background:var(--panel2);padding:12px;border-radius:8px">
@@ -1106,6 +1114,13 @@
           <option value="">پیش‌فرض سیستم (بدون کانال اختصاصی)</option>
           <option v-for="o in keyChatOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
         </select>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
+        <button class="ghost" style="padding:3px 10px;font-size:11px" :disabled="keyChatDlg.preflightBusy || !keyChatDlg.chat" @click="keyChatPreflight">
+          <span v-if="keyChatDlg.preflightBusy" class="spinner" aria-hidden="true"></span>
+          بررسی دسترسی اکانت‌ها
+        </button>
+        <span v-if="keyChatDlg.preflightMsg" class="muted" style="font-size:11px" :style="keyChatDlg.preflightOk === false ? 'color:var(--err)' : ''">{{ keyChatDlg.preflightMsg }}</span>
       </div>
       <p class="err">{{ keyChatDlg.msg }}</p>
       <button class="primary" style="width:100%" :disabled="keyChatDlg.busy" @click="keyChatSave">
@@ -1646,7 +1661,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
     const accDlg = reactive({ open: false, step: 1, phone: "", label: "", code: "", pass: "", msg: "", loginId: "", busy: false, resendIn: 0, resendsLeft: 3, pwLeft: 3 });
     const botDlg = reactive({ open: false, token: "", label: "", msg: "" });
     const eitDlg = reactive({ open: false, token: "", chat: "", label: "", msg: "" });
-    const keyDlg = reactive({ open: false, name: "", scopes: "read,write", rpm: 120, quota: 0, backend: "", storageChat: "", result: "" });
+    const keyDlg = reactive({ open: false, name: "", scopes: "read,write", rpm: 120, quota: 0, backend: "", storageChat: "", result: "", preflightBusy: false, preflightMsg: "", preflightOk: null });
     const qrDlg = reactive({ open: false, url: "", slug: "" });
 
     /* ---------- api helper (with refresh) ---------- */
@@ -2634,9 +2649,9 @@ const doLogin = submitLogin;
     async function eitDelete(e) { if (confirm("حذف توکن ایتا؟")) { await api(`/api/v1/eitaa/${e.id}`, { method: "DELETE" }); loaders.eitaa(); } }
 
     /* ---------- keys ---------- */
-    function keyOpen() { Object.assign(keyDlg, { open: true, name: "", scopes: "read,write", rpm: 120, quota: 0, backend: "", storageChat: "", result: "" }); loaders.channels(); }
+    function keyOpen() { Object.assign(keyDlg, { open: true, name: "", scopes: "read,write", rpm: 120, quota: 0, backend: "", storageChat: "", result: "", preflightBusy: false, preflightMsg: "", preflightOk: null }); loaders.channels(); }
     /* per-key storage channel: pick from registered channels / system default */
-    const keyChatDlg = reactive({ open: false, id: 0, name: "", chat: "", msg: "", busy: false });
+    const keyChatDlg = reactive({ open: false, id: 0, name: "", chat: "", msg: "", busy: false, backend: "telegram", preflightBusy: false, preflightMsg: "", preflightOk: null });
     const keyChatOptions = computed(() => {
       const opts = [];
       if (channelsDefaultChat.value) opts.push({ value: channelsDefaultChat.value, label: `پیش‌فرض سیستم (${channelsDefaultChat.value})` });
@@ -2644,7 +2659,7 @@ const doLogin = submitLogin;
       return opts;
     });
     function keyEditChat(k) {
-      Object.assign(keyChatDlg, { open: true, id: k.id, name: k.name, chat: k.storage_chat || "", msg: "", busy: false });
+      Object.assign(keyChatDlg, { open: true, id: k.id, name: k.name, chat: k.storage_chat || "", msg: "", busy: false, backend: k.backend || "telegram", preflightBusy: false, preflightMsg: "", preflightOk: null });
       loaders.channels();
     }
     async function keyChatSave() {
@@ -2663,6 +2678,28 @@ const doLogin = submitLogin;
         keyDlg.result = d.key;
         loaders.keys();
       } catch (e) { showToast(e.message, 4000, true); }
+    }
+    async function keyPreflight() {
+      keyDlg.preflightBusy = true; keyDlg.preflightMsg = ""; keyDlg.preflightOk = null;
+      try {
+        const d = await api("/api/v1/keys/preflight", { method: "POST", json: { backend: keyDlg.backend || "telegram", storage_chat: (keyDlg.storageChat || "").trim() } });
+        keyDlg.preflightOk = d.ok !== false;
+        if (d.unknown) keyDlg.preflightMsg = "بررسی دسترسی برای این بک‌اند ممکن نیست";
+        else if (d.ok) keyDlg.preflightMsg = `دسترسی نوشتن: ${d.writable || 0} اکانت`;
+        else keyDlg.preflightMsg = "هیچ اکانتی به این کانال دسترسی نوشتن ندارد";
+      } catch (e) { keyDlg.preflightOk = false; keyDlg.preflightMsg = e.message; }
+      finally { keyDlg.preflightBusy = false; }
+    }
+    async function keyChatPreflight() {
+      keyChatDlg.preflightBusy = true; keyChatDlg.preflightMsg = ""; keyChatDlg.preflightOk = null;
+      try {
+        const d = await api("/api/v1/keys/preflight", { method: "POST", json: { backend: keyChatDlg.backend || "telegram", storage_chat: (keyChatDlg.chat || "").trim() } });
+        keyChatDlg.preflightOk = d.ok !== false;
+        if (d.unknown) keyChatDlg.preflightMsg = "بررسی دسترسی برای این بک‌اند ممکن نیست";
+        else if (d.ok) keyChatDlg.preflightMsg = `دسترسی نوشتن: ${d.writable || 0} اکانت`;
+        else keyChatDlg.preflightMsg = "هیچ اکانتی به این کانال دسترسی نوشتن ندارد";
+      } catch (e) { keyChatDlg.preflightOk = false; keyChatDlg.preflightMsg = e.message; }
+      finally { keyChatDlg.preflightBusy = false; }
     }
     function copyKey() { navigator.clipboard.writeText(keyDlg.result); showToast("کپی شد"); }
     async function keyRevoke(k) { if (confirm("این کلید برای همیشه باطل شود؟")) { await api(`/api/v1/keys/${k.id}`, { method: "DELETE" }); loaders.keys(); } }

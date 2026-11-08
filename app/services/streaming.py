@@ -13,6 +13,7 @@ import zlib
 from typing import AsyncIterator, Optional, Tuple
 
 from ..core.db import Database
+from ..core.metrics import metrics
 from ..core.models import FileRepo, now
 from ..tg.base import BackendClient, TransferError
 from ..tg.manager import TGManager
@@ -225,6 +226,7 @@ async def file_response(
     try:
         parts = validate_parts(rec, parts)
     except IncompleteFileError as exc:
+        metrics.inc("stream.incomplete")
         return JSONResponse(
             {"detail": "file incomplete", "reason": str(exc)}, status_code=409
         )
@@ -265,6 +267,7 @@ async def file_response(
     if stream_key:
         cap, retry_after = await _stream_policy(db)
         if not await streams.acquire(stream_key, cap):
+            metrics.inc("stream.rejected")
             return JSONResponse(
                 {"detail": "too many concurrent streams for this key"},
                 status_code=429,
@@ -288,6 +291,7 @@ async def file_response(
     except Exception as exc:
         if stream_acquired:
             streams.release(stream_key)
+        metrics.inc("stream.storage_unavailable")
         return JSONResponse({"detail": f"storage unavailable: {exc}"}, status_code=503)
     backend = borrowed.backend
     chat = storage_chat or getattr(backend, "storage_chat", "me")
@@ -379,7 +383,7 @@ class _ZipBackground:
             try:
                 os.remove(self.tmp_path)
             except OSError:
-                pass
+                metrics.inc("zip.cleanup_failed")
 
 
 async def zip_stream_response(
@@ -417,6 +421,7 @@ async def zip_stream_response(
         try:
             validated[rec["id"]] = validate_parts(rec, await repo.parts(rec["id"]))
         except IncompleteFileError as exc:
+            metrics.inc("zip.incomplete")
             return JSONResponse(
                 {"detail": "file incomplete", "file_id": rec["id"], "reason": str(exc)},
                 status_code=409,
@@ -426,6 +431,7 @@ async def zip_stream_response(
     if stream_key:
         cap, retry_after = await _stream_policy(db)
         if not await streams.acquire(stream_key, cap):
+            metrics.inc("zip.rejected")
             return JSONResponse(
                 {"detail": "too many concurrent zip streams"},
                 status_code=429,
@@ -469,6 +475,7 @@ async def zip_stream_response(
                         ):
                             fh.write(chunk)
         except BaseException:
+            metrics.inc("zip.entry_failed")
             try:
                 os.remove(path)
             except OSError:
@@ -485,7 +492,7 @@ async def zip_stream_response(
             try:
                 os.remove(p)
             except OSError:
-                pass
+                metrics.inc("zip.cleanup_failed")
         tmp_paths.clear()
 
     async def gen() -> AsyncIterator[bytes]:
@@ -499,6 +506,7 @@ async def zip_stream_response(
                 try:
                     path = await fetch_entry(rec)
                 except TransferError as exc:
+                    metrics.inc("zip.entry_stub")
                     # a dead entry must not kill the whole archive: record a stub
                     stub_name = f"_errors/{name}.txt".encode("utf-8")
                     stub = f"download failed: {exc}\n".encode("utf-8")
@@ -561,10 +569,12 @@ async def zip_stream_response(
             offset += cd_size
             eocd = struct.pack("<IHHHHIIH", 0x06054b50, 0, 0, len(centrals), len(centrals), cd_size, cd_start, 0)
             yield cd_data + eocd
+            metrics.inc("zip.completed")
         except GeneratorExit:
             _cleanup_tmp()
             raise
         except Exception as exc:
+            metrics.inc("zip.failed")
             _cleanup_tmp()
             bg.error = exc
             raise
@@ -626,5 +636,9 @@ class _ReleaseAndCount:
                 await self.manager.note_bytes(self.key, served)
         except Exception:
             pass
+        if self.error is not None:
+            metrics.inc("stream.errors")
+        if served > 0:
+            metrics.inc("stream.bytes", served)
         if self.stream_key:
             streams.release(self.stream_key)

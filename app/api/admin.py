@@ -578,6 +578,12 @@ async def access_health(_: str = Depends(get_current_admin), db=Depends(get_db))
     orphans = await db.fetch_one(
         "SELECT COUNT(*) AS total, MIN(created_at) AS oldest FROM orphan_parts"
     )
+    parts = await db.fetch_one(
+        "SELECT COUNT(*) AS total,"
+        " COALESCE(SUM(CASE WHEN encoding='gzip' THEN 1 ELSE 0 END),0) AS gzip,"
+        " COALESCE(SUM(stored_size),0) AS stored_bytes,"
+        " COALESCE(SUM(size),0) AS original_bytes FROM file_parts"
+    )
     total = sum(int(r.get("total") or 0) for r in rows)
     active = sum(int(r.get("active") or 0) for r in rows)
     return {
@@ -590,6 +596,12 @@ async def access_health(_: str = Depends(get_current_admin), db=Depends(get_db))
             "readable": sum(int(r.get("readable") or 0) for r in rows),
             "writable": sum(int(r.get("writable") or 0) for r in rows),
             "by_backend": rows,
+        },
+        "file_parts": {
+            "total": int((parts or {}).get("total") or 0),
+            "gzip": int((parts or {}).get("gzip") or 0),
+            "stored_bytes": int((parts or {}).get("stored_bytes") or 0),
+            "original_bytes": int((parts or {}).get("original_bytes") or 0),
         },
         "orphan_parts": {
             "total": int((orphans or {}).get("total") or 0),

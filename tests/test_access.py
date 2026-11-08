@@ -125,4 +125,6 @@ async def test_key_preflight_and_access_health_report(client, token):
     health = r.json()
     assert health["chat_access"]["total"] >= 2
     assert health["chat_access"]["active"] >= 2
+    assert health["file_parts"]["total"] >= 0
+    assert health["file_parts"]["gzip"] >= 0
     assert health["orphan_parts"]["total"] >= 0
