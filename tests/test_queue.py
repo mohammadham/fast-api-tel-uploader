@@ -9,6 +9,53 @@ from app.core.models import FileRepo
 from app.core.state import get_db, state
 
 
+class _AdmitDB:
+    async def scalar(self, *args, **kwargs):
+        return 0
+
+    async def fetch_all(self, *args, **kwargs):
+        return []
+
+
+class _AdmitRuntime:
+    async def get_all(self, db, force=False):
+        return {"disk_watermark_pct": 90, "max_queue_jobs": 10, "max_inflight_bytes": 0}
+
+
+class _Disk:
+    total = 100 * 1024 ** 3
+    used = 50 * 1024 ** 3
+    free = 50 * 1024 ** 3
+
+
+class _FullDisk(_Disk):
+    used = 95 * 1024 ** 3
+    free = 5 * 1024 ** 3
+
+
+async def test_admit_treats_watermark_as_used_space_ceiling(monkeypatch):
+    """A 90% watermark must allow a disk that is 50% used, not require 90% free."""
+    import app.queue.queue_manager as qm
+
+    monkeypatch.setattr(qm, "runtime_settings", lambda: _AdmitRuntime())
+    monkeypatch.setattr(qm.shutil, "disk_usage", lambda _path: _Disk())
+    monkeypatch.setattr(qm.os, "makedirs", lambda *args, **kwargs: None)
+    ok, _, reason = await qm.QueueManager(_AdmitDB(), None).admit(20 * 1024 ** 3)
+    assert ok, reason
+
+
+async def test_admit_rejects_when_disk_use_crosses_watermark(monkeypatch):
+    import app.queue.queue_manager as qm
+
+    monkeypatch.setattr(qm, "runtime_settings", lambda: _AdmitRuntime())
+    monkeypatch.setattr(qm.shutil, "disk_usage", lambda _path: _FullDisk())
+    monkeypatch.setattr(qm.os, "makedirs", lambda *args, **kwargs: None)
+    ok, retry_after, reason = await qm.QueueManager(_AdmitDB(), None).admit(20 * 1024 ** 3)
+    assert not ok
+    assert retry_after == 60
+    assert "90% used" in reason
+
+
 async def test_download_priority_over_upload(client, api_key, token):
     """Enqueue 3 uploads then 1 download; the download must complete first."""
     db = await get_db()

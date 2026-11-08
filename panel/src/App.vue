@@ -2248,7 +2248,7 @@ const doLogin = submitLogin;
       stream_retry_after_s: "مهلت Retry-After برای استریم ردشده (ثانیه)",
       max_queue_jobs: "حداکثر جاب در صف (۰=بی‌نهایت)",
       max_inflight_bytes: "حداکثر بایت در صف/اجرا (۰=بی‌نهایت)",
-      disk_watermark_pct: "حداقل فضای آزاد دیسک (درصد)",
+      disk_watermark_pct: "حداکثر استفادهٔ دیسک (درصد)",
       tmp_retention_hours: "نگهداری فایل‌های tmp غیرفعال (ساعت)",
       bot_max_concurrent: "ارسال همزمان هر ربات",
       bot_max_rpm: "سقف درخواست هر ربات در دقیقه (۰=خاموش)",

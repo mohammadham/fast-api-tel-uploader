@@ -2340,8 +2340,8 @@ class QueueManager:
             try:
                 os.makedirs(s.final_tmp_dir(), exist_ok=True)
                 usage = shutil.disk_usage(s.final_tmp_dir())
-                if (usage.free - size_bytes) < usage.total * (pct / 100.0):
-                    return False, 60, f"disk watermark ({pct}% free required)"
+                if (usage.free - size_bytes) < usage.total * ((100 - pct) / 100.0):
+                    return False, 60, f"disk watermark ({pct}% used)"
             except OSError:
                 pass
         return True, 0, ""
