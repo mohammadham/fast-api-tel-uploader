@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     # ── admission control / disk safety ──
     max_queue_jobs: int = 1000          # 0 = unlimited
     max_inflight_bytes: int = 0         # 0 = unlimited; bytes of queued+running work
-    disk_watermark_pct: int = 90         # reject uploads that would push disk use above this %
+    disk_watermark_pct: int = 15         # reject uploads that would leave less free space than this %
     tmp_retention_hours: int = 2         # janitor keeps inactive tmp files this long
 
     # ── per-bot delivery limits (Bot API) ──

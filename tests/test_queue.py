@@ -19,7 +19,7 @@ class _AdmitDB:
 
 class _AdmitRuntime:
     async def get_all(self, db, force=False):
-        return {"disk_watermark_pct": 90, "max_queue_jobs": 10, "max_inflight_bytes": 0}
+        return {"disk_watermark_pct": 15, "max_queue_jobs": 10, "max_inflight_bytes": 0}
 
 
 class _Disk:
@@ -33,8 +33,8 @@ class _FullDisk(_Disk):
     free = 5 * 1024 ** 3
 
 
-async def test_admit_treats_watermark_as_used_space_ceiling(monkeypatch):
-    """A 90% watermark must allow a disk that is 50% used, not require 90% free."""
+async def test_admit_allows_disk_with_enough_free_space(monkeypatch):
+    """A 15% free-space floor allows a half-full disk to accept a 20GB upload."""
     import app.queue.queue_manager as qm
 
     monkeypatch.setattr(qm, "runtime_settings", lambda: _AdmitRuntime())
@@ -44,7 +44,7 @@ async def test_admit_treats_watermark_as_used_space_ceiling(monkeypatch):
     assert ok, reason
 
 
-async def test_admit_rejects_when_disk_use_crosses_watermark(monkeypatch):
+async def test_admit_rejects_when_free_space_would_cross_watermark(monkeypatch):
     import app.queue.queue_manager as qm
 
     monkeypatch.setattr(qm, "runtime_settings", lambda: _AdmitRuntime())
@@ -53,7 +53,7 @@ async def test_admit_rejects_when_disk_use_crosses_watermark(monkeypatch):
     ok, retry_after, reason = await qm.QueueManager(_AdmitDB(), None).admit(20 * 1024 ** 3)
     assert not ok
     assert retry_after == 60
-    assert "90% used" in reason
+    assert "15% free required" in reason
 
 
 async def test_download_priority_over_upload(client, api_key, token):

@@ -128,7 +128,7 @@ drains; run two nodes with one account and confirm the account cap is global.
 | `scheduler_scan_limit` | 200 | candidate rows examined per claim |
 | `max_queue_jobs` | 1000 | active-job admission limit; `0` = unlimited |
 | `max_inflight_bytes` | 0 | active payload bytes limit; `0` = unlimited |
-| `disk_watermark_pct` | 90 | reject large writes that would push disk use above this ceiling |
+| `disk_watermark_pct` | 15 | reject large writes that would leave less free space than this floor |
 | `tmp_retention_hours` | 24 | inactive tmp retention; active job files are always protected |
 | `bot_max_concurrent` | 2 | simultaneous Bot API sends per bot |
 | `bot_max_rpm` | 60 | per-bot request budget; `0` = off |

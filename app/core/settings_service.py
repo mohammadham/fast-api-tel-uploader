@@ -56,7 +56,7 @@ def _proxy_monitor_interval(v: int) -> str:
 
 
 def _pct_ok(v: int) -> str:
-    return "" if 50 <= v <= 99 else "must be between 50 and 99 percent"
+    return "" if 5 <= v <= 99 else "must be between 5 and 99 percent"
 
 
 def _savings_pct_ok(v: int) -> str:

@@ -2160,7 +2160,7 @@ const doLogin = submitLogin;
         if (Number(value) < 0) return "باید ≥ 0 باشد";
         const mustBePositive = ["max_upload_size", "split_threshold", "default_key_rpm", "presigned_ttl", "upload_session_ttl_minutes", "download_workers", "upload_workers", "max_concurrent_downloads", "max_concurrent_uploads", "max_concurrent_uploads_per_account", "scheduler_small_max_bytes", "job_lease_seconds", "bot_max_concurrent", "stream_max_per_key", "stream_retry_after_s"];
         if (mustBePositive.includes(it.key) && Number(value) < 1) return "باید ≥ 1 باشد";
-        if (it.key === "disk_watermark_pct") { const n = Number(value); if (!(n >= 50 && n <= 99)) return "بین ۵۰ تا ۹۹ درصد"; }
+        if (it.key === "disk_watermark_pct") { const n = Number(value); if (!(n >= 5 && n <= 99)) return "بین ۵ تا ۹۹ درصد"; }
         if (it.key === "scheduler_scan_limit") { const n = Number(value); if (!(n >= 20 && n <= 5000)) return "بین ۲۰ تا ۵۰۰۰"; }
         if (it.key === "premium_weight") { const n = Number(value); if (!(n >= 1 && n <= 10)) return "بین ۱ تا ۱۰"; }
         if (it.key === "tmp_retention_hours") { const n = Number(value); if (!(n >= 1 && n <= 720)) return "بین ۱ تا ۷۲۰ ساعت"; }
@@ -2248,7 +2248,7 @@ const doLogin = submitLogin;
       stream_retry_after_s: "مهلت Retry-After برای استریم ردشده (ثانیه)",
       max_queue_jobs: "حداکثر جاب در صف (۰=بی‌نهایت)",
       max_inflight_bytes: "حداکثر بایت در صف/اجرا (۰=بی‌نهایت)",
-      disk_watermark_pct: "حداکثر استفادهٔ دیسک (درصد)",
+      disk_watermark_pct: "حداقل فضای آزاد دیسک (درصد)",
       tmp_retention_hours: "نگهداری فایل‌های tmp غیرفعال (ساعت)",
       bot_max_concurrent: "ارسال همزمان هر ربات",
       bot_max_rpm: "سقف درخواست هر ربات در دقیقه (۰=خاموش)",

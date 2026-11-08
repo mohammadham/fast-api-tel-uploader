@@ -2321,7 +2321,7 @@ class QueueManager:
             vals = {}
         max_jobs = int(vals.get("max_queue_jobs") or s.max_queue_jobs or 0)
         max_bytes = int(vals.get("max_inflight_bytes") or s.max_inflight_bytes or 0)
-        pct = int(vals.get("disk_watermark_pct") or s.disk_watermark_pct or 90)
+        pct = int(vals.get("disk_watermark_pct") or s.disk_watermark_pct or 15)
         active = "status IN ('pending','retry','running')"
         if max_jobs > 0:
             n = int(await self.db.scalar(f"SELECT COUNT(*) FROM jobs WHERE {active}") or 0)
@@ -2340,8 +2340,8 @@ class QueueManager:
             try:
                 os.makedirs(s.final_tmp_dir(), exist_ok=True)
                 usage = shutil.disk_usage(s.final_tmp_dir())
-                if (usage.free - size_bytes) < usage.total * ((100 - pct) / 100.0):
-                    return False, 60, f"disk watermark ({pct}% used)"
+                if (usage.free - size_bytes) < usage.total * (pct / 100.0):
+                    return False, 60, f"disk watermark ({pct}% free required)"
             except OSError:
                 pass
         return True, 0, ""
