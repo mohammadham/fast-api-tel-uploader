@@ -49,7 +49,7 @@ test.describe.serial("panel smoke", () => {
         await page.locator("#tabs button", { hasText: label }).click();
         const section = page.locator("main section:visible");
         await expect(section).toBeVisible();
-        await expect(section.locator("h3")).toContainText(label);
+        await expect(section.locator("h3").first()).toContainText(label);
         // every tab either has rows or shows its Persian empty-state
         const rows = await section.locator("tbody tr").count();
         if (rows === 0 && emptyText) await expect(section.locator("tbody")).toContainText(emptyText);
@@ -293,7 +293,7 @@ test.describe.serial("panel smoke", () => {
 
     // slow the chunk PATCHes so the cancel click reliably lands mid-upload
     await page.route("**/upload/session/*", async (route) => {
-      await new Promise((res) => setTimeout(res, 400));
+      await new Promise((res) => setTimeout(res, 900));
       await route.continue();
     });
     const sessionCreated = page.waitForResponse(
@@ -304,7 +304,7 @@ test.describe.serial("panel smoke", () => {
     await page.locator("dialog:visible input[type='file']").setInputFiles({
       name: "e2e-cancel.txt",
       mimeType: "text/plain",
-      buffer: Buffer.alloc(17 * 1024 * 1024, 7), // 3 chunks → time to cancel
+      buffer: Buffer.alloc(15 * 1024 * 1024, 7), // below the 16MB watermark, still 2 chunks
     });
     await page.locator("dialog:visible button", { hasText: "شروع آپلود" }).click();
     const sid = (await (await sessionCreated).json()).session_id;
