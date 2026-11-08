@@ -1264,8 +1264,6 @@ class QueueManager:
             # remove the rows so the fresh send cannot leave orphaned parts.
             await self._discard_parts(file_id, rec, existing_parts, "partial retry")
             await self.db.execute("DELETE FROM file_parts WHERE file_id=?", (file_id,))
-        await self._maybe_store_thumb(rec, tmp_path)
-
         # ── resumable resume: continue from the upload session's stored offset ──
         session_id = payload.get("session_id")
         resumed_offset = int(payload.get("resumed_offset") or 0)
@@ -1389,6 +1387,10 @@ class QueueManager:
                 message_ids.extend(single_ids)
         finally:
             gate.release()
+
+        # The thumbnail must use the same resolved destination as the file;
+        # doing it after the upload also lets us reuse the uploader account.
+        await self._maybe_store_thumb(rec, tmp_path, storage_chat, account_key)
 
         # Content digest of the WHOLE source file, written before status=ready.
         # tmp_path is still intact here and always holds every byte (a resumed
@@ -1832,7 +1834,10 @@ class QueueManager:
             "min_accounts": min_accounts,
         }
 
-    async def _maybe_store_thumb(self, rec: Dict[str, Any], tmp_path: str) -> None:
+    async def _maybe_store_thumb(
+        self, rec: Dict[str, Any], tmp_path: str,
+        storage_chat: str = "", account_key: str = "",
+    ) -> None:
         """Best-effort: build a REAL thumbnail for this media type and keep it as a
         separate one-message doc so the public page can show it.
 
@@ -1841,6 +1846,8 @@ class QueueManager:
         which is what makes thumbnails cheap instead of doubling storage. Types we
         cannot decode (PDF) simply get no thumbnail — still cheaper than a copy.
         """
+        if rec.get("thumb_message_id"):
+            return  # already stored on an earlier attempt
         mime = (rec.get("mime") or "").lower()
         if rec.get("backend") == "eitaa":
             return  # telegram-only feature
@@ -1870,17 +1877,28 @@ class QueueManager:
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(thumb.data)
-            borrowed = await self.manager.acquire("acc", direction="upload")
+            backend_name = rec.get("backend") or "telegram"
+            target_chat = (storage_chat or "").strip()
+            preferred = account_key if account_key and "," not in account_key else ""
+            if target_chat:
+                borrowed = await self.access.pick(
+                    target_chat, backend=backend_name, need="write", preferred=preferred
+                )
+            else:
+                borrowed = await self.manager.acquire(
+                    "acc", backend=backend_name, direction="upload"
+                )
             async with borrowed as backend:
-                storage_chat = getattr(backend, "storage_chat", "me")
+                target_chat = target_chat or getattr(backend, "storage_chat", "me")
                 name = f"thumb_{rec['id']}{thumb.ext}"
-                result = await backend.send_document(storage_chat, thumb_path, name, thumb.mime)
+                result = await backend.send_document(target_chat, thumb_path, name, thumb.mime)
                 await self.files.set_thumb(rec["id"], int(result["message_id"]), thumb.mime)
             slog_q.info(
                 "thumbnail stored",
                 file_id=rec["id"],
                 thumb_bytes=thumb.size,
                 source_bytes=int(rec.get("size") or 0),
+                chat=target_chat,
                 dims=f"{thumb.width}x{thumb.height}",
             )
         except Exception as exc:

@@ -22,7 +22,9 @@ from io import BytesIO
 
 import pytest
 
-from app.services.thumbs import SMALL_IMAGE_BYTES, build_thumbnail, ffmpeg_exe, wants_thumb
+from app.services.thumbs import (
+    SMALL_IMAGE_BYTES, build_thumbnail, ffmpeg_exe, video_sample_position, wants_thumb,
+)
 
 
 # ── fixtures / helpers ────────────────────────────────────────────────
@@ -98,6 +100,13 @@ def test_video_gets_a_single_small_frame(tmp_path):
     assert max(thumb.width, thumb.height) <= 320
     assert thumb.data[:3] == b"\xff\xd8\xff"
     assert thumb.size < size / 4, f"frame must be far smaller than the video: {thumb.size} vs {size}"
+
+
+def test_video_sample_position_is_midpoint():
+    assert video_sample_position(100.0) == pytest.approx(50.0)
+    assert video_sample_position(4.0) == pytest.approx(2.0)
+    assert video_sample_position(1.0) == pytest.approx(0.5)
+    assert video_sample_position(0.0) == 0.0
 
 
 def test_pdf_and_unknown_types_get_no_thumbnail(tmp_path):
@@ -253,3 +262,29 @@ async def test_uploaded_video_thumbnail_is_one_frame(client, api_key):
         assert len(r.content) < len(data) / 4
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+async def test_thumbnail_lands_in_key_storage_chat(client, token):
+    """The thumbnail message must live in the same channel as the file.
+
+    It used to be sent to the uploader account's default chat, so the public
+    page looked for its message id in the key's channel and served nothing.
+    """
+    from app.tg.fake import FakeBackend
+
+    chat = "@thumb-target"
+    r = await client.post(
+        "/api/v1/keys",
+        json={"name": "thumb-channel-key", "scopes": "read,write", "storage_chat": chat},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    key = r.json()["key"]
+
+    src = make_png(640, 480)
+    info = await _upload_and_wait(client, key, src, "thumb-target.png", "image/png")
+    assert info["storage_chat"] == chat
+    mid = info.get("thumb_message_id")
+    assert mid, info
+    assert (chat, mid) in FakeBackend.STORE, "thumbnail was not stored in the key's channel"
+    assert ("me", mid) not in FakeBackend.STORE, "thumbnail leaked to the default chat"

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -84,6 +85,45 @@ def ffmpeg_exe() -> Optional[str]:
     return exe or None
 
 
+def _video_duration(path: str) -> float:
+    """Read the container duration from ffmpeg's header output.
+
+    ffprobe is not guaranteed with the bundled imageio-ffmpeg binary, while
+    ``ffmpeg -i`` prints the same Duration line and exits before decoding.
+    """
+    exe = ffmpeg_exe()
+    if not exe:
+        return 0.0
+    try:
+        proc = subprocess.run(
+            [exe, "-nostdin", "-hide_banner", "-i", path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+    except Exception:
+        return 0.0
+    match = re.search(
+        r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",
+        proc.stderr.decode("utf-8", "replace"),
+    )
+    if not match:
+        return 0.0
+    hours, minutes, seconds = match.groups()
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+def video_sample_position(duration: float) -> float:
+    """Seek position for a representative video frame: the middle.
+
+    Keep a small margin before the end so rounding cannot seek past the last
+    frame. Very short clips return 0 and use the first-frame fallback.
+    """
+    if duration <= 0:
+        return 0.0
+    return max(0.0, min(duration / 2.0, max(0.0, duration - 0.25)))
+
+
 def wants_thumb(mime: str, size: int = 0) -> bool:
     """True when a thumbnail can be produced for this media type."""
     mime = (mime or "").lower()
@@ -128,7 +168,11 @@ def _video_thumbnail(path: str, max_px: int, quality: int) -> Optional[Thumbnail
     # keeps the aspect and never upscales. -2 forces an even height (jpeg needs it).
     vf = f"scale={max_px}:-2:force_original_aspect_ratio=decrease"
     base = [exe, "-nostdin", "-loglevel", "error"]
-    for seek in ("1", "0"):  # 1s avoids black intro frames; 0 is the fallback
+    # A frame from the middle represents the whole clip; the old opening-second
+    # frame often showed a black screen, logo or episode title.
+    position = video_sample_position(_video_duration(path))
+    seeks = [f"{position:.3f}", "0"] if position > 0 else ["1", "0"]
+    for seek in seeks:
         cmd = base + ["-ss", seek, "-i", path, "-frames:v", "1", "-vf", vf,
                       "-q:v", "5", "-f", "image2pipe", "-vcodec", "mjpeg", "-"]
         try:
