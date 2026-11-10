@@ -355,6 +355,7 @@ async def redis_test(
 # ── database connectivity test (MySQL / MariaDB / PostgreSQL) ──────────
 class DbTestIn(BaseModel):
     url: str = ""  # mysql://user:pass@host:3306/db — nothing is persisted here
+    use_current: bool = False  # test TGDRIVE_DATABASE_URL without exposing it to the browser
 
 
 @router.post("/db/test")
@@ -363,6 +364,8 @@ async def db_test(body: DbTestIn, _: str = Depends(get_current_admin)):
 
     Never creates tables and never saves the URL (the setup env endpoint does
     that), so a wrong password or unreachable host is safe to try repeatedly.
+    ``use_current`` checks the configured URL server-side, which is how the
+    panel verifies the saved database without asking for its password again.
     """
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -370,6 +373,10 @@ async def db_test(body: DbTestIn, _: str = Depends(get_current_admin)):
     from ..core.db import MysqlDatabase, PgDatabase
 
     raw = (body.url or "").strip()
+    if not raw and body.use_current:
+        raw = (get_settings().database_url or "").strip()
+        if not raw:
+            return {"ok": False, "current": True, "error": "URL دیتابیس فعلی در .env تنظیم نشده است"}
     if not raw:
         return {"ok": False, "error": "URL دیتابیس خالی است"}
     if raw.startswith(("mysql://", "mariadb://", "mysql+aiomysql://")):

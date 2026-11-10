@@ -798,10 +798,14 @@
               <input v-model="mysqlDlg.password" dir="ltr" type="password" autocomplete="new-password"></div>
           </div>
           <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
-            <button class="ghost" :disabled="mysqlTesting" @click="testMysql">{{ mysqlTesting ? '…' : 'تست اتصال' }}</button>
+            <button class="ghost" :disabled="mysqlTesting" @click="testMysql">{{ mysqlTesting ? '…' : 'تست فرم' }}</button>
+            <button class="ghost" :disabled="mysqlTesting" @click="testCurrentDb">{{ mysqlTesting ? '…' : 'تست اتصال فعلی' }}</button>
             <button class="primary" :disabled="mysqlSaving" @click="saveMysql">{{ mysqlSaving ? '…' : 'ذخیره در .env' }}</button>
             <span class="muted" style="font-size:12px" dir="ltr">TGDRIVE_DATABASE_URL</span>
           </div>
+          <p class="muted" style="font-size:12px;margin:8px 0 0">
+            «تست فرم» فقط مقادیر همین فرم را بررسی می‌کند؛ داخل کانتینر، <code dir="ltr">localhost</code> به MySQL اشاره نمی‌کند. برای بررسی اتصال ذخیره‌شدهٔ فعلی از «تست اتصال فعلی» استفاده کنید.
+          </p>
           <p v-if="mysqlStatus" style="font-size:12px;margin:8px 0 0" :style="{ color: mysqlStatus.ok ? 'var(--ok,#22C55E)' : 'var(--err,#EF4444)' }">
             {{ mysqlStatus.text }}
           </p>
@@ -2387,7 +2391,7 @@ const doLogin = submitLogin;
     }
 
     /* ---------- MySQL / MariaDB connection (saved to .env) ---------- */
-    const mysqlDlg = reactive({ host: "localhost", port: 3306, db: "telegramdrive", user: "tgdrive", password: "" });
+    const mysqlDlg = reactive({ host: "", port: 3306, db: "telegramdrive", user: "tgdrive", password: "" });
     const mysqlTesting = ref(false);
     const mysqlSaving = ref(false);
     const mysqlStatus = ref(null); // { ok, text }
@@ -2411,6 +2415,19 @@ const doLogin = submitLogin;
         mysqlStatus.value = res.ok
           ? { ok: true, text: "● وصل شد — نسخه " + (res.version || "?") }
           : { ok: false, text: "✗ " + (res.error || "اتصال برقرار نشد") };
+      } catch (e) {
+        mysqlStatus.value = { ok: false, text: "✗ " + (e.message || "خطای شبکه") };
+      }
+      mysqlTesting.value = false;
+    }
+    async function testCurrentDb() {
+      mysqlTesting.value = true;
+      mysqlStatus.value = { ok: false, text: "در حال بررسی اتصال ذخیره‌شده…" };
+      try {
+        const res = await api("/api/v1/admin/db/test", { method: "POST", json: { use_current: true } });
+        mysqlStatus.value = res.ok
+          ? { ok: true, text: "● اتصال فعلی سالم است — نسخه " + (res.version || "?") }
+          : { ok: false, text: "✗ " + (res.error || "اتصال فعلی برقرار نشد") };
       } catch (e) {
         mysqlStatus.value = { ok: false, text: "✗ " + (e.message || "خطای شبکه") };
       }

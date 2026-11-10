@@ -90,10 +90,15 @@ class Janitor:
                     os.remove(path)
             except OSError:
                 pass
-        # old finished jobs (keep 24h)
+        # old finished jobs (default 30 days; runtime settings can override)
         from ..core.models import JobRepo
 
-        deleted = await JobRepo(self.db).purge_finished(time.time() - 86400)
+        try:
+            retention_days = int(await get_runtime(self.db, "job_retention_days") or 30)
+        except Exception:
+            retention_days = 30
+        retention_days = max(1, retention_days)
+        deleted = await JobRepo(self.db).purge_finished(time.time() - retention_days * 86400)
         # trash: files soft-deleted more than 7 days ago → purge from telegram too
         from ..core.models import FileRepo, KIND_DELETE
 

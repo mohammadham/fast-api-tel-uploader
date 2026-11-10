@@ -71,6 +71,10 @@ def _hours_ok(v: int) -> str:
     return "" if 1 <= v <= 720 else "must be between 1 and 720 hours"
 
 
+def _days_ok(v: int) -> str:
+    return "" if 1 <= v <= 365 else "must be between 1 and 365 days"
+
+
 def _scan_limit_ok(v: int) -> str:
     return "" if 20 <= v <= 5000 else "must be between 20 and 5000 rows"
 
@@ -187,6 +191,7 @@ EDITABLE_SETTINGS: dict[str, tuple[type, Any, str]] = {
     "max_inflight_bytes": (int, _non_negative_int, "max queued+running bytes (0=off)"),
     "disk_watermark_pct": (int, _pct_ok, "reject uploads that leave less free space than this %"),
     "tmp_retention_hours": (int, _hours_ok, "inactive tmp retention (hours)"),
+    "job_retention_days": (int, _days_ok, "finished job history retention (days)"),
     # per-bot / per-account pressure
     "bot_max_concurrent": (int, _gt_one_int, "per-bot concurrent deliveries"),
     "bot_max_rpm": (int, _non_negative_int, "per-bot requests/minute (0=off)"),
@@ -227,6 +232,7 @@ _SETTING_GROUPS: dict[str, list[str]] = {
         "max_inflight_bytes",
         "disk_watermark_pct",
         "tmp_retention_hours",
+        "job_retention_days",
         "stream_max_per_key",
         "stream_retry_after_s",
     ],
