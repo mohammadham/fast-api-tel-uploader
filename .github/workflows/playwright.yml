@@ -14,6 +14,7 @@ name: CI — backend pytest + panel e2e
 on:
   push:
   pull_request:
+  workflow_dispatch:
   schedule:
     - cron: '0 2 * * 0'  # weekly run
 
@@ -149,3 +150,79 @@ jobs:
             test-results/
             playwright-report/
           retention-days: 7
+
+  deploy:
+    name: deploy to production server
+    needs: [pytest, e2e]
+    if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # The production host changed from the old server. Keep it configurable
+      # so a future move only needs this repository variable updated.
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST || '135.125.208.195' }}
+      PUBLIC_URL: ${{ vars.TDRIVE_PUBLIC_URL || 'https://tdrive.sanduqche.top/' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh
+          # Strip CR characters from a secret pasted on Windows; a CRLF PEM
+          # otherwise fails with "error in libcrypto".
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Upload source archive
+        run: |
+          git archive -o /tmp/tdrive-src.tgz HEAD
+          scp -i ~/.ssh/deploy_key /tmp/tdrive-src.tgz root@"$DEPLOY_HOST":/tmp/tdrive-src.tgz
+
+      - name: Deploy on server
+        run: |
+          ssh -i ~/.ssh/deploy_key root@"$DEPLOY_HOST" "bash -s" <<'REMOTE'
+            set -euo pipefail
+            rm -rf /tmp/tdrive-stage
+            mkdir -p /tmp/tdrive-stage
+            tar xzf /tmp/tdrive-src.tgz -C /tmp/tdrive-stage
+
+            # /opt/tdrive owns server-specific docker-compose.yml and
+            # docker-compose.override.yml (loopback port + 1panel network).
+            # Only replace the application build inputs, and never .env, data,
+            # .git or the compose files.
+            rsync -a /tmp/tdrive-stage/app/ /opt/tdrive/app/
+            rsync -a /tmp/tdrive-stage/static/ /opt/tdrive/static/
+            rsync -a /tmp/tdrive-stage/scripts/ /opt/tdrive/scripts/
+            cp /tmp/tdrive-stage/Dockerfile /opt/tdrive/Dockerfile
+            cp /tmp/tdrive-stage/requirements.txt /opt/tdrive/requirements.txt
+
+            rm -rf /tmp/tdrive-stage /tmp/tdrive-src.tgz
+            cd /opt/tdrive
+            docker compose -f docker-compose.yml -f docker-compose.override.yml build app
+            docker compose -f docker-compose.yml -f docker-compose.override.yml up -d app
+
+            CID=$(docker compose -f docker-compose.yml -f docker-compose.override.yml ps -q app)
+            if [ -z "$CID" ]; then
+              echo "app container was not created"
+              exit 1
+            fi
+
+            CODE=000
+            for i in $(seq 1 45); do
+              CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8000/api/v1/admin/readyz || true)
+              [ "$CODE" = "200" ] && break
+              sleep 2
+            done
+            echo "Local readyz: $CODE"
+            if [ "$CODE" != "200" ]; then
+              docker logs "$CID" --tail 80
+              exit 1
+            fi
+          REMOTE
+
+      - name: Public smoke check
+        run: |
+          CODE=$(curl -s -o /dev/null -w %{http_code} --max-time 30 "$PUBLIC_URL")
+          echo "Public health: $CODE"
+          test "$CODE" = "200"
