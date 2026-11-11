@@ -8,9 +8,64 @@ services:
     environment:
       - TGDRIVE_DATA_DIR=/srv/data
     volumes:
+      # Keep this: it holds the SQLite DB (when used), tmp uploads and the
+      # generated admin password. Deleting it is the only way to lose data.
       - ./data:/srv/data
     restart: unless-stopped
     # NOTE: single worker — the priority queue is in-process (SQLite-backed).
+    #
+    # Database / queue backends are read from .env (env_file above), so an
+    # EXISTING MySQL/Redis — e.g. containers managed by 1Panel — needs no
+    # service here at all:
+    #   TGDRIVE_DATABASE_URL=mysql://user:pass@<container-or-host>:3306/telegramdrive
+    #   TGDRIVE_DB_ENGINE=mysql
+    #   TGDRIVE_REDIS_URL=redis://<container-or-host>:6379/0
+    #   TGDRIVE_REDIS_ENABLED=true
+    # Put the app and those containers on one Docker network (or use
+    # host:port / a published port). Start the DB *before* the app: the app
+    # falls back to SQLite when MySQL is unreachable and logs it loudly.
+    #
+    # The optional profiles below start fresh MySQL/Redis inside THIS compose
+    # project (named volumes), only when you ask for them:
+    #   docker compose --profile mysql --profile redis up -d
+    # and then point .env at the compose service names (mysql / redis).
+
+  # Optional: MySQL 8.4 / MariaDB for a shared database across nodes.
+  mysql:
+    image: mysql:8.4
+    profiles: ["mysql"]
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_DATABASE: ${TGDRIVE_MYSQL_DATABASE:-telegramdrive}
+      MYSQL_USER: ${TGDRIVE_MYSQL_USER:-tgdrive}
+      MYSQL_PASSWORD: ${TGDRIVE_MYSQL_PASSWORD:-tgdrive}
+      MYSQL_ROOT_PASSWORD: ${TGDRIVE_MYSQL_ROOT_PASSWORD:-tgdrive-root}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  # Optional: Redis for the distributed queue (AOF on, so a restart keeps
+  # pending job ids; the SQLite/PG table stays the primary source of truth).
+  redis:
+    image: redis:7-alpine
+    profiles: ["redis"]
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
 
   # Optional: local Bot API server lifts bot limits to 2GB uploads/downloads.
   # Enable with: docker compose --profile localbot up -d
@@ -29,3 +84,5 @@ services:
 
 volumes:
   botapi-data:
+  mysql-data:
+  redis-data:
