@@ -984,31 +984,53 @@ class QueueManager:
                 await self._retry(
                     job_id, row, f"flood wait {exc.seconds}s",
                     delay=exc.seconds, consume_attempt=False,
+                    elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
                 )
             except NoBackendAvailable as exc:
                 if getattr(exc, "retryable", True):
                     await self._defer(
                         job_id, row, f"backend unavailable: {exc}",
                         getattr(exc, "retry_after", 15.0),
+                        elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
                     )
                 else:
                     # Configuration gap (e.g. eitaa key with no eitaa account):
                     # retry with backoff, then fail the file visibly.
-                    await self._retry(job_id, row, str(exc))
+                    await self._retry(
+                        job_id, row, str(exc),
+                        elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+                    )
             except (SendFailure, TransferError) as exc:
                 slog_q.warning("job failed, retrying", kind=kind, error=str(exc)[:300], attempt=row.get("attempts", 0) + 1)
-                await self._retry(job_id, row, str(exc))
+                await self._retry(
+                    job_id, row, str(exc),
+                    elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+                )
             except Exception as exc:  # unexpected
                 slog_q.error("job crashed", kind=kind, error=str(exc)[:300])
-                await self._retry(job_id, row, f"internal: {exc}")
+                await self._retry(
+                    job_id, row, f"internal: {exc}",
+                    elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+                )
             else:
                 await self.jobs.update_fields(job_id, status="done", finished_at=now(), error="")
-                # remember which backend handled this job so the panel can show
-                # a per-account/per-bot 24h handled-files counter
+                # remember which backend handled this job and keep the final
+                # upload metrics even after the live progress map is cleared.
                 try:
                     bk = self._last_backend_by_job.pop(job_id, None)
                     if bk:
                         payload["handled_by"] = bk
+                    snapshot = self._upload_progress.get(job_id) or {}
+                    if snapshot:
+                        snapshot = {
+                            **snapshot,
+                            "stage": "done",
+                            "duration_ms": snapshot.get("duration_ms")
+                            or round((time.perf_counter() - t0) * 1000, 1),
+                            "finished_at": snapshot.get("finished_at") or now(),
+                        }
+                        payload["upload_metrics"] = snapshot
+                    if bk or snapshot:
                         await self.jobs.update_fields(job_id, payload=payload)
                 except Exception:
                     pass
@@ -1042,12 +1064,27 @@ class QueueManager:
         error: str,
         delay: Optional[float] = None,
         consume_attempt: bool = True,
+        elapsed_ms: Optional[float] = None,
     ) -> None:
         attempts = int(row.get("attempts", 0)) + (1 if consume_attempt else 0)
         kind = row["kind"]
         payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else {}
         if consume_attempt and attempts > int(row.get("max_retries", 5)):
-            await self.jobs.update_fields(job_id, status="failed", error=error[:500], finished_at=now(), attempts=attempts)
+            fields: Dict[str, Any] = {
+                "status": "failed", "error": error[:500],
+                "finished_at": now(), "attempts": attempts,
+            }
+            if kind == KIND_UPLOAD:
+                snapshot = self._upload_progress.get(job_id) or {}
+                payload["upload_metrics"] = {
+                    **snapshot,
+                    "stage": "failed",
+                    "error": error[:500],
+                    "duration_ms": snapshot.get("duration_ms") or elapsed_ms,
+                    "finished_at": now(),
+                }
+                fields["payload"] = payload
+            await self.jobs.update_fields(job_id, **fields)
             if kind == KIND_UPLOAD and payload.get("file_id"):
                 await self.files.set_status(payload["file_id"], "failed", error)
                 # Final failure: delete partial Telegram messages, forget the
@@ -1080,9 +1117,15 @@ class QueueManager:
         metrics.inc("queue.retries" if consume_attempt else "queue.deferred")
         self._wake.set()
 
-    async def _defer(self, job_id: str, row: Dict[str, Any], error: str, delay: float) -> None:
+    async def _defer(
+        self, job_id: str, row: Dict[str, Any], error: str, delay: float,
+        elapsed_ms: Optional[float] = None,
+    ) -> None:
         """Wait for a backend/flood without burning an attempt."""
-        await self._retry(job_id, row, error, delay=delay, consume_attempt=False)
+        await self._retry(
+            job_id, row, error, delay=delay, consume_attempt=False,
+            elapsed_ms=elapsed_ms,
+        )
 
     # ── upload handler ─────────────────────────────────────────
     async def _record_digest(self, file_id: str, tmp_path: str) -> None:
@@ -1234,10 +1277,38 @@ class QueueManager:
                 pass
         return path, original, "", False
 
+    def _mark_upload_complete(
+        self, job_id: str, *, file_id: str, name: str, size: int,
+        account: str, storage_chat: str, started_perf: float, parts_total: int,
+    ) -> None:
+        """Snapshot the final upload metrics before the live map is cleared."""
+        duration_ms = round(max(0.001, time.perf_counter() - started_perf) * 1000, 1)
+        previous = self._upload_progress.get(job_id) or {}
+        self._upload_progress[job_id] = {
+            "progress_pct": 100,
+            "progress_bytes": int(size),
+            "progress_total": int(size),
+            "speed_bps": int(int(size) / max(0.001, duration_ms / 1000)),
+            "duration_ms": duration_ms,
+            "started_at": time.time() - (duration_ms / 1000),
+            "finished_at": time.time(),
+            "file_id": file_id,
+            "file_name": name,
+            "account": account,
+            "storage_chat": storage_chat,
+            "parts_total": int(parts_total),
+            "parts_done": int(parts_total),
+            "auto_split": bool(previous.get("auto_split")),
+            "accounts_used": int(previous.get("accounts_used") or (1 if account else 0)),
+            "part_workers": previous.get("part_workers"),
+            "stage": "done",
+        }
+
     async def _handle_upload(self, payload: Dict[str, Any], job_id: str) -> None:
         from ..core.security import decrypt_str
 
         file_id = payload["file_id"]
+        t_handle = time.perf_counter()
         rec = await self.files.get(file_id)
         if not rec:
             raise TransferError(f"file {file_id} missing")
@@ -1257,6 +1328,11 @@ class QueueManager:
                 os.remove(tmp_path)
             except OSError:
                 pass
+            self._mark_upload_complete(
+                job_id, file_id=file_id, name=str(rec["name"]), size=int(rec["size"]),
+                account="", storage_chat=str(rec.get("storage_chat") or ""),
+                started_perf=t_handle, parts_total=len(ids),
+            )
             slog_q.info("upload completed from existing parts", file_id=file_id, parts=len(ids))
             return
         if existing_parts and rec.get("status") != "ready":
@@ -1403,6 +1479,11 @@ class QueueManager:
             pass
         metrics.inc("upload.bytes", size)
         metrics.observe("upload.size", size)
+        self._mark_upload_complete(
+            job_id, file_id=file_id, name=name, size=size,
+            account=account_key, storage_chat=storage_chat,
+            started_perf=t_upload, parts_total=len(message_ids),
+        )
         slog_q.info(
             "upload complete",
             file_id=file_id,

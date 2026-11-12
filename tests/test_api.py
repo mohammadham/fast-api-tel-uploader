@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import time
 
 import pytest
@@ -394,6 +395,80 @@ async def test_queue_retry_failed_job(client, api_key, token):
     await q.jobs.update_fields(job_id, status="failed", error="cleanup")
     await q.jobs.update_fields(live_id, status="failed", error="cleanup")
     await client.post("/api/v1/queue/purge", headers=A)
+
+
+async def test_queue_jobs_exposes_persisted_upload_metrics(client, token):
+    """Finished jobs keep progress/speed/duration for the panel's last-10 list."""
+    from app.core.models import Job, now as _now
+    from app.core.state import state as st
+
+    A = {"Authorization": f"Bearer {token}"}
+    q = st.queue
+    job_id = "j_test_metrics"
+    await q.jobs.insert(Job(
+        id=job_id, kind="upload", priority=10, seq=_now(),
+        payload={
+            "file_id": "nope",
+            "upload_metrics": {
+                "progress_pct": 100,
+                "speed_bps": 1234,
+                "duration_ms": 5000,
+                "file_name": "episode.mkv",
+                "stage": "done",
+            },
+        },
+    ))
+    await q.jobs.update_fields(job_id, status="done", finished_at=_now())
+
+    try:
+        r = await client.get("/api/v1/queue/jobs?limit=50", headers=A)
+        assert r.status_code == 200, r.text
+        item = next(i for i in r.json()["items"] if i["id"] == job_id)
+        assert item["progress_pct"] == 100
+        assert item["speed_bps"] == 1234
+        assert item["duration_ms"] == 5000
+        assert item["file_name"] == "episode.mkv"
+    finally:
+        await q.db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+
+
+async def test_queue_retry_restores_upload_offset(client, token):
+    """Retrying a failed upload resumes its session instead of duplicating it."""
+    from app.core.models import Job, UploadSessionRepo, now as _now
+    from app.core.state import state as st
+
+    A = {"Authorization": f"Bearer {token}"}
+    q = st.queue
+    session_id = "s_test_retry_offset"
+    job_id = "j_test_retry_offset"
+    sessions = UploadSessionRepo(q.db)
+    await sessions.create(session_id, "episode.mkv", 1000, "video/x-matroska")
+    await sessions.advance(session_id, 321)
+    await q.jobs.insert(Job(
+        id=job_id, kind="upload", priority=10, seq=_now(),
+        payload={
+            "file_id": "nope",
+            "session_id": session_id,
+            "upload_metrics": {"progress_pct": 32, "speed_bps": 50},
+        },
+    ))
+    await q.jobs.update_fields(job_id, status="failed", error="boom")
+
+    try:
+        r = await client.post(f"/api/v1/queue/retry/{job_id}", headers=A)
+        assert r.status_code == 200, r.text
+        assert r.json()["resumed_offset"] == 321
+        row = await q.jobs.fetch(job_id)
+        payload = json.loads(row["payload"])
+        assert row["status"] == "pending"
+        assert payload["resumed_offset"] == 321
+        assert "upload_metrics" not in payload
+        # The retry must reset the same row, not create a second job.
+        count = await q.db.scalar("SELECT COUNT(*) FROM jobs WHERE id=?", (job_id,))
+        assert count == 1
+    finally:
+        await q.db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+        await sessions.delete(session_id)
 
 
 async def test_key_scope_validation(client, token):

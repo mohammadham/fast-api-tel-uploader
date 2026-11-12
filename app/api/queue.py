@@ -75,6 +75,11 @@ async def jobs(limit: int = 100, _: str = Depends(get_current_admin), db=Depends
     for r in rows:
         item = dict(r)
         item["payload"] = _payload_dict(r) if r.get("payload") else None
+        # Persisted final metrics survive the in-memory progress map.  They are
+        # what makes the panel's "last 10 jobs" useful after a job finishes.
+        stored = (item.get("payload") or {}).get("upload_metrics")
+        if isinstance(stored, dict):
+            item.update(stored)
         item["size_bytes"] = job_size(item)
         item["lane"] = lane_for(item, small_max)
         created = float(r.get("created_at") or clock)
@@ -83,7 +88,7 @@ async def jobs(limit: int = 100, _: str = Depends(get_current_admin), db=Depends
         if live:
             item.update(live)
         elif item.get("payload"):
-            item["account"] = item["payload"].get("handled_by") or item.get("payload", {}).get("account") or ""
+            item["account"] = item["payload"].get("handled_by") or item.get("payload", {}).get("account") or item.get("account") or ""
         items.append(item)
     return {"items": items, "paused": state.queue.paused()}
 
@@ -107,22 +112,28 @@ async def resume_job(job_id: str, _: str = Depends(get_current_admin), db=Depend
     # only durable upload jobs may be resumed from offset
     if row["kind"] != "upload":
         raise HTTPException(status_code=409, detail="only upload jobs can be resumed")
-    if row["status"] not in ("pending", "running", "retry"):
+    if row["status"] not in ("pending", "running", "retry", "failed"):
         raise HTTPException(status_code=409, detail=f"job is not resumable (status={row['status']})")
     if row["id"] in state.queue._paused_kinds:
         raise HTTPException(status_code=409, detail="job is paused, use /api/v1/queue/pause first")
 
     # resume the upload session from its stored offset (if it still exists)
     payload = _payload_dict(row)
+    payload.pop("upload_metrics", None)
     session_id = payload.get("session_id")
     resumed_offset = 0
+    session = None
     if session_id:
-        sess = await UploadSessionRepo(db).get(session_id)
-        if sess:
-            resumed_offset = int(sess.get("offset") or 0)
-        else:
-            # dangling session: drop it so a fresh upload starts at 0
-            payload.pop("session_id", None)
+        session = await UploadSessionRepo(db).get(session_id)
+        if session:
+            resumed_offset = int(session.get("offset") or 0)
+    # Never keep a dangling session pointer: it would make the next attempt
+    # claim a bogus resume offset.
+    if session:
+        payload["session_id"] = session_id
+    else:
+        payload.pop("session_id", None)
+    payload["resumed_offset"] = resumed_offset
 
     await state.queue.jobs.update_fields(
         job_id,
@@ -130,11 +141,11 @@ async def resume_job(job_id: str, _: str = Depends(get_current_admin), db=Depend
         attempts=0,
         next_run_at=0,
         error="",
+        finished_at=None,
+        lease_owner="",
+        lease_until=0,
+        payload=payload,
     )
-    # keep the session pointer + resumed offset on the job payload
-    payload.setdefault("session_id", session_id)
-    payload.setdefault("resumed_offset", resumed_offset)
-    await state.queue.jobs.update_payload(job_id, payload)
 
     state.queue._wake.set()
     return {
@@ -227,13 +238,43 @@ async def retry_job(job_id: str, _: str = Depends(get_current_admin), db=Depends
         raise HTTPException(status_code=404, detail="job not found")
     if row["status"] not in ("failed",):
         raise HTTPException(status_code=409, detail="job is not failed")
-    await state.queue.jobs.update_fields(job_id, status="pending", attempts=0, next_run_at=0, error="")
-    # re-enqueue a fresh job with same kind/payload (simplest safe path)
-    import json
 
-    payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
-    await state.queue.enqueue(row["kind"], payload, int(row["priority"]))
-    return {"ok": True}
+    # Reset the same row instead of enqueueing a duplicate.  For uploads, keep
+    # the stored session offset so a partial transfer resumes instead of
+    # restarting from zero.
+    payload = _payload_dict(row)
+    payload.pop("upload_metrics", None)
+    resumed_offset = 0
+    session_id = payload.get("session_id")
+    if row["kind"] == "upload" and session_id:
+        from ..core.models import UploadSessionRepo
+
+        session = await UploadSessionRepo(db).get(session_id)
+        if session:
+            resumed_offset = int(session.get("offset") or 0)
+            payload["resumed_offset"] = resumed_offset
+        else:
+            payload.pop("session_id", None)
+            payload.pop("resumed_offset", None)
+
+    await state.queue.jobs.update_fields(
+        job_id,
+        status="pending",
+        attempts=0,
+        next_run_at=0,
+        error="",
+        finished_at=None,
+        lease_owner="",
+        lease_until=0,
+        payload=payload,
+    )
+    state.queue._wake.set()
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "resumed_offset": resumed_offset,
+        "session_id": session_id if resumed_offset or payload.get("session_id") else None,
+    }
 
 
 @router.post("/purge")

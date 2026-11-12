@@ -520,18 +520,55 @@
             <div v-for="j in recentJobs" :key="'recent-' + j.id" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--border,#2a3040);border-radius:8px;background:var(--surface2,#171b26)">
               <span class="badge" :class="j.status">{{ j.status }}</span>
               <code dir="ltr" style="font-size:11px">{{ j.id }}</code>
-              <b style="font-size:12px">{{ j.kind }}</b>
+              <b style="font-size:12px" :title="j.file_name || (j.payload && j.payload.file_name) || j.id">{{ jobFile(j) }}</b>
+              <span class="muted" style="font-size:11px">{{ j.kind }}</span>
               <span class="muted" style="font-size:11px">{{ j.size_bytes ? fmtBytes(j.size_bytes) : '—' }}</span>
               <span v-if="j.progress_pct != null" class="muted" style="font-size:11px">{{ j.progress_pct }}%</span>
               <span v-if="j.speed_bps" class="muted" style="font-size:11px">{{ fmtBytes(j.speed_bps) }}/s</span>
+              <span v-if="j.duration_ms" class="muted" style="font-size:11px">{{ fmtDuration(j.duration_ms) }}</span>
+              <span v-if="j.attempts" class="muted" style="font-size:11px">تلاش {{ j.attempts }}</span>
               <span v-if="j.account" dir="ltr" class="badge">{{ j.account }}</span>
               <span v-if="j.auto_split" class="tag" style="font-size:10px">auto {{ j.parts_done || 0 }}/{{ j.parts_total || 0 }} · {{ j.accounts_used || 0 }} اکانت</span>
-              <span class="muted" style="font-size:11px;margin-inline-start:auto">{{ fmtTime(j.created_at) }}</span>
+              <span v-if="j.error" class="muted" style="font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="j.error">{{ j.error }}</span>
+              <span class="muted" style="font-size:11px;margin-inline-start:auto">{{ fmtTime(j.finished_at || j.created_at) }}</span>
               <button v-if="j.status === 'failed'" @click="qRetry(j)">تلاش مجدد</button>
               <button v-else-if="j.kind === 'upload' && !j.paused && (j.status === 'pending' || j.status === 'running' || j.status === 'retry')" @click="qResumeJob(j)">ادامه</button>
             </div>
           </div>
           <p v-else class="muted" style="font-size:12px;margin:0">جابی نیست</p>
+        </div>
+        <div class="card wide" style="margin-bottom:14px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+            <h3 style="font-size:15px;margin:0">آپلودهای ناتمام</h3>
+            <span class="muted" style="font-size:12px">{{ unfinishedUploads.length }} مورد</span>
+            <span class="muted" style="font-size:12px;margin-inline-start:auto">فایل‌هایی که به آپلود رسیده‌اند ولی آماده نشده‌اند</span>
+          </div>
+          <table v-if="unfinishedUploads.length">
+            <thead><tr><th>فایل</th><th>وضعیت</th><th>حجم</th><th>پیشرفت</th><th>سرعت</th><th>مدت</th><th>تلاش</th><th>خطا</th><th>عملیات</th></tr></thead>
+            <tbody>
+              <tr v-for="j in unfinishedUploads" :key="'unfinished-' + j.id">
+                <td :title="j.file_name || j.id">{{ jobFile(j) }}</td>
+                <td><span class="badge" :class="j.status">{{ j.status }}</span></td>
+                <td>{{ j.size_bytes ? fmtBytes(j.size_bytes) : '—' }}</td>
+                <td>
+                  <div style="height:6px;background:var(--border,#2a3040);border-radius:4px;overflow:hidden;min-width:70px">
+                    <div :style="{ height: '100%', width: (j.progress_pct ?? (j.status === 'done' ? 100 : 0)) + '%', background: j.status === 'failed' ? 'var(--err,#EF4444)' : 'var(--ok,#22C55E)' }"></div>
+                  </div>
+                  <span class="muted" style="font-size:11px">{{ j.progress_pct ?? (j.status === 'done' ? 100 : 0) }}%</span>
+                </td>
+                <td>{{ j.speed_bps ? fmtBytes(j.speed_bps) + '/s' : '—' }}</td>
+                <td>{{ j.duration_ms ? fmtDuration(j.duration_ms) : '—' }}</td>
+                <td>{{ j.attempts ?? 0 }}</td>
+                <td class="muted" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="j.error">{{ j.error || '—' }}</td>
+                <td>
+                  <button v-if="j.status === 'failed'" @click="qRetry(j)">ادامه از offset</button>
+                  <button v-else-if="j.kind === 'upload' && !j.paused" @click="qResumeJob(j)">ادامه</button>
+                  <span v-else class="muted" style="font-size:12px">—</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="muted" style="font-size:12px;margin:0">آپلود ناتمامی نیست</p>
         </div>
         <div class="card wide">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
@@ -1346,6 +1383,10 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
     const queuePageSize = 10;
     const queuePage = ref(1);
     const recentJobs = computed(() => jobs.value.slice(0, 10));
+    const unfinishedUploads = computed(() => jobs.value.filter((j) =>
+      (j.kind === "upload" || j.kind === "transfer") &&
+      ["pending", "running", "retry", "failed"].includes(j.status)
+    ).slice(0, 20));
     const archivedJobs = computed(() => jobs.value.slice(10));
     const queuePageCount = computed(() => Math.max(1, Math.ceil(archivedJobs.value.length / queuePageSize)));
     const pagedJobs = computed(() => {
@@ -1532,8 +1573,11 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
       loaders.files();
     }
     async function qRetry(j) {
-      try { await api(`/api/v1/queue/retry/${j.id}`, { method: "POST" }); showToast("جاب دوباره صف شد"); loaders.queue(); }
-      catch (e) { showToast("خطا: " + e.message, 4000, true); }
+      try {
+        const r = await api(`/api/v1/queue/retry/${j.id}`, { method: "POST" });
+        showToast(r.resumed_offset ? `جاب از offset ${r.resumed_offset} دوباره صف شد` : "جاب دوباره صف شد");
+        loaders.queue();
+      } catch (e) { showToast("خطا: " + e.message, 4000, true); }
     }
     async function folderRename(f) {
       const v = prompt("نام جدید پوشه:", f.name);
@@ -1704,6 +1748,15 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
     function fmtTime(ts) {
       if (!ts) return "-";
       return new Date(ts * 1000).toLocaleString("fa-IR");
+    }
+    function fmtDuration(ms) {
+      if (!ms) return "—";
+      const total = Math.max(0, Math.round(Number(ms) / 1000));
+      if (total < 60) return total + " ثانیه";
+      return Math.floor(total / 60) + " دقیقه " + (total % 60) + " ثانیه";
+    }
+    function jobFile(j) {
+      return (j && (j.file_name || (j.payload && j.payload.file_name))) || (j && j.id) || "—";
     }
 
     /* ---------- auth actions ---------- */
